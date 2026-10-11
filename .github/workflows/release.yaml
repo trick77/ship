@@ -11,7 +11,10 @@ name: Release
 #     release:
 #       uses: trick77/ship/.github/workflows/release.yaml@master
 #       with: { bump: "${{ inputs.bump }}" }
-#       permissions: { contents: write, packages: write }
+#       permissions: { contents: write, packages: write }   # no images (ship.yaml): contents: write only
+#
+# The job sets no permissions of its own: it inherits the caller's grant, so a repo without images needs no
+# packages: write. The docker steps run only when ship.yaml has images:.
 on:
   workflow_call:
     inputs:
@@ -30,9 +33,6 @@ jobs:
   release:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    permissions:
-      contents: write
-      packages: write
     concurrency:
       group: release-${{ github.repository }}
       cancel-in-progress: false
@@ -44,14 +44,23 @@ jobs:
         with:
           go-version-file: ${{ inputs.go-dir }}/go.mod
           cache-dependency-path: ${{ inputs.go-dir }}/go.sum
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
+      # ship.yaml lives at the repo root; a top-level images: key (even an empty list) turns the docker steps on.
+      - id: shape
+        run: |
+          if [ -f ship.yaml ] && grep -q '^images:' ship.yaml; then
+            echo "images=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.shape.outputs.images == 'true'
+        uses: docker/setup-buildx-action@v4
+      - if: steps.shape.outputs.images == 'true'
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       # Exposes the Actions cache to buildx for --cache gha.
-      - uses: crazy-max/ghaction-github-runtime@v4
+      - if: steps.shape.outputs.images == 'true'
+        uses: crazy-max/ghaction-github-runtime@v4
       - working-directory: ${{ inputs.go-dir }}
         env:
           GH_TOKEN: ${{ github.token }}

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -148,6 +149,14 @@ func Run(root string, c *config.Config, o Options) error {
 	}
 	short := head[:7]
 	fmt.Printf("ship: release %s -> %s (%s) at %s\n", prev, next, o.Bump, short)
+
+	// Without images nothing below compiles the code, and a Go module tag is permanent once the proxy has it: build
+	// before the tag. With images the build is the image's (a UI embed may need the UI built first).
+	if len(c.Images) == 0 {
+		if err := run(filepath.Join(root, c.Go.Dir), o.DryRun, "go", "build", "./..."); err != nil {
+			return fmt.Errorf("go build (nothing tagged): %w", err)
+		}
+	}
 
 	// The tag first: creating a ref is atomic, so it claims the version. A second release racing for the same
 	// number fails here, before it could push its build over this version's image. A failed build gives the

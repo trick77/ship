@@ -17,4 +17,3 @@ jobs:
       ship: go run .
     permissions:
       contents: write
-      packages: write

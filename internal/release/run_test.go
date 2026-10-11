@@ -87,6 +87,9 @@ func TestRun_whenDryRun_thenTagImagesReleaseMovingTags(t *testing.T) {
 	if strings.Contains(out[:rel], ":latest") {
 		t.Error(":latest pushed before the release exists")
 	}
+	if strings.Contains(out, "go build") {
+		t.Error("go build with images: the image build compiles")
+	}
 }
 
 func TestRun_whenImagesOffGitHub_thenRefusedBeforeAnyCommand(t *testing.T) {
@@ -121,6 +124,23 @@ func TestRun_whenTagPrefixNoImages_thenPrefixedTagOnly(t *testing.T) {
 	}
 	if strings.Contains(out, "docker") || !strings.Contains(out, "ref=refs/tags/v0.0.1") || !strings.Contains(out, "released v0.0.1") {
 		t.Fatalf("plain 1.4.2 must not count for prefix v:\n%s", out)
+	}
+	if build, tag := strings.Index(out, "+ go build ./..."), strings.Index(out, "+ gh api"); build < 0 || build > tag {
+		t.Fatalf("want go build before the tag claim:\n%s", out)
+	}
+}
+
+func TestRun_whenNoImagesBuildFails_thenNothingTagged(t *testing.T) {
+	work := clone(t) // no go.mod: go build fails
+	t.Setenv("GITHUB_REPOSITORY", "o/r")
+	log := fakeTools(t, 0)
+	c, _ := config.Parse([]byte("tag_prefix: v\n"))
+	_, err := capture(t, func() error { return Run(work, c, Options{Bump: "patch"}) })
+	if err == nil || !strings.Contains(err.Error(), "go build (nothing tagged)") {
+		t.Fatalf("err = %v", err)
+	}
+	if b, _ := os.ReadFile(log); len(b) > 0 {
+		t.Fatalf("gh or docker ran after a failed build:\n%s", b)
 	}
 }
 
