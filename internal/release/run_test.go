@@ -87,6 +87,16 @@ func TestRun_whenDryRun_thenTagImagesReleaseMovingTags(t *testing.T) {
 	}
 }
 
+func TestRun_whenImagesOffGitHub_thenRefusedBeforeAnyCommand(t *testing.T) {
+	t.Setenv("GITHUB_ACTIONS", "")
+	c, _ := config.Parse([]byte("images:\n  - {}\n"))
+	// No clone: the refusal comes before git, gh or docker run.
+	out, err := capture(t, func() error { return Run(t.TempDir(), c, Options{Bump: "patch"}) })
+	if err == nil || !strings.Contains(err.Error(), "GitHub only") || out != "" {
+		t.Fatalf("err %v, out %q", err, out)
+	}
+}
+
 func TestRun_whenTagPrefixNoImages_thenPrefixedTagOnly(t *testing.T) {
 	work := clone(t)
 	t.Setenv("GITHUB_REPOSITORY", "o/r")
@@ -153,9 +163,11 @@ func TestRun_whenLocalOnlyTag_thenIgnored(t *testing.T) {
 	}
 }
 
-// fakeTools puts docker and gh scripts first on PATH: each logs its arguments, docker exits dockerRC.
+// fakeTools puts docker and gh scripts first on PATH: each logs its arguments, docker exits dockerRC. It poses as a
+// GitHub runner: images build nowhere else.
 func fakeTools(t *testing.T, dockerRC int) (log string) {
 	t.Helper()
+	t.Setenv("GITHUB_ACTIONS", "true")
 	bin := t.TempDir()
 	log = filepath.Join(bin, "calls.log")
 	for name, rc := range map[string]int{"docker": dockerRC, "gh": 0} {
