@@ -240,33 +240,35 @@ func (r runner) uiTest() error {
 // report does not hide the other side's floor. The patch gate needs every report sound, so with one broken it is
 // skipped and says so, never prints a pass computed over missing or mis-mapped lines.
 func (r runner) gates() error {
-	files, err := gitx.Files(r.root)
-	if err != nil {
-		return err
-	}
 	var errs []error
 	sound := true
+	// Without git's listing no path can be judged, but the floors still are.
+	files, err := gitx.Files(r.root)
+	if err != nil {
+		errs, sound = append(errs, err), false
+	}
 	all := cover.Lines{}
-	side := func(name string, l cover.Lines, err error, floor float64) {
-		if err == nil {
-			err = cover.Mapped(name, l, files, r.root)
+	side := func(name, hint string, l cover.Lines, err error, floor float64) {
+		if err == nil && files != nil {
+			err = cover.Mapped(name, hint, l, files, r.root)
 		}
 		if err != nil {
-			errs = append(errs, err)
-			sound = false
+			errs, sound = append(errs, err), false
 			return
 		}
 		errs = append(errs, cover.Floor(name, l, floor))
 		all.Merge(l)
 	}
 	goLines, err := r.goLines()
-	side("go", goLines, err, r.c.Go.Floor)
+	side("go", "check go.dir and the module path in go.mod; a replace'd module in go.coverpkg lives outside "+
+		"go.dir: narrow go.coverpkg", goLines, err, r.c.Go.Floor)
 	if r.c.UI != nil {
 		uiLines, err := r.uiLines()
-		side("ui", uiLines, err, r.c.UI.Floor)
+		side("ui", "check ui.dir, ui.lcov and the test runner's root (vitest root, coverage.reportsDirectory)",
+			uiLines, err, r.c.UI.Floor)
 	}
 	if !sound {
-		fmt.Println("ship: patch coverage not run: a coverage report above is broken")
+		fmt.Println("ship: patch coverage not run: a coverage report is broken, see the error below")
 		return errors.Join(errs...)
 	}
 	errs = append(errs, r.patch(all))

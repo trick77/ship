@@ -207,7 +207,7 @@ func countLines(path string) (int, error) {
 }
 
 // Files is git's view of the tree: tracked and untracked, non-ignored files, as git spells them, optionally limited
-// to pathspecs. The one place ship lists the tree.
+// to pathspecs.
 func Files(root string, pathspecs ...string) (map[string]bool, error) {
 	out, err := GitZ(root, append([]string{"ls-files", "-z", "-co", "--exclude-standard", "--"}, pathspecs...)...)
 	if err != nil {
