@@ -22,7 +22,7 @@ on:
         type: string
         default: ui
       ship:
-        description: How to run ship; empty = ship at this workflow's own commit, else master. ship's own repo uses "go run .".
+        description: How to run ship; empty = ship at master's sha on GitHub. ship's own repo uses "go run .".
         type: string
         default: ""
 
@@ -51,9 +51,13 @@ jobs:
           cache-dependency-path: ${{ inputs.ui-dir }}/package-lock.json
       - working-directory: ${{ inputs.go-dir }}
         env:
-          # The binary from this workflow's own commit: a consumer calling @master never pairs it with an older release.
-          # github.job_workflow_sha comes out empty for a caller (2026-10-11: "version must not be empty"): then @master.
-          SHIP: >-
-            ${{ inputs.ship || github.job_workflow_sha != '' && format('go run github.com/trick77/ship@{0}',
-            github.job_workflow_sha) || 'go run github.com/trick77/ship@master' }}
-        run: $SHIP check
+          SHIP: ${{ inputs.ship }}
+        # Default: master's sha on GitHub, as the pre-push hook runs it, so hook and CI gate alike. Not @master: the
+        # module proxy can still serve an older master. Not github.job_workflow_sha: empty for a caller (2026-10-11).
+        run: |
+          if [ -z "$SHIP" ]; then
+            sha="$(git ls-remote https://github.com/trick77/ship refs/heads/master | cut -f1)"
+            [ -n "$sha" ] || { echo "::error::cannot resolve ship's master on GitHub (git ls-remote, error above)"; exit 1; }
+            SHIP="go run github.com/trick77/ship@$sha"
+          fi
+          $SHIP check
