@@ -12,7 +12,8 @@ import (
 	"github.com/trick77/ship/internal/gitx"
 )
 
-// origin is a bare repo with master and tag 1.4.2 on master's parent; the clone's HEAD is origin/master.
+// origin is a bare repo with master and tag 1.4.2 on master's parent; the clone's HEAD is origin/master, a main
+// package that builds.
 func clone(t *testing.T) string {
 	t.Helper()
 	origin, work := t.TempDir(), t.TempDir()
@@ -29,11 +30,26 @@ func clone(t *testing.T) string {
 	git(work, "config", "commit.gpgsign", "false")
 	git(work, "commit", "-q", "--allow-empty", "-m", "one")
 	git(work, "tag", "1.4.2")
-	git(work, "commit", "-q", "--allow-empty", "-m", "two")
+	writeMain(t, work, "package main\n\nfunc main() {}\n")
+	git(work, "commit", "-q", "-m", "two")
 	git(work, "remote", "add", "origin", origin)
 	git(work, "push", "-q", "--no-verify", "origin", "master", "1.4.2")
 	git(work, "fetch", "-q", "origin")
 	return work
+}
+
+// writeMain writes and stages go.mod and main.go. Module mode forced: GOPATH mode builds anything.
+func writeMain(t *testing.T, dir, src string) {
+	t.Helper()
+	t.Setenv("GO111MODULE", "on")
+	for name, body := range map[string]string{"go.mod": "module ex\n\ngo 1.24\n", "main.go": src} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := gitx.Git(dir, "add", "go.mod", "main.go"); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func capture(t *testing.T, fn func() error) (string, error) {
@@ -125,13 +141,33 @@ func TestRun_whenTagPrefixNoImages_thenPrefixedTagOnly(t *testing.T) {
 	if strings.Contains(out, "docker") || !strings.Contains(out, "ref=refs/tags/v0.0.1") || !strings.Contains(out, "released v0.0.1") {
 		t.Fatalf("plain 1.4.2 must not count for prefix v:\n%s", out)
 	}
-	if build, tag := strings.Index(out, "+ go build ./..."), strings.Index(out, "+ gh api"); build < 0 || build > tag {
+	if build, tag := strings.Index(out, "+ go build -o "+os.DevNull+" ./..."), strings.Index(out, "+ gh api"); build < 0 || build > tag {
 		t.Fatalf("want go build before the tag claim:\n%s", out)
+	}
+	// A main package: without -o the build leaves a binary ex in the tree.
+	if dirty, err := gitx.Dirty(work); err != nil || dirty != "" {
+		t.Fatalf("tree after the build: %q %v", dirty, err)
+	}
+}
+
+func TestRun_whenUINoImages_thenNoBuild(t *testing.T) {
+	work := clone(t)
+	t.Setenv("GITHUB_REPOSITORY", "o/r")
+	c, _ := config.Parse([]byte("ui: {}\n"))
+	out, err := capture(t, func() error { return Run(work, c, Options{Bump: "patch", DryRun: true}) })
+	if err != nil || strings.Contains(out, "go build") {
+		t.Fatalf("go build with a UI (its embed needs node): %v\n%s", err, out)
 	}
 }
 
 func TestRun_whenNoImagesBuildFails_thenNothingTagged(t *testing.T) {
-	work := clone(t) // no go.mod: go build fails
+	work := clone(t)
+	writeMain(t, work, "package main\n\nfunc main() { broken }\n")
+	for _, args := range [][]string{{"commit", "-q", "-m", "broken"}, {"push", "-q", "--no-verify", "origin", "master"}} {
+		if _, err := gitx.Git(work, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
 	t.Setenv("GITHUB_REPOSITORY", "o/r")
 	log := fakeTools(t, 0)
 	c, _ := config.Parse([]byte("tag_prefix: v\n"))
