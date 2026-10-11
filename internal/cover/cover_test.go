@@ -263,4 +263,8 @@ func TestMapped(t *testing.T) {
 	if err := Mapped("go", Lines{"x.go": {1: true}}, files, root); err == nil || !strings.Contains(err.Error(), "go.dir") {
 		t.Fatalf("go hint: %v", err)
 	}
+	// Case off: on macOS a stat finds backend/X/X.go, but the patch gate matches "backend/x/x.go" exactly.
+	if err := Mapped("go", Lines{"backend/X/X.go": {1: true}}, files, root); err == nil || !strings.Contains(err.Error(), "backend/X/X.go") {
+		t.Fatalf("case-mismatched path passed: %v", err)
+	}
 }

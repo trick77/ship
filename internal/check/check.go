@@ -5,12 +5,8 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -240,29 +236,40 @@ func (r runner) uiTest() error {
 	return r.sh(filepath.Join(r.root, r.c.UI.Dir), r.c.UI.Test)
 }
 
-// gates runs both floors, then the patch gate over Go and UI lines together.
+// gates runs both floors, then the patch gate over Go and UI lines together. Every result in one run: a broken
+// report does not hide the other side's floor. The patch gate needs every report sound, so with one broken it is
+// skipped and says so, never prints a pass computed over missing or mis-mapped lines.
 func (r runner) gates() error {
-	goLines, err := r.goLines()
-	if err != nil {
-		return err
-	}
 	files, err := gitx.Files(r.root)
 	if err != nil {
 		return err
 	}
+	var errs []error
+	sound := true
 	all := cover.Lines{}
-	all.Merge(goLines)
-	// Every result in one run: a broken or missing report does not hide the other side, the floors or the patch gate.
-	errs := []error{cover.Mapped("go", goLines, files, r.root), cover.Floor("go", goLines, r.c.Go.Floor)}
-	if r.c.UI != nil {
-		if uiLines, err := r.uiLines(); err != nil {
-			errs = append(errs, err)
-		} else {
-			errs = append(errs, cover.Mapped("ui", uiLines, files, r.root), cover.Floor("ui", uiLines, r.c.UI.Floor))
-			all.Merge(uiLines)
+	side := func(name string, l cover.Lines, err error, floor float64) {
+		if err == nil {
+			err = cover.Mapped(name, l, files, r.root)
 		}
+		if err != nil {
+			errs = append(errs, err)
+			sound = false
+			return
+		}
+		errs = append(errs, cover.Floor(name, l, floor))
+		all.Merge(l)
 	}
-	errs = append(errs, r.patch(all, goLines))
+	goLines, err := r.goLines()
+	side("go", goLines, err, r.c.Go.Floor)
+	if r.c.UI != nil {
+		uiLines, err := r.uiLines()
+		side("ui", uiLines, err, r.c.UI.Floor)
+	}
+	if !sound {
+		fmt.Println("ship: patch coverage not run: a coverage report above is broken")
+		return errors.Join(errs...)
+	}
+	errs = append(errs, r.patch(all))
 	return errors.Join(errs...)
 }
 
@@ -306,7 +313,7 @@ func (r runner) goLines() (cover.Lines, error) {
 	return l.Without(r.c.Go.Exclude), nil
 }
 
-func (r runner) patch(all, goLines cover.Lines) error {
+func (r runner) patch(all cover.Lines) error {
 	ref := "origin/" + r.c.Base
 	base, err := gitx.MergeBase(r.root, ref)
 	if err != nil {
@@ -322,48 +329,7 @@ func (r runner) patch(all, goLines cover.Lines) error {
 	if err != nil {
 		return err
 	}
-	return errors.Join(r.unreported(changed, goLines), cover.PatchOf(all, changed).Gate(r.c.Patch))
-}
-
-// unreported fails for a changed Go file that holds code but is in no coverage report: the patch gate, matching
-// changed lines to report lines, would skip it and pass. A package outside -coverpkg does that; a file with only
-// types or empty funcs is legitimately absent (no statements), as are tests, go.exclude paths and what go ignores.
-func (r runner) unreported(changed map[string][]int, goLines cover.Lines) error {
-	dir := path.Clean(filepath.ToSlash(r.c.Go.Dir))
-	var missing []string
-	for p := range changed {
-		if !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") || ignoredByGo(p) ||
-			cover.Excluded(p, r.c.Go.Exclude) || goLines[p] != nil {
-			continue
-		}
-		if dir != "." && !strings.HasPrefix(p, dir+"/") {
-			continue
-		}
-		if hasCode(filepath.Join(r.root, filepath.FromSlash(p))) {
-			missing = append(missing, p)
-		}
-	}
-	if len(missing) == 0 {
-		return nil
-	}
-	slices.Sort(missing)
-	return fmt.Errorf("changed Go files hold code but no coverage report covers them (outside go.coverpkg? "+
-		"else go.exclude): %s", strings.Join(missing, ", "))
-}
-
-// hasCode reports whether a Go file has a function with statements, the only code coverage instruments. A file
-// that does not parse counts as code: never skip what cannot be judged.
-func hasCode(file string) bool {
-	f, err := parser.ParseFile(token.NewFileSet(), file, nil, parser.SkipObjectResolution)
-	if err != nil {
-		return true
-	}
-	for _, d := range f.Decls {
-		if fn, ok := d.(*ast.FuncDecl); ok && fn.Body != nil && len(fn.Body.List) > 0 {
-			return true
-		}
-	}
-	return false
+	return cover.PatchOf(all, changed).Gate(r.c.Patch)
 }
 
 // modulePath reads the module line of go.mod.

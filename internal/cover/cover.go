@@ -81,7 +81,7 @@ func Mapped(name string, l Lines, files map[string]bool, root string) error {
 		if files[p] {
 			continue
 		}
-		if fi, err := os.Stat(filepath.Join(root, filepath.FromSlash(p))); err == nil && fi.Mode().IsRegular() {
+		if onDisk(root, p) {
 			continue
 		}
 		missing = append(missing, p)
@@ -93,12 +93,32 @@ func Mapped(name string, l Lines, files map[string]bool, root string) error {
 	if len(missing) > 5 {
 		missing = append(missing[:5], fmt.Sprintf("... %d more", len(missing)-5))
 	}
-	hint := "check go.dir and the module path in go.mod"
+	hint := "check go.dir and the module path in go.mod; a replace'd module in go.coverpkg lives outside go.dir: " +
+		"narrow go.coverpkg"
 	if name != "go" {
 		hint = "check ui.dir, ui.lcov and the test runner's root (vitest root, coverage.reportsDirectory)"
 	}
 	return fmt.Errorf("%s coverage report names files that are not in the repo, its paths do not match the repo's "+
 		"(%s): %s", name, hint, strings.Join(missing, ", "))
+}
+
+// onDisk reports whether p (repo-relative) is a regular file, spelled exactly so: on a case-insensitive file system
+// (macOS) a stat of "src/greeting.tsx" finds "src/Greeting.tsx", but the patch gate matches paths by exact string.
+func onDisk(root, p string) bool {
+	full := filepath.Join(root, filepath.FromSlash(p))
+	fi, err := os.Stat(full)
+	if err != nil || !fi.Mode().IsRegular() {
+		return false
+	}
+	dir := root
+	for _, part := range strings.Split(p, "/") {
+		entries, err := os.ReadDir(dir)
+		if err != nil || !slices.ContainsFunc(entries, func(e os.DirEntry) bool { return e.Name() == part }) {
+			return false
+		}
+		dir = filepath.Join(dir, part)
+	}
+	return true
 }
 
 // Percent returns covered and total line counts over every file.
