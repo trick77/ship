@@ -22,7 +22,7 @@ on:
         type: string
         default: "."
       ship:
-        description: How to run ship; empty = ship at this workflow's own commit.
+        description: How to run ship; empty = ship at master's sha on GitHub.
         type: string
         default: ""
 
@@ -55,9 +55,16 @@ jobs:
       - working-directory: ${{ inputs.go-dir }}
         env:
           GH_TOKEN: ${{ github.token }}
-          # The binary from this workflow's own commit: a consumer calling @master never pairs it with an older release.
-          SHIP: ${{ inputs.ship || format('go run github.com/trick77/ship@{0}', github.job_workflow_sha) }}
+          SHIP: ${{ inputs.ship }}
           BUMP: ${{ inputs.bump }}
+        # Default: master's sha on GitHub, as the pre-push hook runs it. Not @master: the module proxy can still serve
+        # an older master, and a release cannot be undone. Not github.job_workflow_sha: empty for a caller (2026-10-11).
         run: |
           case "$BUMP" in patch|minor|major) ;; *) echo "::error::bump '$BUMP'"; exit 1 ;; esac
+          if [ -z "$SHIP" ]; then
+            # Exactly refs/heads/master: ls-remote matches by suffix, so x/refs/heads/master would match too.
+            sha="$(git ls-remote https://github.com/trick77/ship refs/heads/master | awk '$2 == "refs/heads/master" { print $1 }')"
+            [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::cannot resolve ship's master on GitHub: '$sha'"; exit 1; }
+            SHIP="go run github.com/trick77/ship@$sha"
+          fi
           $SHIP release "$BUMP" -cache gha
