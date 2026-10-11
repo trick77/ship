@@ -206,19 +206,28 @@ func countLines(path string) (int, error) {
 	return n, nil
 }
 
+// Files is git's view of the tree: tracked and untracked, non-ignored files, as git spells them, optionally limited
+// to pathspecs.
+func Files(root string, pathspecs ...string) (map[string]bool, error) {
+	out, err := GitZ(root, append([]string{"ls-files", "-z", "-co", "--exclude-standard", "--"}, pathspecs...)...)
+	if err != nil {
+		return nil, err
+	}
+	set := make(map[string]bool, len(out))
+	for _, f := range out {
+		set[f] = true
+	}
+	return set, nil
+}
+
 // GoFiles lists tracked and untracked, non-ignored .go files that exist in the working tree.
 func GoFiles(root string) ([]string, error) {
-	out, err := GitZ(root, "ls-files", "-z", "-co", "--exclude-standard", "--", "*.go")
+	set, err := Files(root, "*.go")
 	if err != nil {
 		return nil, err
 	}
 	var files []string
-	seen := map[string]bool{}
-	for _, f := range out {
-		if seen[f] {
-			continue
-		}
-		seen[f] = true
+	for f := range set {
 		if _, err := os.Stat(filepath.Join(root, f)); err == nil {
 			files = append(files, f)
 		}

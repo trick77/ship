@@ -71,6 +71,58 @@ func Excluded(path string, prefixes []string) bool {
 	return false
 }
 
+// Mapped fails when a report path names no file of the repo: neither one of git's files (files, as git spells
+// them) nor a regular file on disk (generated and gitignored, yet compiled or tested). Reports are written from the
+// current tree, so a path that is neither means the report's paths and the repo's disagree (a moved vitest root, a
+// wrong go.dir, ui.dir or ui.lcov), and the patch gate, matching changed lines by path, would pass blind.
+// hint, from the caller, names the settings that decide this report's paths.
+func Mapped(name, hint string, l Lines, files map[string]bool, root string) error {
+	disk := dirCache{}
+	var missing []string
+	for p := range l {
+		if files[p] || disk.regular(root, p) {
+			continue
+		}
+		missing = append(missing, p)
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	slices.Sort(missing)
+	if len(missing) > 5 {
+		missing = append(missing[:5], fmt.Sprintf("... %d more", len(missing)-5))
+	}
+	return fmt.Errorf("%s coverage report names files that are not in the repo, its paths do not match the repo's "+
+		"(%s): %s", name, hint, strings.Join(missing, ", "))
+}
+
+// dirCache reads each directory once per Mapped call.
+type dirCache map[string][]os.DirEntry
+
+// regular reports whether p (repo-relative) is a regular file, spelled exactly so: each path element must be an
+// entry of its parent by exact name. A stat would not do: on a case-insensitive file system (macOS) it finds
+// "src/Greeting.tsx" for "src/greeting.tsx", but the patch gate matches paths by exact string.
+func (c dirCache) regular(root, p string) bool {
+	dir := root
+	parts := strings.Split(p, "/")
+	for i, part := range parts {
+		entries, ok := c[dir]
+		if !ok {
+			entries, _ = os.ReadDir(dir) // unreadable: no entries, so not found
+			c[dir] = entries
+		}
+		k := slices.IndexFunc(entries, func(e os.DirEntry) bool { return e.Name() == part })
+		if k < 0 {
+			return false
+		}
+		if i == len(parts)-1 {
+			return entries[k].Type().IsRegular()
+		}
+		dir = filepath.Join(dir, part)
+	}
+	return false
+}
+
 // Percent returns covered and total line counts over every file.
 func (l Lines) Percent() (covered, total int) {
 	for _, m := range l {

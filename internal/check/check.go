@@ -236,34 +236,59 @@ func (r runner) uiTest() error {
 	return r.sh(filepath.Join(r.root, r.c.UI.Dir), r.c.UI.Test)
 }
 
-// gates runs both floors, then the patch gate over Go and UI lines together.
+// gates runs both floors, then the patch gate over Go and UI lines together. Every result in one run: a broken
+// report does not hide the other side's floor. The patch gate needs every report sound, so with one broken it is
+// skipped and says so, never prints a pass computed over missing or mis-mapped lines.
 func (r runner) gates() error {
-	goLines, err := r.goLines()
+	var errs []error
+	sound := true
+	// Without git's listing no path can be judged, but the floors still are.
+	files, err := gitx.Files(r.root)
 	if err != nil {
-		return err
+		errs, sound = append(errs, err), false
 	}
 	all := cover.Lines{}
-	all.Merge(goLines)
-	var errs []error
-	errs = append(errs, cover.Floor("go", goLines, r.c.Go.Floor))
+	side := func(name, hint string, l cover.Lines, err error, floor float64) {
+		if err == nil && files != nil {
+			err = cover.Mapped(name, hint, l, files, r.root)
+		}
+		if err != nil {
+			errs, sound = append(errs, err), false
+			return
+		}
+		errs = append(errs, cover.Floor(name, l, floor))
+		all.Merge(l)
+	}
+	goLines, err := r.goLines()
+	side("go", "check go.dir and the module path in go.mod; a replace'd module in go.coverpkg lives outside "+
+		"go.dir: narrow go.coverpkg", goLines, err, r.c.Go.Floor)
 	if r.c.UI != nil {
-		f, err := os.Open(filepath.Join(r.root, r.c.UI.Lcov))
-		if err != nil {
-			return fmt.Errorf("ui coverage report: %w (ui.test must write ui.lcov)", err)
-		}
-		uiLines, err := cover.Lcov(f, r.c.UI.Dir, r.root)
-		_ = f.Close()
-		if err != nil {
-			return err
-		}
-		if len(uiLines) == 0 {
-			return fmt.Errorf("ui coverage report %s holds no lines", r.c.UI.Lcov)
-		}
-		errs = append(errs, cover.Floor("ui", uiLines, r.c.UI.Floor))
-		all.Merge(uiLines)
+		uiLines, err := r.uiLines()
+		side("ui", "check ui.dir, ui.lcov and the test runner's root (vitest root, coverage.reportsDirectory)",
+			uiLines, err, r.c.UI.Floor)
+	}
+	if !sound {
+		fmt.Println("ship: patch coverage not run: a coverage report is broken, see the error below")
+		return errors.Join(errs...)
 	}
 	errs = append(errs, r.patch(all))
 	return errors.Join(errs...)
+}
+
+func (r runner) uiLines() (cover.Lines, error) {
+	f, err := os.Open(filepath.Join(r.root, r.c.UI.Lcov))
+	if err != nil {
+		return nil, fmt.Errorf("ui coverage report: %w (ui.test must write ui.lcov)", err)
+	}
+	defer func() { _ = f.Close() }()
+	l, err := cover.Lcov(f, r.c.UI.Dir, r.root)
+	if err != nil {
+		return nil, err
+	}
+	if len(l) == 0 {
+		return nil, fmt.Errorf("ui coverage report %s holds no lines", r.c.UI.Lcov)
+	}
+	return l, nil
 }
 
 func (r runner) goLines() (cover.Lines, error) {

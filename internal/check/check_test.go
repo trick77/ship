@@ -112,6 +112,39 @@ func TestGates_whenReportsMissingOrEmpty_thenFail(t *testing.T) {
 	}
 }
 
+func TestGates_whenUIReportPathsOff_thenFailWithGoResultsToo(t *testing.T) {
+	prof := "mode: atomic\nexample.com/m/lib/a.go:3.14,5.2 1 0\nexample.com/m/lib/b.go:3.20,4.11 1 1\n" +
+		"example.com/m/lib/b.go:4.11,6.3 1 1\nexample.com/m/lib/b.go:7.2,7.10 1 1\n"
+	// vitest rooted one level off: SF:a.ts lands on ui/a.ts, but the file is ui/src/a.ts. The Go floor (100) fails
+	// too and must be reported in the same run.
+	dir, c := fixture(t, "ui: {}\ngo:\n  floor: 100\n", prof, "SF:a.ts\nDA:1,1\nend_of_record\n")
+	err := (runner{root: dir, c: c}).gates()
+	if err == nil || !strings.Contains(err.Error(), "ui coverage report names files") || !strings.Contains(err.Error(), "ui/a.ts") {
+		t.Fatalf("broken ui mapping passed: %v", err)
+	}
+	if !strings.Contains(err.Error(), "go coverage") {
+		t.Fatalf("go floor result hidden by the ui error: %v", err)
+	}
+}
+
+// A broken report skips the patch gate instead of computing it over the other side only: the branch's untested
+// lib/b.go would otherwise fail it, and a pass over partial data would read as green.
+func TestGates_whenUIReportMissing_thenPatchNotRun(t *testing.T) {
+	prof := "mode: atomic\nexample.com/m/lib/a.go:3.14,5.2 1 9\nexample.com/m/lib/b.go:3.20,4.11 1 0\n" +
+		"example.com/m/lib/b.go:4.11,6.3 1 0\nexample.com/m/lib/b.go:7.2,7.10 1 0\n"
+	dir, c := fixture(t, "ui: {}\ngo:\n  floor: 10\n", prof, lcovOK)
+	if err := os.Remove(filepath.Join(dir, c.UI.Lcov)); err != nil {
+		t.Fatal(err)
+	}
+	err := (runner{root: dir, c: c}).gates()
+	if err == nil || !strings.Contains(err.Error(), "ui coverage report") {
+		t.Fatalf("missing ui report passed: %v", err)
+	}
+	if strings.Contains(err.Error(), "patch coverage") {
+		t.Fatalf("patch gate ran over the Go side only: %v", err)
+	}
+}
+
 func TestGofmtAndSteps(t *testing.T) {
 	dir, c := fixture(t, "steps:\n  - name: ok\n    run: test -f go.mod\n", "mode: set\n", "")
 	r := runner{root: dir, c: c}

@@ -1,6 +1,7 @@
 package cover
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -236,5 +237,34 @@ func TestCodeLines_whenScanError_thenNil(t *testing.T) {
 	}
 	if codeLines(p) != nil {
 		t.Fatal("scan error must keep every line")
+	}
+}
+
+func TestMapped(t *testing.T) {
+	root := writeSrc(t) // backend/x/x.go on disk, not in git's list: generated and gitignored
+	if err := os.MkdirAll(filepath.Join(root, "backend", "gen"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]bool{"ui/src/a.ts": true}
+	if err := Mapped("go", "go.dir", Lines{"backend/x/x.go": {4: true}, "ui/src/a.ts": {1: true}}, files, root); err != nil {
+		t.Fatalf("tracked or on-disk files flagged: %v", err)
+	}
+	// vitest rooted one level off: src/a.ts names nothing. A directory is not a file. Present files never appear.
+	l := Lines{"backend/x/x.go": {4: true}, "src/a.ts": {1: true}, "backend/gen": {1: true}}
+	for i := range 6 {
+		l[fmt.Sprintf("gone/%d.ts", i)] = map[int]bool{1: false}
+	}
+	err := Mapped("ui", "ui.lcov", l, files, root)
+	if err == nil || !strings.Contains(err.Error(), "backend/gen") || !strings.Contains(err.Error(), "gone/0.ts") ||
+		!strings.Contains(err.Error(), "... 3 more") || strings.Contains(err.Error(), "backend/x/x.go") ||
+		!strings.Contains(err.Error(), "ui.lcov") {
+		t.Fatalf("err = %v", err)
+	}
+	if err := Mapped("go", "go.dir", Lines{"x.go": {1: true}}, files, root); err == nil || !strings.Contains(err.Error(), "go.dir") {
+		t.Fatalf("go hint: %v", err)
+	}
+	// Case off: on macOS a stat finds backend/X/X.go, but the patch gate matches "backend/x/x.go" exactly.
+	if err := Mapped("go", "go.dir", Lines{"backend/X/X.go": {1: true}}, files, root); err == nil || !strings.Contains(err.Error(), "backend/X/X.go") {
+		t.Fatalf("case-mismatched path passed: %v", err)
 	}
 }
