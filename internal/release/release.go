@@ -96,6 +96,10 @@ func Moving(image string, v Version) []string {
 
 // Run releases HEAD. HEAD must be origin/<base> and the tree clean: a release is what master holds, nothing local.
 func Run(root string, c *config.Config, o Options) error {
+	// ghcr images are built on GitHub only, never pushed from a laptop. Checked before anything, the tag claim included.
+	if len(c.Images) > 0 && !o.DryRun && os.Getenv("GITHUB_ACTIONS") != "true" {
+		return fmt.Errorf("images are built on GitHub only: run the repo's Release workflow (or -dry-run here)")
+	}
 	// The branch only: tags come from ls-remote, and fetching them would fail on a local tag that differs from origin.
 	if _, err := gitx.Git(root, "fetch", "-q", "--no-tags", "origin", c.Base); err != nil {
 		return err
