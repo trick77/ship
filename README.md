@@ -46,9 +46,14 @@ coverage output.
 
 | | |
 |---|---|
-| `go tool ship check` | fetch, ui build, gofmt, vet, build, golangci-lint, ui lint, steps, go test (-race, coverage), ui test, floors, patch gate |
+| `go tool ship check` | fetch, ui build, gofmt, build, golangci-lint (incl. govet), ui lint, steps, go test (-race, coverage), ui test, floors, patch gate |
 | `go tool ship hooks` | install the pre-push hook (respects core.hooksPath, never overwrites a foreign hook) |
-| `go tool ship release [patch\|minor\|major] [-cache gha] [-dry-run]` | next version from tags, images pushed, then tag (API), then GitHub release |
+| `go tool ship release [patch\|minor\|major] [-cache gha] [-dry-run]` | next version from tags, images pushed (version + sha), tag (API), GitHub release, then :MAJOR.MINOR, :MAJOR, :latest |
+
+TypeScript/React: `ui.build` is the typecheck (`tsc -b && vite build`), `ui.lint` runs ESLint/Prettier, `ui.test`
+runs vitest with coverage; its lcov feeds the UI floor and the patch gate for changed `.ts`/`.tsx` lines.
+Playwright e2e goes in `steps`. ship's CI proves this on `testdata/ui`, a real React + TypeScript + vite +
+vitest project (npm ci, typecheck, build, coverage, an untested `.tsx` change failing the patch gate).
 
 Patch gate: changed lines (committed, staged, unstaged, untracked) against the merge-base with origin/<base>,
 intersected with the coverage reports; comment and blank lines never count. `[skip patch-coverage]` in a commit
