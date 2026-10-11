@@ -8,12 +8,14 @@ runs it before every push; CI (by hand) runs the same command.
 
 ## Use in a repo
 
-Unpinned: every run is the newest ship (no pin to bump; a broken release reaches every repo at once, so ship's own
-gate and CI guard each release).
+Unpinned: every run is master's ship (no pin to bump; a broken master commit reaches every repo at once, so merging
+to master only what is releasable is the only guard). A proxy may lag on `@master`: resolve master's sha on GitHub,
+as the hook does, and run that.
 
 ```sh
-go run github.com/trick77/ship@latest hooks   # once per clone: the pre-push hook (runs ship@latest on every push)
-go run github.com/trick77/ship@latest check   # the gate by hand
+ship() { go run "github.com/trick77/ship@$(git ls-remote https://github.com/trick77/ship refs/heads/master | cut -f1)" "$@"; }
+ship hooks   # once per clone: the pre-push hook (runs master's ship on every push)
+ship check   # the gate by hand
 ```
 
 `ship.yaml` at the repo root (every key optional):
