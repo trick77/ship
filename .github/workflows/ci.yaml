@@ -1,7 +1,13 @@
 name: CI
 
-# By hand only: the pre-push hook runs the same gate locally. gh workflow run CI --ref <branch>
+# Automatic, unlike the consumers' (manual-only) CI: ship is public, Actions minutes are free, and a bug here
+# breaks every repo's push. The full gate on Linux (as consumers' CI runs it), the tests on macOS (as their
+# pre-push hooks run it).
 on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
   workflow_dispatch:
 
 permissions:
@@ -16,3 +22,16 @@ jobs:
     uses: ./.github/workflows/check.yaml
     with:
       ship: go run .
+
+  test-macos:
+    name: go test (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go test -race -count=1 ./...

@@ -5,7 +5,7 @@ name: Check
 #   on: workflow_dispatch
 #   jobs:
 #     check:
-#       uses: trick77/ship/.github/workflows/check.yaml@v0
+#       uses: trick77/ship/.github/workflows/check.yaml@v0.1.0
 #       with: { node-version: "22" }   # only with a UI
 on:
   workflow_call:

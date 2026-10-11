@@ -6,7 +6,7 @@ name: Cleanup images
 #   on: workflow_dispatch
 #   jobs:
 #     cleanup:
-#       uses: trick77/ship/.github/workflows/cleanup-images.yaml@v0
+#       uses: trick77/ship/.github/workflows/cleanup-images.yaml@v0.1.0
 #       with: { packages: '["ipverse-core", "ipverse-core-dashboard"]' }
 #       permissions: { contents: read, packages: write }
 on:

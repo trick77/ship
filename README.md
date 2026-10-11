@@ -63,9 +63,9 @@ Reusable, for running the same commands on GitHub by hand:
 ```yaml
 jobs:
   check:
-    uses: trick77/ship/.github/workflows/check.yaml@v0      # inputs: go-dir, node-version, ui-dir
+    uses: trick77/ship/.github/workflows/check.yaml@v0.1.0      # inputs: go-dir, node-version, ui-dir
   release:
-    uses: trick77/ship/.github/workflows/release.yaml@v0    # inputs: bump, go-dir
+    uses: trick77/ship/.github/workflows/release.yaml@v0.1.0    # inputs: bump, go-dir
   cleanup:
-    uses: trick77/ship/.github/workflows/cleanup-images.yaml@v0   # inputs: packages (JSON), keep, dry-run
+    uses: trick77/ship/.github/workflows/cleanup-images.yaml@v0.1.0   # inputs: packages (JSON), keep, dry-run
 ```

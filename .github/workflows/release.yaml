@@ -8,7 +8,7 @@ name: Release
 #         bump: { type: choice, options: [patch, minor, major], default: patch }
 #   jobs:
 #     release:
-#       uses: trick77/ship/.github/workflows/release.yaml@v0
+#       uses: trick77/ship/.github/workflows/release.yaml@v0.1.0
 #       with: { bump: "${{ inputs.bump }}" }
 #       permissions: { contents: write, packages: write }
 on:
