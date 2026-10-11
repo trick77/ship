@@ -21,6 +21,8 @@ const marker = "Installed by ship hooks"
 const script = `#!/bin/sh
 # Installed by ship hooks (github.com/trick77/ship). Runs the checked-out branch's ship pre-push.
 refs="$(cat)"
+# git sets GIT_DIR for hooks in a linked worktree; with it, git calls from a subdirectory see a wrong tree.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_PREFIX
 gate=0
 while read -r local_ref local_sha remote_ref _; do
 	[ -z "$local_ref" ] && continue

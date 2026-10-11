@@ -44,6 +44,19 @@ func GitZ(dir string, args ...string) ([]string, error) {
 	return names, nil
 }
 
+// RepoVars point git at one repo. git sets them for hooks: in a linked worktree GIT_DIR without GIT_WORK_TREE,
+// which makes git take the current directory as the top of the tree. From a subdirectory (a module in backend/)
+// every file outside it then reads as deleted.
+var RepoVars = []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
+	"GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_PREFIX", "GIT_QUARANTINE_PATH", "GIT_NAMESPACE"}
+
+// UnsetRepoVars drops RepoVars from this process, so every git call finds the repo from its directory.
+func UnsetRepoVars() {
+	for _, k := range RepoVars {
+		_ = os.Unsetenv(k)
+	}
+}
+
 // Root is the repo's top-level directory containing dir.
 func Root(dir string) (string, error) {
 	return Git(dir, "rev-parse", "--show-toplevel")

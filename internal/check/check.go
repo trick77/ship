@@ -66,17 +66,13 @@ func (r runner) sh(dir, command string) error {
 	return cmd.Run()
 }
 
-// gitRepoVars point git at one repo. git sets them for hooks (GIT_DIR in a linked worktree): passed on, a test's
-// `git init` + `git commit` in a temp dir would write into the real repo and its checked-out branch.
-var gitRepoVars = []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
-	"GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_PREFIX", "GIT_QUARANTINE_PATH", "GIT_NAMESPACE"}
-
-// cleanEnv is the environment without gitRepoVars, for everything check runs.
+// cleanEnv is the environment without gitx.RepoVars, for everything check runs: passed on, a test's `git init` +
+// `git commit` in a temp dir would write into the real repo and its checked-out branch.
 func cleanEnv(extra ...string) []string {
 	var env []string
 	for _, kv := range os.Environ() {
 		k, _, _ := strings.Cut(kv, "=")
-		if !slices.Contains(gitRepoVars, k) {
+		if !slices.Contains(gitx.RepoVars, k) {
 			env = append(env, kv)
 		}
 	}
