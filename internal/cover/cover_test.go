@@ -241,19 +241,26 @@ func TestCodeLines_whenScanError_thenNil(t *testing.T) {
 }
 
 func TestMapped(t *testing.T) {
-	files := map[string]bool{"backend/x/x.go": true, "ui/src/a.ts": true}
-	if err := Mapped("go", Lines{"backend/x/x.go": {4: true}, "ui/src/a.ts": {1: true}}, files); err != nil {
+	root := writeSrc(t) // backend/x/x.go on disk, not in git's list: generated and gitignored
+	if err := os.MkdirAll(filepath.Join(root, "backend", "gen"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// vitest rooted one level off: src/a.ts may exist on disk elsewhere, but git has ui/src/a.ts. Present files
-	// never appear in the list.
-	l := Lines{"backend/x/x.go": {4: true}, "src/a.ts": {1: true}, "UI/src/a.ts": {1: true}}
+	files := map[string]bool{"ui/src/a.ts": true}
+	if err := Mapped("go", Lines{"backend/x/x.go": {4: true}, "ui/src/a.ts": {1: true}}, files, root); err != nil {
+		t.Fatalf("tracked or on-disk files flagged: %v", err)
+	}
+	// vitest rooted one level off: src/a.ts names nothing. A directory is not a file. Present files never appear.
+	l := Lines{"backend/x/x.go": {4: true}, "src/a.ts": {1: true}, "backend/gen": {1: true}}
 	for i := range 6 {
 		l[fmt.Sprintf("gone/%d.ts", i)] = map[int]bool{1: false}
 	}
-	err := Mapped("ui", l, files)
-	if err == nil || !strings.Contains(err.Error(), "UI/src/a.ts") || !strings.Contains(err.Error(), "gone/0.ts") ||
-		!strings.Contains(err.Error(), "... 3 more") || strings.Contains(err.Error(), "backend/x/x.go") {
+	err := Mapped("ui", l, files, root)
+	if err == nil || !strings.Contains(err.Error(), "backend/gen") || !strings.Contains(err.Error(), "gone/0.ts") ||
+		!strings.Contains(err.Error(), "... 3 more") || strings.Contains(err.Error(), "backend/x/x.go") ||
+		!strings.Contains(err.Error(), "ui.lcov") {
 		t.Fatalf("err = %v", err)
+	}
+	if err := Mapped("go", Lines{"x.go": {1: true}}, files, root); err == nil || !strings.Contains(err.Error(), "go.dir") {
+		t.Fatalf("go hint: %v", err)
 	}
 }

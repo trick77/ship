@@ -112,6 +112,60 @@ func TestGates_whenReportsMissingOrEmpty_thenFail(t *testing.T) {
 	}
 }
 
+func TestGates_whenUIReportPathsOff_thenFailWithGoResultsToo(t *testing.T) {
+	prof := "mode: atomic\nexample.com/m/lib/a.go:3.14,5.2 1 0\nexample.com/m/lib/b.go:3.20,4.11 1 1\n" +
+		"example.com/m/lib/b.go:4.11,6.3 1 1\nexample.com/m/lib/b.go:7.2,7.10 1 1\n"
+	// vitest rooted one level off: SF:a.ts lands on ui/a.ts, but the file is ui/src/a.ts. The Go floor (100) fails
+	// too and must be reported in the same run.
+	dir, c := fixture(t, "ui: {}\ngo:\n  floor: 100\n", prof, "SF:a.ts\nDA:1,1\nend_of_record\n")
+	err := (runner{root: dir, c: c}).gates()
+	if err == nil || !strings.Contains(err.Error(), "ui coverage report names files") || !strings.Contains(err.Error(), "ui/a.ts") {
+		t.Fatalf("broken ui mapping passed: %v", err)
+	}
+	if !strings.Contains(err.Error(), "go coverage") {
+		t.Fatalf("go floor result hidden by the ui error: %v", err)
+	}
+}
+
+func TestGates_whenChangedGoFileInNoReport_thenFail(t *testing.T) {
+	prof := "mode: atomic\nexample.com/m/lib/a.go:3.14,5.2 1 1\n" // lib/b.go, changed on the branch, absent
+	dir, c := fixture(t, "", prof, "")
+	if err := os.WriteFile(filepath.Join(dir, "lib", "types.go"), []byte("package lib\n\ntype T struct{ A int }\n\nfunc (T) M() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := (runner{root: dir, c: c}).gates()
+	if err == nil || !strings.Contains(err.Error(), "no coverage report covers them") || !strings.Contains(err.Error(), "lib/b.go") {
+		t.Fatalf("unreported changed file passed: %v", err)
+	}
+	if strings.Contains(err.Error(), "lib/types.go") {
+		t.Fatalf("types-only file flagged: %v", err)
+	}
+	c.Go.Exclude = append(c.Go.Exclude, "lib/b.go")
+	if err := (runner{root: dir, c: c}).gates(); err != nil {
+		t.Fatalf("excluded file still flagged: %v", err)
+	}
+}
+
+func TestHasCode(t *testing.T) {
+	dir := t.TempDir()
+	for name, tc := range map[string]struct {
+		src  string
+		want bool
+	}{
+		"types.go":  {"package p\n\ntype T int\n\nconst C = 1\n\nvar V = 2\n\nfunc (T) Empty() {}\n", false},
+		"code.go":   {"package p\n\nfunc F() int { return 1 }\n", true},
+		"broken.go": {"package (\n", true},
+	} {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(tc.src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if got := hasCode(p); got != tc.want {
+			t.Errorf("%s: %v", name, got)
+		}
+	}
+}
+
 func TestGofmtAndSteps(t *testing.T) {
 	dir, c := fixture(t, "steps:\n  - name: ok\n    run: test -f go.mod\n", "mode: set\n", "")
 	r := runner{root: dir, c: c}

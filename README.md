@@ -57,7 +57,9 @@ vitest project (npm ci, typecheck, build, coverage, an untested `.tsx` change fa
 
 Patch gate: changed lines (committed, staged, unstaged, untracked) against the merge-base with origin/<base>,
 intersected with the coverage reports; comment and blank lines never count. `[skip patch-coverage]` in a commit
-message skips it (floors still apply).
+message skips it (floors still apply). The gate never passes blind: a report path that names no file of the repo
+fails (paths off: wrong `go.dir`, `ui.dir`, `ui.lcov` or vitest root), and so does a changed Go file holding code
+that no report covers (outside `go.coverpkg`: list it in `go.exclude` if that is intended).
 
 Pre-push: deletes and tags pass; anything else must be HEAD with a clean tree (check tests the tree), then
 `ship check`. A branch whose go.mod has no `tool github.com/trick77/ship` is refused: rebase it.

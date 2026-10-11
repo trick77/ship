@@ -71,17 +71,20 @@ func Excluded(path string, prefixes []string) bool {
 	return false
 }
 
-// Mapped fails when a report path is not one of git's files (files: tracked and untracked, not ignored, as git
-// spells them). Reports are written from the current tree, so every path must be there; one that is not means the
-// report's paths and git's disagree (a moved vitest root, a wrong ui.dir or ui.lcov), and the patch gate, matching
-// changed lines by path, would see nothing and pass blind. git's list, not the disk: a wrong mapping can still hit
-// a real file (dist/, node_modules, a case-insensitive file system).
-func Mapped(name string, l Lines, files map[string]bool) error {
+// Mapped fails when a report path names no file of the repo: neither one of git's files (files, as git spells
+// them) nor a regular file on disk (generated and gitignored, yet compiled or tested). Reports are written from the
+// current tree, so a path that is neither means the report's paths and the repo's disagree (a moved vitest root, a
+// wrong go.dir, ui.dir or ui.lcov), and the patch gate, matching changed lines by path, would pass blind.
+func Mapped(name string, l Lines, files map[string]bool, root string) error {
 	var missing []string
 	for p := range l {
-		if !files[p] {
-			missing = append(missing, p)
+		if files[p] {
+			continue
 		}
+		if fi, err := os.Stat(filepath.Join(root, filepath.FromSlash(p))); err == nil && fi.Mode().IsRegular() {
+			continue
+		}
+		missing = append(missing, p)
 	}
 	if len(missing) == 0 {
 		return nil
@@ -90,9 +93,12 @@ func Mapped(name string, l Lines, files map[string]bool) error {
 	if len(missing) > 5 {
 		missing = append(missing[:5], fmt.Sprintf("... %d more", len(missing)-5))
 	}
-	return fmt.Errorf("%s coverage report names files git does not have, its paths do not match git's "+
-		"(check go.dir, ui.dir, ui.lcov and the test runner's root; generated code: go.exclude): %s",
-		name, strings.Join(missing, ", "))
+	hint := "check go.dir and the module path in go.mod"
+	if name != "go" {
+		hint = "check ui.dir, ui.lcov and the test runner's root (vitest root, coverage.reportsDirectory)"
+	}
+	return fmt.Errorf("%s coverage report names files that are not in the repo, its paths do not match the repo's "+
+		"(%s): %s", name, hint, strings.Join(missing, ", "))
 }
 
 // Percent returns covered and total line counts over every file.

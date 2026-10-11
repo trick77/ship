@@ -5,8 +5,12 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -242,36 +246,40 @@ func (r runner) gates() error {
 	if err != nil {
 		return err
 	}
-	listed, err := gitx.GitZ(r.root, "ls-files", "-z", "-co", "--exclude-standard")
+	files, err := gitx.Files(r.root)
 	if err != nil {
 		return err
 	}
-	files := make(map[string]bool, len(listed))
-	for _, f := range listed {
-		files[f] = true
-	}
 	all := cover.Lines{}
 	all.Merge(goLines)
-	// Every result in one run: a mapping error does not hide the floors or the patch gate.
-	errs := []error{cover.Mapped("go", goLines, files), cover.Floor("go", goLines, r.c.Go.Floor)}
+	// Every result in one run: a broken or missing report does not hide the other side, the floors or the patch gate.
+	errs := []error{cover.Mapped("go", goLines, files, r.root), cover.Floor("go", goLines, r.c.Go.Floor)}
 	if r.c.UI != nil {
-		f, err := os.Open(filepath.Join(r.root, r.c.UI.Lcov))
-		if err != nil {
-			return fmt.Errorf("ui coverage report: %w (ui.test must write ui.lcov)", err)
+		if uiLines, err := r.uiLines(); err != nil {
+			errs = append(errs, err)
+		} else {
+			errs = append(errs, cover.Mapped("ui", uiLines, files, r.root), cover.Floor("ui", uiLines, r.c.UI.Floor))
+			all.Merge(uiLines)
 		}
-		uiLines, err := cover.Lcov(f, r.c.UI.Dir, r.root)
-		_ = f.Close()
-		if err != nil {
-			return err
-		}
-		if len(uiLines) == 0 {
-			return fmt.Errorf("ui coverage report %s holds no lines", r.c.UI.Lcov)
-		}
-		errs = append(errs, cover.Mapped("ui", uiLines, files), cover.Floor("ui", uiLines, r.c.UI.Floor))
-		all.Merge(uiLines)
 	}
-	errs = append(errs, r.patch(all))
+	errs = append(errs, r.patch(all, goLines))
 	return errors.Join(errs...)
+}
+
+func (r runner) uiLines() (cover.Lines, error) {
+	f, err := os.Open(filepath.Join(r.root, r.c.UI.Lcov))
+	if err != nil {
+		return nil, fmt.Errorf("ui coverage report: %w (ui.test must write ui.lcov)", err)
+	}
+	defer func() { _ = f.Close() }()
+	l, err := cover.Lcov(f, r.c.UI.Dir, r.root)
+	if err != nil {
+		return nil, err
+	}
+	if len(l) == 0 {
+		return nil, fmt.Errorf("ui coverage report %s holds no lines", r.c.UI.Lcov)
+	}
+	return l, nil
 }
 
 func (r runner) goLines() (cover.Lines, error) {
@@ -298,7 +306,7 @@ func (r runner) goLines() (cover.Lines, error) {
 	return l.Without(r.c.Go.Exclude), nil
 }
 
-func (r runner) patch(all cover.Lines) error {
+func (r runner) patch(all, goLines cover.Lines) error {
 	ref := "origin/" + r.c.Base
 	base, err := gitx.MergeBase(r.root, ref)
 	if err != nil {
@@ -314,7 +322,48 @@ func (r runner) patch(all cover.Lines) error {
 	if err != nil {
 		return err
 	}
-	return cover.PatchOf(all, changed).Gate(r.c.Patch)
+	return errors.Join(r.unreported(changed, goLines), cover.PatchOf(all, changed).Gate(r.c.Patch))
+}
+
+// unreported fails for a changed Go file that holds code but is in no coverage report: the patch gate, matching
+// changed lines to report lines, would skip it and pass. A package outside -coverpkg does that; a file with only
+// types or empty funcs is legitimately absent (no statements), as are tests, go.exclude paths and what go ignores.
+func (r runner) unreported(changed map[string][]int, goLines cover.Lines) error {
+	dir := path.Clean(filepath.ToSlash(r.c.Go.Dir))
+	var missing []string
+	for p := range changed {
+		if !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") || ignoredByGo(p) ||
+			cover.Excluded(p, r.c.Go.Exclude) || goLines[p] != nil {
+			continue
+		}
+		if dir != "." && !strings.HasPrefix(p, dir+"/") {
+			continue
+		}
+		if hasCode(filepath.Join(r.root, filepath.FromSlash(p))) {
+			missing = append(missing, p)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	slices.Sort(missing)
+	return fmt.Errorf("changed Go files hold code but no coverage report covers them (outside go.coverpkg? "+
+		"else go.exclude): %s", strings.Join(missing, ", "))
+}
+
+// hasCode reports whether a Go file has a function with statements, the only code coverage instruments. A file
+// that does not parse counts as code: never skip what cannot be judged.
+func hasCode(file string) bool {
+	f, err := parser.ParseFile(token.NewFileSet(), file, nil, parser.SkipObjectResolution)
+	if err != nil {
+		return true
+	}
+	for _, d := range f.Decls {
+		if fn, ok := d.(*ast.FuncDecl); ok && fn.Body != nil && len(fn.Body.List) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // modulePath reads the module line of go.mod.
