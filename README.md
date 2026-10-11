@@ -8,12 +8,12 @@ runs it before every push; CI (by hand) runs the same command.
 
 ## Use in a repo
 
-Unpinned: every run is the newest ship (no pin to bump; a broken release reaches every repo at once, so ship's own
+Unpinned: every run is master's ship (no pin to bump; a broken master commit reaches every repo at once, so ship's own
 gate and CI guard each release).
 
 ```sh
-go run github.com/trick77/ship@latest hooks   # once per clone: the pre-push hook (runs ship@latest on every push)
-go run github.com/trick77/ship@latest check   # the gate by hand
+go run github.com/trick77/ship@master hooks   # once per clone: the pre-push hook (runs master's ship on every push)
+go run github.com/trick77/ship@master check   # the gate by hand (a proxy may lag on @master; the hook asks GitHub)
 ```
 
 `ship.yaml` at the repo root (every key optional):

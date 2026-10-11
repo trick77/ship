@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Shared gate/hook/release tool. Consumers run it unpinned (`go run github.com/trick77/ship@latest`, workflows
+Shared gate/hook/release tool. Consumers run it unpinned, master (`go run github.com/trick77/ship@master`, workflows
 `@master`): every release and every master commit reaches every repo's push at once. Change carefully, release
 deliberately.
 
@@ -10,7 +10,7 @@ deliberately.
   breaking `ship.yaml` or behavior change = minor bump + note in the release.
 - master is live: the reusable workflows are consumed `@master`. Merge to master only what is releasable; keep
   workflow inputs and ship.yaml backward compatible.
-- Dependencies stay minimal (stdlib + yaml): `go run ...@latest` builds them on every machine. `go 1.24` floor.
+- Dependencies stay minimal (stdlib + yaml): `go run ...@master` builds them on every machine. `go 1.24` floor.
 - golangci-lint runs via `go run ...@<ship.yaml lint>`, never the action's release binary (built with an older Go
   than consumers' go.mod: v2.14.0 binary = go1.27.0).
 - Coverage: comment/blank lines never count (go/scanner, not a regex). Floors and patch share one line model.

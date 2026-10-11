@@ -17,8 +17,7 @@ const marker = "Installed by ship hooks"
 
 // script is installed as the pre-push hook. Deletes and tags pass without a gate (nothing to check; release tags
 // are made via the API). Anything else needs the checked-out branch to have a ship.yaml: a branch cut before ship
-// came in is refused, rebase it. The gate is always the newest ship (go run ...@latest, straight from GitHub so a
-// fresh release counts at once; SHIP_CMD overrides the command).
+// came in is refused, rebase it. The gate is always the newest ship, master's head (SHIP_CMD overrides the command).
 const script = `#!/bin/sh
 # Installed by ship hooks (github.com/trick77/ship). Runs the newest ship pre-push on this tree.
 refs="$(cat)"
@@ -50,12 +49,14 @@ if ! git ls-files --error-unmatch -- ship.yaml >/dev/null 2>&1; then
 	echo "pre-push: this branch has no ship.yaml (cut before ship): rebase it onto the base branch"
 	exit 1
 fi
-# Always the newest ship, no pin to bump: go caches the build; GOPROXY=direct asks GitHub, not a proxy that may
-# still answer @latest with the previous release.
+# Always the newest ship: master, as the reusable workflows consumers call @master run it, so the hook and CI gate
+# alike. Its version is asked of GitHub (a proxy lags), then run as usual: GOPROXY=direct on the run would reach
+# every go command ship starts.
 if [ -n "$SHIP_CMD" ]; then
 	printf '%s\n' "$refs" | $SHIP_CMD pre-push "$@"
 else
-	printf '%s\n' "$refs" | GOPROXY=direct go run github.com/trick77/ship@latest pre-push "$@"
+	v="$(GOPROXY=direct go list -m -f '{{.Version}}' github.com/trick77/ship@master)" || { echo "pre-push: cannot resolve ship@master (network?)"; exit 1; }
+	printf '%s\n' "$refs" | go run "github.com/trick77/ship@$v" pre-push "$@"
 fi
 `
 
@@ -78,7 +79,7 @@ func Install(root string) (string, error) {
 	if _, ok := gitx.Inside(common, p); !ok {
 		if _, inTree := gitx.Inside(root, p); inTree {
 			return "", fmt.Errorf("pre-push hook path %s is in the working tree (core.hooksPath, e.g. husky or a "+
-				"tracked hooks dir): ship never writes tracked files; add `go run github.com/trick77/ship@latest pre-push` to that hook by hand", p)
+				"tracked hooks dir): ship never writes tracked files; add `go run github.com/trick77/ship@master pre-push` to that hook by hand", p)
 		}
 		return "", fmt.Errorf("pre-push hook path %s is outside this repo (core.hooksPath): installing there would "+
 			"gate every repo sharing it; unset core.hooksPath for this repo or add the hook to that dir by hand", p)
