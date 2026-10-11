@@ -7,7 +7,7 @@ name: Cleanup images
 #   jobs:
 #     cleanup:
 #       uses: trick77/ship/.github/workflows/cleanup-images.yaml@master
-#       with: { packages: '["ipverse-core", "ipverse-core-dashboard"]' }
+#       with: { packages: '["core", "core-dashboard"]'   # ghcr.io/<owner>/<repo><suffix>, as ship release names them }
 #       permissions: { contents: read, packages: write }
 on:
   workflow_call:

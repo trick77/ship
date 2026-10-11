@@ -115,6 +115,35 @@ func TestInstall(t *testing.T) {
 	}
 }
 
+// Only ship's own hook with another script is stale: none, the current one or a foreign hook is not.
+func TestStale(t *testing.T) {
+	if Stale(t.TempDir()) {
+		t.Fatal("no repo reported stale")
+	}
+	dir := repo(t)
+	if Stale(dir) {
+		t.Fatal("no hook reported stale")
+	}
+	p, err := Install(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if Stale(dir) {
+		t.Fatal("fresh hook reported stale")
+	}
+	for s, want := range map[string]bool{
+		"#!/bin/sh\n# " + marker + "\ngo run github.com/trick77/ship@latest pre-push\n": true,
+		"#!/bin/sh\necho mine\n": false,
+	} {
+		if err := os.WriteFile(p, []byte(s), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if got := Stale(dir); got != want {
+			t.Errorf("%q: stale = %v, want %v", s, got, want)
+		}
+	}
+}
+
 func TestInstall_whenHooksPathInsideRepo_thenThere(t *testing.T) {
 	dir := repo(t)
 	if _, err := gitx.Git(dir, "config", "core.hooksPath", ".git/myhooks"); err != nil {

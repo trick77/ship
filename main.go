@@ -80,6 +80,9 @@ func run(args []string) error {
 		if len(gated) == 0 {
 			return nil
 		}
+		if hook.Stale(root) {
+			fmt.Fprintln(os.Stderr, "ship: this clone's pre-push hook is not this ship's script; rerun `ship hooks` (see README)")
+		}
 		if err := hook.Ready(root, gated); err != nil {
 			return fmt.Errorf("pre-push: %w", err)
 		}

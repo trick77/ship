@@ -106,7 +106,8 @@ func TestRun_whenHooks_thenInstalled(t *testing.T) {
 }
 
 // A hook from ship v0.2.0 in a linked worktree: git sets GIT_DIR alone, the hook cds into backend/ and runs ship
-// pre-push there. ship pins the top itself: the clean tree reads clean (the ship.yaml error is the next step).
+// pre-push there. ship pins the top itself: the clean tree reads clean (the ship.yaml error is the next step). That
+// old hook is stale: ship warns and still gates.
 func TestRun_whenOldHookFromModuleSubdirInLinkedWorktree_thenTreeSeenWhole(t *testing.T) {
 	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
@@ -116,6 +117,10 @@ func TestRun_whenOldHookFromModuleSubdirInLinkedWorktree_thenTreeSeenWhole(t *te
 		t.Fatalf("%v %s", err, out)
 	}
 	if err := os.MkdirAll(filepath.Join(dir, "backend"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stale := "#!/bin/sh\n# Installed by ship hooks\ncd backend && go tool ship pre-push \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(dir, ".git", "hooks", "pre-push"), []byte(stale), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	for p, s := range map[string]string{"README.md": "x\n", "backend/go.mod": "module m\n"} {
