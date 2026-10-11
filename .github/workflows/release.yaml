@@ -9,7 +9,7 @@ name: Release
 #         bump: { type: choice, options: [patch, minor, major], default: patch }
 #   jobs:
 #     release:
-#       uses: trick77/ship/.github/workflows/release.yaml@v0.1.0
+#       uses: trick77/ship/.github/workflows/release.yaml@master
 #       with: { bump: "${{ inputs.bump }}" }
 #       permissions: { contents: write, packages: write }
 on:
@@ -22,8 +22,9 @@ on:
         type: string
         default: "."
       ship:
+        description: How to run ship; empty = ship at this workflow's own commit.
         type: string
-        default: go tool ship
+        default: ""
 
 jobs:
   release:
@@ -54,7 +55,8 @@ jobs:
       - working-directory: ${{ inputs.go-dir }}
         env:
           GH_TOKEN: ${{ github.token }}
-          SHIP: ${{ inputs.ship }}
+          # The binary from this workflow's own commit: a consumer calling @master never pairs it with an older release.
+          SHIP: ${{ inputs.ship || format('go run github.com/trick77/ship@{0}', github.job_workflow_sha) }}
           BUMP: ${{ inputs.bump }}
         run: |
           case "$BUMP" in patch|minor|major) ;; *) echo "::error::bump '$BUMP'"; exit 1 ;; esac

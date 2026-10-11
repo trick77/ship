@@ -1,10 +1,10 @@
-// Command ship is the gate, hook and release tool shared by the trick77 and ipverse Go repos. Each repo pins it
-// as a go tool (go get -tool github.com/trick77/ship@vX) and describes itself in ship.yaml.
+// Command ship is the gate, hook and release tool shared by the trick77 and ipverse Go repos. Each repo runs the
+// newest one (go run github.com/trick77/ship@latest <command>) and describes itself in ship.yaml.
 //
-//	go tool ship check                     everything CI checks, locally
-//	go tool ship hooks                     install the pre-push hook
-//	go tool ship pre-push                  the hook's gate (git runs it)
-//	go tool ship release [patch|minor|major] [-cache gha] [-dry-run]
+//	ship check                     everything CI checks, locally
+//	ship hooks                     install the pre-push hook
+//	ship pre-push                  the hook's gate (git runs it)
+//	ship release [patch|minor|major] [-cache gha] [-dry-run]
 package main
 
 import (

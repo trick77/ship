@@ -5,13 +5,13 @@ name: Check
 #   on: workflow_dispatch
 #   jobs:
 #     check:
-#       uses: trick77/ship/.github/workflows/check.yaml@v0.1.0
+#       uses: trick77/ship/.github/workflows/check.yaml@master
 #       with: { node-version: "22" }   # only with a UI
 on:
   workflow_call:
     inputs:
       go-dir:
-        description: Go module directory (where go.mod pins ship).
+        description: Go module directory.
         type: string
         default: "."
       node-version:
@@ -22,9 +22,9 @@ on:
         type: string
         default: ui
       ship:
-        description: How to run ship; ship's own repo uses "go run .".
+        description: How to run ship; empty = ship at this workflow's own commit. ship's own repo uses "go run .".
         type: string
-        default: go tool ship
+        default: ""
 
 permissions:
   contents: read
@@ -51,5 +51,6 @@ jobs:
           cache-dependency-path: ${{ inputs.ui-dir }}/package-lock.json
       - working-directory: ${{ inputs.go-dir }}
         env:
-          SHIP: ${{ inputs.ship }}
+          # The binary from this workflow's own commit: a consumer calling @master never pairs it with an older release.
+          SHIP: ${{ inputs.ship || format('go run github.com/trick77/ship@{0}', github.job_workflow_sha) }}
         run: $SHIP check
