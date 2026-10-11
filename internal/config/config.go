@@ -42,8 +42,9 @@ type Go struct {
 	Race *bool `yaml:"race"`
 	// Coverpkg is passed to go test -coverpkg when set, e.g. ./internal/...
 	Coverpkg string `yaml:"coverpkg"`
-	// Exclude lists path prefixes, relative to the repo root, that neither coverage gate counts. A prefix also
-	// matches as a path segment anywhere ("cmd/" excludes backend/cmd/x.go).
+	// Exclude lists Go path prefixes, relative to the repo root, that neither coverage gate counts. A prefix also
+	// matches as a path segment anywhere ("cmd/" excludes backend/cmd/x.go). UI coverage scope is the test
+	// runner's own (vitest coverage include/exclude).
 	Exclude []string `yaml:"exclude"`
 }
 
@@ -95,9 +96,22 @@ func Load(root string) (*Config, error) {
 	return Parse(b)
 }
 
-// Parse decodes ship.yaml, rejecting unknown keys so a typo never silently disables a gate.
+// Parse decodes ship.yaml, rejecting unknown keys so a typo never silently disables a gate. Defaults are set before
+// decoding, so an explicit value, 0 included (`floor: 0` while paying down debt), always wins over the default.
 func Parse(b []byte) (*Config, error) {
-	var c Config
+	c := Config{
+		Base:  "master",
+		Lint:  "v2.14.0",
+		Patch: 75,
+		Go:    Go{Dir: ".", Floor: 75, Exclude: []string{"cmd/"}},
+	}
+	// yaml fills an already set pointer in place: a ui: block keeps the defaults it does not override.
+	var keys map[string]any
+	if err := yaml.Unmarshal(b, &keys); err == nil {
+		if _, ok := keys["ui"]; ok {
+			c.UI = &UI{Dir: "ui", Floor: 75, Build: "npm ci && npm run build", Test: "npm run test -- --coverage"}
+		}
+	}
 	dec := yaml.NewDecoder(bytes.NewReader(b))
 	dec.KnownFields(true)
 	if err := dec.Decode(&c); err != nil && !errors.Is(err, io.EOF) {
@@ -107,41 +121,10 @@ func Parse(b []byte) (*Config, error) {
 	return &c, c.validate()
 }
 
+// defaults fills what depends on other values or lives in lists.
 func (c *Config) defaults() {
-	if c.Base == "" {
-		c.Base = "master"
-	}
-	if c.Lint == "" {
-		c.Lint = "v2.14.0"
-	}
-	if c.Patch == 0 {
-		c.Patch = 75
-	}
-	if c.Go.Dir == "" {
-		c.Go.Dir = "."
-	}
-	if c.Go.Floor == 0 {
-		c.Go.Floor = 75
-	}
-	if c.Go.Exclude == nil {
-		c.Go.Exclude = []string{"cmd/"}
-	}
-	if c.UI != nil {
-		if c.UI.Dir == "" {
-			c.UI.Dir = "ui"
-		}
-		if c.UI.Floor == 0 {
-			c.UI.Floor = 75
-		}
-		if c.UI.Build == "" {
-			c.UI.Build = "npm ci && npm run build"
-		}
-		if c.UI.Test == "" {
-			c.UI.Test = "npm run test -- --coverage"
-		}
-		if c.UI.Lcov == "" {
-			c.UI.Lcov = filepath.Join(c.UI.Dir, "coverage", "lcov.info")
-		}
+	if c.UI != nil && c.UI.Lcov == "" {
+		c.UI.Lcov = filepath.Join(c.UI.Dir, "coverage", "lcov.info")
 	}
 	for i := range c.Images {
 		im := &c.Images[i]

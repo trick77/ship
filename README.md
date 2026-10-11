@@ -39,7 +39,8 @@ images:               # release builds these; none = tag + GitHub release only
   - { suffix: "", target: "", containerfile: Containerfile, platforms: [linux/amd64] }
 ```
 
-Gitignore `.ship/` (coverage reports).
+The Go coverage report lives in the git dir (`.git/ship/`), never in the tree. Gitignore the UI test runner's
+coverage output.
 
 ## Commands
 

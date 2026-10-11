@@ -77,13 +77,17 @@ func Next(v Version, bump string) (Version, error) {
 	return v, fmt.Errorf("bump %q: want patch, minor or major", bump)
 }
 
-// Tags returns every tag an image gets: version, major.minor, major, short sha, latest.
-func Tags(image string, v Version, short string) []string {
+// Fixed returns the tags that name exactly this build: version and short sha. Pushed with the build.
+func Fixed(image string, v Version, short string) []string {
+	return []string{fmt.Sprintf("%s:%s", image, v), fmt.Sprintf("%s:%s", image, short)}
+}
+
+// Moving returns the tags that follow the newest release: major.minor, major, latest. Set only after the git tag and
+// the GitHub release exist, so a failed release never leaves :latest pointing at a version that was never released.
+func Moving(image string, v Version) []string {
 	return []string{
-		fmt.Sprintf("%s:%s", image, v),
 		fmt.Sprintf("%s:%d.%d", image, v.Major, v.Minor),
 		fmt.Sprintf("%s:%d", image, v.Major),
-		fmt.Sprintf("%s:%s", image, short),
 		image + ":latest",
 	}
 }
@@ -126,7 +130,7 @@ func Run(root string, c *config.Config, o Options) error {
 	short := head[:7]
 	fmt.Printf("ship: release %s -> %s (%s) at %s\n", prev, next, o.Bump, short)
 
-	var images []string
+	var images, names []string
 	for _, im := range c.Images {
 		name := "ghcr.io/" + strings.ToLower(repo) + im.Suffix
 		args := []string{"buildx", "build", "--push",
@@ -139,7 +143,7 @@ func Run(root string, c *config.Config, o Options) error {
 		if o.Cache != "" {
 			args = append(args, "--cache-from", "type="+o.Cache, "--cache-to", "type="+o.Cache+",mode=max")
 		}
-		for _, t := range Tags(name, next, short) {
+		for _, t := range Fixed(name, next, short) {
 			args = append(args, "-t", t)
 		}
 		args = append(args, im.Context)
@@ -147,6 +151,7 @@ func Run(root string, c *config.Config, o Options) error {
 			return fmt.Errorf("image %s: %w", name, err)
 		}
 		images = append(images, fmt.Sprintf("`%s:%s`", name, next))
+		names = append(names, name)
 	}
 
 	if err := run(root, o.DryRun, "gh", "api", "repos/"+repo+"/git/refs",
@@ -160,6 +165,17 @@ func Run(root string, c *config.Config, o Options) error {
 	if err := run(root, o.DryRun, "gh", "release", "create", tag, "--repo", repo,
 		"--title", tag, "--notes", notes); err != nil {
 		return fmt.Errorf("github release: %w", err)
+	}
+	// Retag the pushed manifest (all platforms) in the registry, no rebuild.
+	for _, name := range names {
+		args := []string{"buildx", "imagetools", "create"}
+		for _, t := range Moving(name, next) {
+			args = append(args, "-t", t)
+		}
+		args = append(args, fmt.Sprintf("%s:%s", name, next))
+		if err := run(root, o.DryRun, "docker", args...); err != nil {
+			return fmt.Errorf("moving tags of %s (released; rerun: docker %s): %w", name, strings.Join(args, " "), err)
+		}
 	}
 	fmt.Printf("ship: released %s\n", tag)
 	return nil

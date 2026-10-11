@@ -37,6 +37,30 @@ func TestRun_whenNoShipYaml_thenCheckAndReleaseRefuse(t *testing.T) {
 	}
 }
 
+func TestReleaseOptions(t *testing.T) {
+	for _, tc := range []struct {
+		args        []string
+		bump, cache string
+		dry         bool
+	}{
+		{nil, "patch", "", false},
+		{[]string{"minor"}, "minor", "", false},
+		{[]string{"-dry-run", "minor"}, "minor", "", true},
+		{[]string{"major", "-cache", "gha", "-dry-run"}, "major", "gha", true},
+		{[]string{"-cache", "gha", "major"}, "major", "gha", false},
+	} {
+		o, err := releaseOptions(tc.args)
+		if err != nil || o.Bump != tc.bump || o.Cache != tc.cache || o.DryRun != tc.dry {
+			t.Errorf("%v: %+v %v", tc.args, o, err)
+		}
+	}
+	for _, args := range [][]string{{"-dry-run", "minor", "major"}, {"minor", "-dry-run", "major"}, {"-bogus"}} {
+		if _, err := releaseOptions(args); err == nil {
+			t.Errorf("%v: accepted", args)
+		}
+	}
+}
+
 func TestRun_whenPrePushOnlyDeletes_thenNothingToGate(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)

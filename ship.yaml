@@ -1,4 +1,3 @@
-# ship's own gate. ship runs itself with go run . (it is not a go tool of itself).
+# ship's own gate: the family defaults (75% floor, 75% patch). ship runs itself with go run . (it is not a go
+# tool of itself).
 tag_prefix: v
-go:
-  floor: 80

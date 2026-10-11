@@ -98,6 +98,34 @@ func parseBlock(line string) (file string, start, end, stmts int, count int64, e
 	return file, start, end, stmts, count, nil
 }
 
+// relTo makes an absolute report path repo-relative. Both sides have symlinks resolved first: on macOS git reports
+// /private/var/... while a tool may write /var/..., and the paths must still meet. A path outside root is an error,
+// never a "../" path that silently matches no changed line.
+func relTo(root, p string) (string, error) {
+	rel, err := filepath.Rel(resolve(root), resolve(p))
+	if err != nil || rel == ".." || strings.HasPrefix(rel, "../") || strings.HasPrefix(rel, `..\`) {
+		return "", fmt.Errorf("lcov: %s is outside the repo %s", p, root)
+	}
+	return filepath.ToSlash(rel), nil
+}
+
+// resolve resolves symlinks in the deepest existing ancestor of p and keeps the rest: the file (or its dirs) may
+// be gone by the time the report is read.
+func resolve(p string) string {
+	p = filepath.Clean(p)
+	for dir, rest := p, ""; ; {
+		if r, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Join(r, rest)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return p
+		}
+		rest = filepath.Join(filepath.Base(dir), rest)
+		dir = parent
+	}
+}
+
 // Lcov reads an lcov report (vitest, c8, istanbul) into Lines from its DA: records. SF: paths that are relative
 // are taken relative to base (the UI directory, repo-relative); absolute ones are made relative to root.
 func Lcov(r io.Reader, base, root string) (Lines, error) {
@@ -111,11 +139,11 @@ func Lcov(r io.Reader, base, root string) (Lines, error) {
 		case strings.HasPrefix(line, "SF:"):
 			sf := strings.TrimPrefix(line, "SF:")
 			if filepath.IsAbs(sf) {
-				rel, err := filepath.Rel(root, sf)
+				rel, err := relTo(root, sf)
 				if err != nil {
-					return nil, fmt.Errorf("lcov: %s outside repo %s", sf, root)
+					return nil, err
 				}
-				cur = filepath.ToSlash(rel)
+				cur = rel
 			} else {
 				cur = path.Clean(path.Join(filepath.ToSlash(base), filepath.ToSlash(sf)))
 			}

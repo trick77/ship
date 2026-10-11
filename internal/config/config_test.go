@@ -45,6 +45,19 @@ func TestParse_whenRaceOff_thenOff(t *testing.T) {
 	}
 }
 
+func TestParse_whenExplicitZero_thenZeroNotDefault(t *testing.T) {
+	c, err := Parse([]byte("patch: 0\ngo:\n  floor: 0\nui:\n  floor: 0\n  dir: web\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Patch != 0 || c.Go.Floor != 0 || c.UI.Floor != 0 {
+		t.Fatalf("explicit 0 replaced: patch %v go %v ui %v", c.Patch, c.Go.Floor, c.UI.Floor)
+	}
+	if c.Go.Dir != "." || c.UI.Build == "" || c.UI.Lcov != filepath.Join("web", "coverage", "lcov.info") {
+		t.Fatalf("defaults beside the zeros lost: %+v %+v", c.Go, c.UI)
+	}
+}
+
 func TestParse_whenUnknownKeyOrBadValue_thenError(t *testing.T) {
 	for _, in := range []string{
 		"pach: 80\n",            // typo must not silently drop a gate

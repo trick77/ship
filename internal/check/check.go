@@ -16,9 +16,6 @@ import (
 	"github.com/trick77/ship/internal/gitx"
 )
 
-// OutDir holds the coverage reports, under the repo root; repos gitignore it.
-const OutDir = ".ship"
-
 // SkipPatch in a commit message on the branch skips the patch gate (a mass reformat or rename adds no logic, but
 // every touched line would count). The floor still applies.
 const SkipPatch = "[skip patch-coverage]"
@@ -94,24 +91,49 @@ func (r runner) uiLint() error {
 	return r.sh(filepath.Join(r.root, r.c.UI.Dir), r.c.UI.Lint)
 }
 
+// gofmt checks the Go files the go tool builds: testdata/, vendor/ and _ or . directories hold fixtures (often
+// broken on purpose) the build never compiles. Batched, so a big repo never exceeds the argument limit.
 func (r runner) gofmt() error {
-	files, err := gitx.GoFiles(r.root)
+	all, err := gitx.GoFiles(r.root)
 	if err != nil {
 		return err
 	}
-	if len(files) == 0 {
-		return nil
+	var files []string
+	for _, f := range all {
+		if !ignoredByGo(f) {
+			files = append(files, f)
+		}
 	}
-	cmd := exec.Command("gofmt", append([]string{"-l"}, files...)...) //nolint:gosec // files git lists in the repo
-	cmd.Dir = r.root
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%w: %s", err, out)
+	var bad []string
+	for len(files) > 0 {
+		n := min(len(files), 500)
+		cmd := exec.Command("gofmt", append([]string{"-l"}, files[:n]...)...) //nolint:gosec // files git lists in the repo
+		cmd.Dir = r.root
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("%w: %s", err, out)
+		}
+		if s := strings.TrimSpace(string(out)); s != "" {
+			bad = append(bad, s)
+		}
+		files = files[n:]
 	}
-	if s := strings.TrimSpace(string(out)); s != "" {
-		return fmt.Errorf("not gofmt'd, run gofmt -w:\n%s", s)
+	if len(bad) > 0 {
+		return fmt.Errorf("not gofmt'd, run gofmt -w:\n%s", strings.Join(bad, "\n"))
 	}
 	return nil
+}
+
+// ignoredByGo reports whether the go tool skips the file's directory: testdata, vendor, or a name starting with
+// _ or . on the path.
+func ignoredByGo(path string) bool {
+	dirs := strings.Split(path, "/")
+	for _, d := range dirs[:len(dirs)-1] {
+		if d == "testdata" || d == "vendor" || strings.HasPrefix(d, "_") || strings.HasPrefix(d, ".") {
+			return true
+		}
+	}
+	return false
 }
 
 func (r runner) lint() error {
@@ -134,10 +156,14 @@ func (r runner) extra() error {
 // goTest always runs uncached (-count=1): a cached result carries the coverage counters of the file set it was
 // recorded against.
 func (r runner) goTest() error {
-	if err := os.MkdirAll(filepath.Join(r.root, OutDir), 0o750); err != nil {
+	profile, err := r.profile()
+	if err != nil {
 		return err
 	}
-	args := []string{"test", "-count=1", "-covermode=atomic", "-coverprofile=" + r.profile()}
+	if err := os.MkdirAll(filepath.Dir(profile), 0o750); err != nil {
+		return err
+	}
+	args := []string{"test", "-count=1", "-covermode=atomic", "-coverprofile=" + profile}
 	var env []string
 	if r.c.Go.RaceOn() {
 		args = append(args, "-race")
@@ -149,7 +175,18 @@ func (r runner) goTest() error {
 	return r.run(r.goDir(), env, "go", append(args, "./...")...)
 }
 
-func (r runner) profile() string { return filepath.Join(r.root, OutDir, "go.out") }
+// profile is the Go coverage report path, inside the git dir (per worktree): never an untracked file in the tree,
+// which the pre-push hook would refuse as uncommitted.
+func (r runner) profile() (string, error) {
+	p, err := gitx.Git(r.root, "rev-parse", "--git-path", "ship/go.out")
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(r.root, p)
+	}
+	return p, nil
+}
 
 func (r runner) uiTest() error {
 	if r.c.UI == nil {
@@ -196,7 +233,11 @@ func (r runner) goLines() (cover.Lines, error) {
 	if err != nil {
 		return nil, err
 	}
-	f, err := os.Open(r.profile())
+	profile, err := r.profile()
+	if err != nil {
+		return nil, err
+	}
+	f, err := os.Open(profile) //nolint:gosec // ship's own report in the git dir
 	if err != nil {
 		return nil, err
 	}
@@ -227,7 +268,7 @@ func (r runner) patch(all cover.Lines) error {
 	if err != nil {
 		return err
 	}
-	return cover.PatchOf(all.Without(r.c.Go.Exclude), changed).Gate(r.c.Patch)
+	return cover.PatchOf(all, changed).Gate(r.c.Patch)
 }
 
 // modulePath reads the module line of go.mod.

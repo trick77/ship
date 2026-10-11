@@ -32,10 +32,10 @@ done <<EOF
 $refs
 EOF
 [ "$gate" = 1 ] || exit 0
-top="$(git rev-parse --show-toplevel)"
-for dir in "$top" "$top/backend"; do
-	if [ -f "$dir/go.mod" ] && grep -qE '^[[:space:]]*(tool[[:space:]]+)?github.com/trick77/ship[[:space:]]*$' "$dir/go.mod"; then
-		cd "$dir" || exit 1
+cd "$(git rev-parse --show-toplevel)" || exit 1
+for gomod in $(git ls-files -- go.mod '*/go.mod'); do
+	if grep -qE '^[[:space:]]*(tool[[:space:]]+)?github.com/trick77/ship[[:space:]]*(//.*)?$' "$gomod"; then
+		cd "$(dirname "$gomod")" || exit 1
 		printf '%s\n' "$refs" | go tool ship pre-push "$@"
 		exit $?
 	fi

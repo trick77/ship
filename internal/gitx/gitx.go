@@ -53,7 +53,10 @@ func SkipMarker(root, base, marker string) (bool, error) {
 // Changed returns the lines the working tree adds or changes against base, per repo-relative path: committed,
 // staged and unstaged edits plus every line of untracked, non-ignored files. Deleted lines are not lines.
 func Changed(root, base string) (map[string][]int, error) {
-	diff, err := Git(root, "diff", "--no-color", "--no-ext-diff", "-U0", "--no-renames", base)
+	// Explicit prefixes: diff.noprefix or diff.mnemonicPrefix in a user's config would otherwise rename every path
+	// and the gate would match nothing, passing untested code.
+	diff, err := Git(root, "diff", "--no-color", "--no-ext-diff", "-U0", "--no-renames",
+		"--src-prefix=a/", "--dst-prefix=b/", base)
 	if err != nil {
 		return nil, err
 	}
@@ -80,14 +83,29 @@ func Changed(root, base string) (map[string][]int, error) {
 	return out, nil
 }
 
-// parseDiff reads a -U0 unified diff: "+++ b/<path>" names the file, "@@ -a,b +c,d @@" the added range.
+// parseDiff reads a -U0 unified diff: "+++ b/<path>" names the file, "@@ -a,b +c,d @@" the added range. Hunk
+// bodies are skipped by their line counts, never by their text: a removed "-- x" and an added "++ y" read
+// "--- x" / "+++ y" and would otherwise pass for a file header.
 func parseDiff(diff string) (map[string][]int, error) {
 	out := map[string][]int{}
 	cur := ""
+	oldLeft, newLeft := 0, 0
 	sc := bufio.NewScanner(strings.NewReader(diff))
 	sc.Buffer(make([]byte, 0, 1<<20), 64<<20)
 	for sc.Scan() {
 		line := sc.Text()
+		if oldLeft > 0 || newLeft > 0 {
+			switch {
+			case strings.HasPrefix(line, "-"):
+				oldLeft--
+			case strings.HasPrefix(line, "+"):
+				newLeft--
+			case strings.HasPrefix(line, " "):
+				oldLeft--
+				newLeft--
+			}
+			continue // "\ No newline at end of file" and the like count for nothing
+		}
 		switch {
 		case strings.HasPrefix(line, "+++ "):
 			p := strings.TrimPrefix(line, "+++ ")
@@ -96,12 +114,13 @@ func parseDiff(diff string) (map[string][]int, error) {
 			} else {
 				cur = strings.TrimPrefix(p, "b/")
 			}
-		case strings.HasPrefix(line, "@@ ") && cur != "":
-			start, n, err := addedRange(line)
+		case strings.HasPrefix(line, "@@ "):
+			oldN, start, n, err := hunk(line)
 			if err != nil {
 				return nil, err
 			}
-			for i := 0; i < n; i++ {
+			oldLeft, newLeft = oldN, n
+			for i := 0; cur != "" && i < n; i++ {
 				out[cur] = append(out[cur], start+i)
 			}
 		}
@@ -109,23 +128,35 @@ func parseDiff(diff string) (map[string][]int, error) {
 	return out, sc.Err()
 }
 
-// addedRange parses the "+c,d" part of a hunk header; d defaults to 1.
-func addedRange(h string) (start, n int, err error) {
+// hunk parses "@@ -a,b +c,d @@": the removed count b, the added start c and count d; counts default to 1.
+func hunk(h string) (oldN, start, n int, err error) {
+	bad := fmt.Errorf("diff: malformed hunk %q", h)
 	f := strings.Fields(h)
-	if len(f) < 3 || !strings.HasPrefix(f[2], "+") {
-		return 0, 0, fmt.Errorf("diff: malformed hunk %q", h)
+	if len(f) < 3 || !strings.HasPrefix(f[1], "-") || !strings.HasPrefix(f[2], "+") {
+		return 0, 0, 0, bad
 	}
-	s, c, hasCount := strings.Cut(strings.TrimPrefix(f[2], "+"), ",")
-	if start, err = strconv.Atoi(s); err != nil {
-		return 0, 0, fmt.Errorf("diff: malformed hunk %q", h)
+	_, oldN, err = rangeOf(strings.TrimPrefix(f[1], "-"))
+	if err != nil {
+		return 0, 0, 0, bad
+	}
+	start, n, err = rangeOf(strings.TrimPrefix(f[2], "+"))
+	if err != nil {
+		return 0, 0, 0, bad
+	}
+	return oldN, start, n, nil
+}
+
+// rangeOf parses "c,d" or "c" (d = 1).
+func rangeOf(s string) (start, n int, err error) {
+	a, c, hasCount := strings.Cut(s, ",")
+	if start, err = strconv.Atoi(a); err != nil {
+		return 0, 0, err
 	}
 	n = 1
 	if hasCount {
-		if n, err = strconv.Atoi(c); err != nil {
-			return 0, 0, fmt.Errorf("diff: malformed hunk %q", h)
-		}
+		n, err = strconv.Atoi(c)
 	}
-	return start, n, nil
+	return start, n, err
 }
 
 func countLines(path string) (int, error) {

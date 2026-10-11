@@ -11,7 +11,7 @@ import (
 )
 
 // fixture is a repo with origin/master at the first commit and a branch commit adding lib/b.go on top, a Go
-// profile in .ship/go.out and an lcov report, so the gates run without go test or npm.
+// profile in the git dir (ship/go.out) and an lcov report, so the gates run without go test or npm.
 func fixture(t *testing.T, cfg string, profile, lcov string) (string, *config.Config) {
 	t.Helper()
 	dir := t.TempDir()
@@ -36,7 +36,7 @@ func fixture(t *testing.T, cfg string, profile, lcov string) (string, *config.Co
 	git("config", "user.name", "t")
 	git("config", "commit.gpgsign", "false")
 	write("go.mod", "module example.com/m\n\ngo 1.24\n")
-	write(".gitignore", ".ship/\n")
+	write(".gitignore", "ui/coverage/\n")
 	write("lib/a.go", "package lib\n\nfunc A() int {\n\treturn 1\n}\n")
 	write("ui/src/a.ts", "export const a = 1\n")
 	git("add", "-A")
@@ -45,7 +45,7 @@ func fixture(t *testing.T, cfg string, profile, lcov string) (string, *config.Co
 	write("lib/b.go", "package lib\n\nfunc B(x int) int {\n\tif x > 0 {\n\t\treturn x\n\t}\n\treturn 0\n}\n")
 	git("add", "-A")
 	git("commit", "-q", "-m", "add B")
-	write(".ship/go.out", profile)
+	write(".git/ship/go.out", profile)
 	write("ui/coverage/lcov.info", lcov)
 	c, err := config.Parse([]byte(cfg))
 	if err != nil {
@@ -146,6 +146,35 @@ func TestGofmtAndSteps(t *testing.T) {
 	c.Steps = []config.Step{{Name: "bad", Run: "exit 3"}}
 	if err := r.extra(); err == nil || !strings.Contains(err.Error(), "bad") {
 		t.Fatalf("step: %v", err)
+	}
+}
+
+func TestIgnoredByGo(t *testing.T) {
+	for p, want := range map[string]bool{
+		"a.go":                     false,
+		"internal/x/a.go":          false,
+		"internal/testdata/bad.go": true,
+		"vendor/m/a.go":            true,
+		"_old/a.go":                true,
+		".hidden/a.go":             true,
+		"internal/_a.go":           false, // the file name itself does not matter here
+	} {
+		if got := ignoredByGo(p); got != want {
+			t.Errorf("%s: %v", p, got)
+		}
+	}
+}
+
+func TestGofmt_whenBrokenFixtureInTestdata_thenIgnored(t *testing.T) {
+	dir, c := fixture(t, "", "mode: set\n", "")
+	if err := os.MkdirAll(filepath.Join(dir, "lib", "testdata"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "lib", "testdata", "broken.go"), []byte("package (\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := (runner{root: dir, c: c}).gofmt(); err != nil {
+		t.Fatal(err)
 	}
 }
 

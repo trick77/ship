@@ -126,24 +126,43 @@ func mustEval(t *testing.T, p string) string {
 	return r
 }
 
-func TestAddedRange(t *testing.T) {
-	for h, want := range map[string][2]int{
-		"@@ -1,2 +3,4 @@":  {3, 4},
-		"@@ -1 +3 @@ func": {3, 1},
-		"@@ -5,2 +4,0 @@":  {4, 0},
+func TestHunk(t *testing.T) {
+	for h, want := range map[string][3]int{
+		"@@ -1,2 +3,4 @@":  {2, 3, 4},
+		"@@ -1 +3 @@ func": {1, 3, 1},
+		"@@ -5,2 +4,0 @@":  {2, 4, 0},
 	} {
-		s, n, err := addedRange(h)
-		if err != nil || s != want[0] || n != want[1] {
-			t.Errorf("%s: %d,%d %v", h, s, n, err)
+		o, s, n, err := hunk(h)
+		if err != nil || o != want[0] || s != want[1] || n != want[2] {
+			t.Errorf("%s: %d %d,%d %v", h, o, s, n, err)
 		}
 	}
-	for _, h := range []string{"@@ -1", "@@ -1 3 @@", "@@ -1 +x @@", "@@ -1 +1,y @@"} {
-		if _, _, err := addedRange(h); err == nil {
+	for _, h := range []string{"@@ -1", "@@ -1 3 @@", "@@ 1 +3 @@", "@@ -x +3 @@", "@@ -1 +x @@", "@@ -1 +1,y @@"} {
+		if _, _, _, err := hunk(h); err == nil {
 			t.Errorf("%s: no error", h)
 		}
 	}
-	if _, err := parseDiff("+++ b/a.go\n@@ bad\n"); err == nil {
+	if _, err := parseDiff("--- a/a.go\n+++ b/a.go\n@@ bad\n"); err == nil {
 		t.Error("bad hunk accepted")
+	}
+	// A removed "-- x" and an added "++ y" read "--- x" / "+++ y": hunk body, not a file header.
+	diff := "--- a/a.md\n+++ b/a.md\n@@ -1 +1,2 @@\n--- x\n+++ y\n+z\n\\ No newline at end of file\n" +
+		"@@ -5,0 +9 @@\n+w\n--- a/b.md\n+++ b/b.md\n@@ -1,0 +2 @@\n+q\n"
+	got, err := parseDiff(diff)
+	if err != nil || !slices.Equal(got["a.md"], []int{1, 2, 9}) || !slices.Equal(got["b.md"], []int{2}) || len(got) != 2 {
+		t.Errorf("got %v err %v", got, err)
+	}
+}
+
+func TestChanged_whenNoprefixConfig_thenPathsStillRepoRelative(t *testing.T) {
+	dir := repo(t, map[string]string{"a.go": "1\n"})
+	base := mustGit(t, dir, "rev-parse", "HEAD")
+	mustGit(t, dir, "config", "diff.noprefix", "true")
+	mustGit(t, dir, "config", "diff.mnemonicPrefix", "true")
+	write(t, dir, map[string]string{"a.go": "1\n2\n"})
+	got, err := Changed(dir, base)
+	if err != nil || !slices.Equal(got["a.go"], []int{2}) {
+		t.Fatalf("got %v err %v", got, err)
 	}
 }
 

@@ -79,26 +79,43 @@ func run(args []string) error {
 		}
 		return check.Run(root, c)
 	case "release":
-		fs := flag.NewFlagSet("release", flag.ContinueOnError)
-		cache := fs.String("cache", "", "buildx cache backend type, e.g. gha")
-		dry := fs.Bool("dry-run", false, "print the commands, run none")
-		bump := "patch"
-		rest := args[1:]
-		if len(rest) > 0 && rest[0] != "" && rest[0][0] != '-' {
-			bump, rest = rest[0], rest[1:]
-		}
-		if err := fs.Parse(rest); err != nil {
+		o, err := releaseOptions(args[1:])
+		if err != nil {
 			return err
 		}
 		c, err := config.Load(root)
 		if err != nil {
 			return err
 		}
-		return release.Run(root, c, release.Options{Bump: bump, Cache: *cache, DryRun: *dry})
+		return release.Run(root, c, o)
 	case "-h", "-help", "--help", "help":
 		fmt.Print(usage)
 		return nil
 	}
 	fmt.Fprint(os.Stderr, usage)
 	return fmt.Errorf("unknown command %q", args[0])
+}
+
+// releaseOptions parses `release [bump] [flags] [bump]`: the bump may come before or after the flags (default
+// patch). A second bump or any other argument is an error, never silently a patch.
+func releaseOptions(args []string) (release.Options, error) {
+	fs := flag.NewFlagSet("release", flag.ContinueOnError)
+	cache := fs.String("cache", "", "buildx cache backend type, e.g. gha")
+	dry := fs.Bool("dry-run", false, "print the commands, run none")
+	bump := ""
+	if len(args) > 0 && args[0] != "" && args[0][0] != '-' {
+		bump, args = args[0], args[1:]
+	}
+	if err := fs.Parse(args); err != nil {
+		return release.Options{}, err
+	}
+	switch {
+	case fs.NArg() == 1 && bump == "":
+		bump = fs.Arg(0)
+	case fs.NArg() > 0:
+		return release.Options{}, fmt.Errorf("release: unexpected arguments %v", fs.Args())
+	case bump == "":
+		bump = "patch"
+	}
+	return release.Options{Bump: bump, Cache: *cache, DryRun: *dry}, nil
 }

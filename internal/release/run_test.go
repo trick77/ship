@@ -63,7 +63,7 @@ func TestRun_whenDryRun_thenImagesThenTagThenRelease(t *testing.T) {
 		"1.4.2 -> 1.5.0 (minor)",
 		"-t ghcr.io/owner/repo:1.5.0",
 		"--target dashboard",
-		"-t ghcr.io/owner/repo-dashboard:latest",
+		"imagetools create -t ghcr.io/owner/repo-dashboard:1.5 -t ghcr.io/owner/repo-dashboard:1 -t ghcr.io/owner/repo-dashboard:latest ghcr.io/owner/repo-dashboard:1.5.0",
 		"--cache-from type=gha --cache-to type=gha,mode=max",
 		"--build-arg VERSION=1.5.0",
 		"gh api repos/Owner/Repo/git/refs -f ref=refs/tags/1.5.0",
@@ -73,8 +73,13 @@ func TestRun_whenDryRun_thenImagesThenTagThenRelease(t *testing.T) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
 	}
-	if strings.Index(out, "docker buildx") > strings.Index(out, "gh api") {
-		t.Error("tag before image push")
+	build, tag, rel := strings.Index(out, "docker buildx build"), strings.Index(out, "gh api"), strings.Index(out, "gh release")
+	retag := strings.Index(out, "docker buildx imagetools create -t ghcr.io/owner/repo:1.5 -t ghcr.io/owner/repo:1 -t ghcr.io/owner/repo:latest ghcr.io/owner/repo:1.5.0")
+	if build < 0 || retag < 0 || build > tag || tag > rel || rel > retag {
+		t.Errorf("want build < tag < release < moving tags, got %d %d %d %d", build, tag, rel, retag)
+	}
+	if strings.Contains(out[:tag], ":latest") {
+		t.Error(":latest pushed before the tag exists")
 	}
 }
 

@@ -110,6 +110,32 @@ func TestLcov_whenRelativeAndAbsolute_thenRepoPaths(t *testing.T) {
 	}
 }
 
+func TestLcov_whenSymlinkedRootOrOutside_thenResolvedOrError(t *testing.T) {
+	real := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(real, "ui", "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(real, "ui", "src", "a.ts"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	// Report written through the symlink, root as git reports it (resolved), and the other way round.
+	for _, tc := range [][2]string{{link, real}, {real, link}} {
+		in := "SF:" + filepath.Join(tc[0], "ui", "src", "a.ts") + "\nDA:1,1\nend_of_record\n"
+		l, err := Lcov(strings.NewReader(in), "ui", tc[1])
+		if err != nil || !l["ui/src/a.ts"][1] {
+			t.Errorf("report %s root %s: %v %v", tc[0], tc[1], l, err)
+		}
+	}
+	in := "SF:" + filepath.Join(t.TempDir(), "elsewhere.ts") + "\nDA:1,1\nend_of_record\n"
+	if _, err := Lcov(strings.NewReader(in), "ui", real); err == nil || !strings.Contains(err.Error(), "outside the repo") {
+		t.Fatalf("outside: %v", err)
+	}
+}
+
 func TestLcov_whenMalformed_thenError(t *testing.T) {
 	for _, in := range []string{"DA:1,1\n", "SF:a\nDA:1\n", "SF:a\nDA:x,1\n", "SF:a\nDA:1,y\n"} {
 		if _, err := Lcov(strings.NewReader(in), "ui", "/r"); err == nil {

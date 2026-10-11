@@ -33,9 +33,10 @@ func TestNext(t *testing.T) {
 }
 
 func TestTags(t *testing.T) {
-	got := Tags("ghcr.io/o/r", Version{1, 2, 3}, "abc1234")
-	want := []string{"ghcr.io/o/r:1.2.3", "ghcr.io/o/r:1.2", "ghcr.io/o/r:1", "ghcr.io/o/r:abc1234", "ghcr.io/o/r:latest"}
-	if !slices.Equal(got, want) {
+	if got := Fixed("ghcr.io/o/r", Version{1, 2, 3}, "abc1234"); !slices.Equal(got, []string{"ghcr.io/o/r:1.2.3", "ghcr.io/o/r:abc1234"}) {
+		t.Fatal(got)
+	}
+	if got := Moving("ghcr.io/o/r", Version{1, 2, 3}); !slices.Equal(got, []string{"ghcr.io/o/r:1.2", "ghcr.io/o/r:1", "ghcr.io/o/r:latest"}) {
 		t.Fatal(got)
 	}
 }

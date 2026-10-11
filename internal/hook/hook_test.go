@@ -134,15 +134,22 @@ func TestScript(t *testing.T) {
 		}
 	}
 
-	// ship's own module line or a require entry is not the tool directive.
+	// ship's own module line or a require entry is not the tool directive; the module may live in any tracked dir.
 	push := "refs/heads/master " + head + " refs/heads/master " + zero + "\n"
+	if err := os.MkdirAll(filepath.Join(dir, "server"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	for gomod, isTool := range map[string]bool{
 		"module github.com/trick77/ship\n":                                       false,
 		"module x\nrequire github.com/trick77/ship v0.1.0\n":                     false,
 		"module x\ntool github.com/trick77/ship\n":                               true,
+		"module x\ntool github.com/trick77/ship // gate\n":                       true,
 		"module x\ntool (\n\tgithub.com/x/other\n\tgithub.com/trick77/ship\n)\n": true,
 	} {
-		if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(gomod), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "server", "go.mod"), []byte(gomod), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := gitx.Git(dir, "add", "server/go.mod"); err != nil {
 			t.Fatal(err)
 		}
 		cmd := exec.Command(p)
