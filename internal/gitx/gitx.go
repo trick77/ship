@@ -25,6 +25,25 @@ func Git(dir string, args ...string) (string, error) {
 	return strings.TrimSpace(out.String()), nil
 }
 
+// GitZ runs git with -z output and returns the NUL-separated names verbatim: Git's trimming would eat a leading
+// space of the first name.
+func GitZ(dir string, args ...string) ([]string, error) {
+	cmd := exec.Command("git", args...) //nolint:gosec // git with ship's own arguments
+	cmd.Dir = dir
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(errb.String()))
+	}
+	var names []string
+	for _, n := range strings.Split(out.String(), "\x00") {
+		if n != "" {
+			names = append(names, n)
+		}
+	}
+	return names, nil
+}
+
 // Root is the repo's top-level directory containing dir.
 func Root(dir string) (string, error) {
 	return Git(dir, "rev-parse", "--show-toplevel")
@@ -67,14 +86,11 @@ func Changed(root, base string) (map[string][]int, error) {
 		return nil, err
 	}
 	// -z: names verbatim, NUL-separated; without it git quotes names with special characters.
-	untracked, err := Git(root, "ls-files", "-z", "-o", "--exclude-standard")
+	untracked, err := GitZ(root, "ls-files", "-z", "-o", "--exclude-standard")
 	if err != nil {
 		return nil, err
 	}
-	for _, f := range strings.Split(untracked, "\x00") {
-		if f == "" {
-			continue
-		}
+	for _, f := range untracked {
 		n, err := countLines(filepath.Join(root, f))
 		if err != nil {
 			continue // vanished or unreadable: nothing to cover
@@ -189,14 +205,14 @@ func countLines(path string) (int, error) {
 
 // GoFiles lists tracked and untracked, non-ignored .go files that exist in the working tree.
 func GoFiles(root string) ([]string, error) {
-	out, err := Git(root, "ls-files", "-z", "-co", "--exclude-standard", "--", "*.go")
+	out, err := GitZ(root, "ls-files", "-z", "-co", "--exclude-standard", "--", "*.go")
 	if err != nil {
 		return nil, err
 	}
 	var files []string
 	seen := map[string]bool{}
-	for _, f := range strings.Split(out, "\x00") {
-		if f == "" || seen[f] {
+	for _, f := range out {
+		if seen[f] {
 			continue
 		}
 		seen[f] = true
@@ -206,4 +222,21 @@ func GoFiles(root string) ([]string, error) {
 	}
 	slices.Sort(files)
 	return files, nil
+}
+
+// Resolve resolves symlinks in the deepest existing ancestor of p and keeps the rest: the file (or its dirs) may
+// be gone by the time the report is read.
+func Resolve(p string) string {
+	p = filepath.Clean(p)
+	for dir, rest := p, ""; ; {
+		if r, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Join(r, rest)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return p
+		}
+		rest = filepath.Join(filepath.Base(dir), rest)
+		dir = parent
+	}
 }

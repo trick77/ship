@@ -39,7 +39,7 @@ for gomod in $(git ls-files -- go.mod '*/go.mod'); do
 		exit $?
 	fi
 done
-echo "pre-push: this branch has no ship tool in go.mod (cut before ship): git rebase origin/master"
+echo "pre-push: this branch has no ship tool in go.mod (cut before ship): rebase it onto the base branch (ship.yaml base:, default master)"
 exit 1
 `
 
@@ -53,6 +53,16 @@ func Install(root string) (string, error) {
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(root, p)
 	}
+	// A core.hooksPath outside this repo (a global or shared hooks dir) would gate every repo using it, and refuse
+	// every push of a repo without ship.
+	common, err := gitx.Git(root, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		return "", err
+	}
+	if !inside(p, common) {
+		return "", fmt.Errorf("pre-push hook path %s is outside this repo (core.hooksPath): installing there would "+
+			"gate every repo sharing it; unset core.hooksPath for this repo or add the hook to that dir by hand", p)
+	}
 	if b, err := os.ReadFile(p); err == nil && !ours(string(b)) { //nolint:gosec // the hook path git reports
 		return "", fmt.Errorf("%s exists and ship did not install it: merge it by hand", p)
 	}
@@ -63,6 +73,13 @@ func Install(root string) (string, error) {
 }
 
 func ours(s string) bool { return strings.Contains(s, marker) }
+
+// inside reports whether p lies under dir, symlinks resolved (macOS /var vs /private/var) even where p does not
+// exist yet.
+func inside(p, dir string) bool {
+	rel, err := filepath.Rel(gitx.Resolve(dir), gitx.Resolve(p))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, "../")
+}
 
 // Ref is one line git feeds a pre-push hook.
 type Ref struct{ Local, LocalSHA, Remote, RemoteSHA string }

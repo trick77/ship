@@ -95,18 +95,31 @@ func TestInstall(t *testing.T) {
 	}
 }
 
-func TestInstall_whenHooksPath_thenThere(t *testing.T) {
+func TestInstall_whenHooksPathInsideRepo_thenThere(t *testing.T) {
 	dir := repo(t)
-	hooks := filepath.Join(t.TempDir(), "hooks")
-	if _, err := gitx.Git(dir, "config", "core.hooksPath", hooks); err != nil {
+	if _, err := gitx.Git(dir, "config", "core.hooksPath", ".git/myhooks"); err != nil {
 		t.Fatal(err)
 	}
 	p, err := Install(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if filepath.Dir(p) != hooks {
-		t.Fatalf("installed at %s, want under %s", p, hooks)
+	if filepath.Base(filepath.Dir(p)) != "myhooks" {
+		t.Fatalf("installed at %s", p)
+	}
+}
+
+func TestInstall_whenHooksPathOutsideRepo_thenRefused(t *testing.T) {
+	dir := repo(t)
+	shared := filepath.Join(t.TempDir(), "hooks")
+	if _, err := gitx.Git(dir, "config", "core.hooksPath", shared); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Install(dir); err == nil || !strings.Contains(err.Error(), "outside this repo") {
+		t.Fatalf("err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(shared, "pre-push")); err == nil {
+		t.Fatal("hook written to the shared dir")
 	}
 }
 

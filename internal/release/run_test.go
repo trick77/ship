@@ -67,7 +67,8 @@ func TestRun_whenDryRun_thenTagImagesReleaseMovingTags(t *testing.T) {
 		"-t ghcr.io/owner/repo:1.5.0",
 		"--target dashboard",
 		"imagetools create -t ghcr.io/owner/repo-dashboard:1.5 -t ghcr.io/owner/repo-dashboard:1 -t ghcr.io/owner/repo-dashboard:latest ghcr.io/owner/repo-dashboard:1.5.0",
-		"--cache-from type=gha --cache-to type=gha,mode=max",
+		"--cache-from type=gha,scope=ghcr.io/owner/repo --cache-to type=gha,scope=ghcr.io/owner/repo,mode=max",
+		"--cache-to type=gha,scope=ghcr.io/owner/repo-dashboard,mode=max",
 		"--build-arg VERSION=1.5.0",
 		"gh api repos/Owner/Repo/git/refs -f ref=refs/tags/1.5.0",
 		"gh release create 1.5.0 --repo Owner/Repo",
@@ -131,7 +132,8 @@ func TestRun_whenHeadAlreadyTagged_thenRefusedWithRecovery(t *testing.T) {
 	}
 	c, _ := config.Parse(nil)
 	_, err := capture(t, func() error { return Run(work, c, Options{Bump: "patch", DryRun: true}) })
-	if err == nil || !strings.Contains(err.Error(), "already tagged 1.4.3") || !strings.Contains(err.Error(), "gh release create 1.4.3") {
+	if err == nil || !strings.Contains(err.Error(), "already tagged 1.4.3") || !strings.Contains(err.Error(), "gh release create 1.4.3") ||
+		!strings.Contains(err.Error(), "git/refs/tags/1.4.3") {
 		t.Fatalf("err = %v", err)
 	}
 }

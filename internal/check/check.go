@@ -28,7 +28,7 @@ func Run(root string, c *config.Config) error {
 		name string
 		fn   func() error
 	}{
-		{"fetch origin/" + c.Base, func() error { return r.sh(root, "git fetch -q origin "+c.Base) }},
+		{"fetch origin/" + c.Base, func() error { return r.run(root, nil, "git", "fetch", "-q", "origin", c.Base) }},
 		{"ui build", r.uiBuild},
 		{"gofmt", r.gofmt},
 		{"go build", func() error { return r.goCmd("build", "./...") }},
@@ -140,12 +140,15 @@ func goOutput(dir string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// ignoredByGo reports whether the go tool skips the file's directory: testdata, vendor, or a name starting with
-// _ or . on the path.
+// ignoredByGo reports whether the go tool skips the file: under testdata or vendor, or any path element (the file
+// name included) starting with _ or .
 func ignoredByGo(path string) bool {
-	dirs := strings.Split(path, "/")
-	for _, d := range dirs[:len(dirs)-1] {
-		if d == "testdata" || d == "vendor" || strings.HasPrefix(d, "_") || strings.HasPrefix(d, ".") {
+	parts := strings.Split(path, "/")
+	for i, d := range parts {
+		if strings.HasPrefix(d, "_") || strings.HasPrefix(d, ".") {
+			return true
+		}
+		if i < len(parts)-1 && (d == "testdata" || d == "vendor") {
 			return true
 		}
 	}

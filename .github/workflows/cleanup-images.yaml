@@ -44,8 +44,11 @@ jobs:
           PACKAGE: ${{ matrix.package }}
         run: |
           # container-retention-policy takes the org name, or the literal "user" for a personal account.
+          # A failed lookup must fail the step: defaulting to orgs would 404 a personal account, read as "no
+          # package yet", and skip retention with a green job.
+          type=$(gh api "users/$OWNER" --jq .type) || { echo "::error::owner lookup failed for $OWNER"; exit 1; }
           kind=orgs account="$OWNER"
-          if [ "$(gh api "users/$OWNER" --jq .type)" = User ]; then kind=users account=user; fi
+          if [ "$type" = User ]; then kind=users account=user; fi
           echo "account=$account" >> "$GITHUB_OUTPUT"
           status=$(gh api "$kind/$OWNER/packages/container/$PACKAGE" --silent -i 2>/dev/null | head -n1 | awk '{print $2}' || true)
           case "$status" in

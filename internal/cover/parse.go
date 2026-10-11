@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/trick77/ship/internal/gitx"
 )
 
 // GoProfile reads a Go coverprofile into Lines.
@@ -102,28 +104,11 @@ func parseBlock(line string) (file string, start, end, stmts int, count int64, e
 // /private/var/... while a tool may write /var/..., and the paths must still meet. A path outside root is an error,
 // never a "../" path that silently matches no changed line.
 func relTo(root, p string) (string, error) {
-	rel, err := filepath.Rel(resolve(root), resolve(p))
+	rel, err := filepath.Rel(gitx.Resolve(root), gitx.Resolve(p))
 	if err != nil || rel == ".." || strings.HasPrefix(rel, "../") || strings.HasPrefix(rel, `..\`) {
 		return "", fmt.Errorf("lcov: %s is outside the repo %s", p, root)
 	}
 	return filepath.ToSlash(rel), nil
-}
-
-// resolve resolves symlinks in the deepest existing ancestor of p and keeps the rest: the file (or its dirs) may
-// be gone by the time the report is read.
-func resolve(p string) string {
-	p = filepath.Clean(p)
-	for dir, rest := p, ""; ; {
-		if r, err := filepath.EvalSymlinks(dir); err == nil {
-			return filepath.Join(r, rest)
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return p
-		}
-		rest = filepath.Join(filepath.Base(dir), rest)
-		dir = parent
-	}
 }
 
 // Lcov reads an lcov report (vitest, c8, istanbul) into Lines from its DA: records. SF: paths that are relative

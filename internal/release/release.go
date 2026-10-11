@@ -96,7 +96,8 @@ func Moving(image string, v Version) []string {
 
 // Run releases HEAD. HEAD must be origin/<base> and the tree clean: a release is what master holds, nothing local.
 func Run(root string, c *config.Config, o Options) error {
-	if _, err := gitx.Git(root, "fetch", "-q", "--tags", "origin", c.Base); err != nil {
+	// The branch only: tags come from ls-remote, and fetching them would fail on a local tag that differs from origin.
+	if _, err := gitx.Git(root, "fetch", "-q", "--no-tags", "origin", c.Base); err != nil {
 		return err
 	}
 	head, err := gitx.Head(root)
@@ -123,9 +124,11 @@ func Run(root string, c *config.Config, o Options) error {
 	// A release that died after its tag (GitHub release or moving tags failed) must be finished, not skipped: a
 	// rerun would otherwise move on to the next version and leave this one half done for good.
 	if v := Latest(atHead, c.TagPrefix); v != (Version{}) {
-		return fmt.Errorf("HEAD is already tagged %s%s on origin: nothing new to release. If that release is "+
-			"incomplete, finish it by hand: gh release create %s%s, then docker buildx imagetools create the moving tags",
-			c.TagPrefix, v, c.TagPrefix, v)
+		t := c.TagPrefix + v.String()
+		return fmt.Errorf("HEAD is already tagged %s on origin: nothing new to release. If that release is "+
+			"incomplete: with its images pushed, finish it (gh release create %s, then docker buildx imagetools "+
+			"create the moving tags); without them (a killed build), give the number back and rerun: "+
+			"gh api -X DELETE repos/<owner>/<repo>/git/refs/tags/%s", t, t, t)
 	}
 	prev := Latest(tags, c.TagPrefix)
 	next, err := Next(prev, o.Bump)
@@ -165,7 +168,9 @@ func Run(root string, c *config.Config, o Options) error {
 			args = append(args, "--target", im.Target)
 		}
 		if o.Cache != "" {
-			args = append(args, "--cache-from", "type="+o.Cache, "--cache-to", "type="+o.Cache+",mode=max")
+			// One cache scope per image: with the default scope the second image's export replaces the first's.
+			scope := ",scope=" + name
+			args = append(args, "--cache-from", "type="+o.Cache+scope, "--cache-to", "type="+o.Cache+scope+",mode=max")
 		}
 		for _, t := range Fixed(name, next, short) {
 			args = append(args, "-t", t)

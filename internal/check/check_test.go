@@ -157,7 +157,9 @@ func TestIgnoredByGo(t *testing.T) {
 		"vendor/m/a.go":            true,
 		"_old/a.go":                true,
 		".hidden/a.go":             true,
-		"internal/_a.go":           false, // the file name itself does not matter here
+		"internal/_a.go":           true, // go build ignores _ and . files too
+		"internal/.b.go":           true,
+		"internal/testdata.go":     false,
 	} {
 		if got := ignoredByGo(p); got != want {
 			t.Errorf("%s: %v", p, got)
