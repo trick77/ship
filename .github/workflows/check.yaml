@@ -22,7 +22,7 @@ on:
         type: string
         default: ui
       ship:
-        description: How to run ship; empty = ship at this workflow's own commit. ship's own repo uses "go run .".
+        description: How to run ship; empty = ship at this workflow's own commit, else master. ship's own repo uses "go run .".
         type: string
         default: ""
 
@@ -52,5 +52,8 @@ jobs:
       - working-directory: ${{ inputs.go-dir }}
         env:
           # The binary from this workflow's own commit: a consumer calling @master never pairs it with an older release.
-          SHIP: ${{ inputs.ship || format('go run github.com/trick77/ship@{0}', github.job_workflow_sha) }}
+          # github.job_workflow_sha comes out empty for a caller (2026-10-11: "version must not be empty"): then @master.
+          SHIP: >-
+            ${{ inputs.ship || github.job_workflow_sha != '' && format('go run github.com/trick77/ship@{0}',
+            github.job_workflow_sha) || 'go run github.com/trick77/ship@master' }}
         run: $SHIP check

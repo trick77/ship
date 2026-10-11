@@ -22,7 +22,7 @@ on:
         type: string
         default: "."
       ship:
-        description: How to run ship; empty = ship at this workflow's own commit.
+        description: How to run ship; empty = ship at this workflow's own commit, else master.
         type: string
         default: ""
 
@@ -56,7 +56,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           # The binary from this workflow's own commit: a consumer calling @master never pairs it with an older release.
-          SHIP: ${{ inputs.ship || format('go run github.com/trick77/ship@{0}', github.job_workflow_sha) }}
+          # github.job_workflow_sha comes out empty for a caller (2026-10-11: "version must not be empty"): then @master.
+          SHIP: >-
+            ${{ inputs.ship || github.job_workflow_sha != '' && format('go run github.com/trick77/ship@{0}',
+            github.job_workflow_sha) || 'go run github.com/trick77/ship@master' }}
           BUMP: ${{ inputs.bump }}
         run: |
           case "$BUMP" in patch|minor|major) ;; *) echo "::error::bump '$BUMP'"; exit 1 ;; esac
