@@ -96,8 +96,9 @@ func Moving(image string, v Version) []string {
 
 // Run releases HEAD. HEAD must be origin/<base> and the tree clean: a release is what master holds, nothing local.
 func Run(root string, c *config.Config, o Options) error {
-	// ghcr images are built on GitHub-hosted runners only: never a laptop, never a self-hosted runner (both can set
-	// GITHUB_ACTIONS). Checked before anything, the tag claim included.
+	// ghcr images are built on GitHub-hosted runners only, never on a laptop or a self-hosted runner. An accident
+	// guard, not a security boundary: anyone can export RUNNER_ENVIRONMENT. Checked before anything, the tag claim
+	// included.
 	if len(c.Images) > 0 && !o.DryRun && os.Getenv("RUNNER_ENVIRONMENT") != "github-hosted" {
 		return fmt.Errorf("images are built on GitHub-hosted runners only: run the repo's Release workflow (or -dry-run here)")
 	}
