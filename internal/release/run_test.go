@@ -1,8 +1,10 @@
 package release
 
 import (
+	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -49,7 +51,7 @@ func capture(t *testing.T, fn func() error) (string, error) {
 	return string(b), runErr
 }
 
-func TestRun_whenDryRun_thenImagesThenTagThenRelease(t *testing.T) {
+func TestRun_whenDryRun_thenTagImagesReleaseMovingTags(t *testing.T) {
 	work := clone(t)
 	t.Setenv("GITHUB_REPOSITORY", "Owner/Repo")
 	c, err := config.Parse([]byte("images:\n  - {}\n  - suffix: -dashboard\n    target: dashboard\n"))
@@ -74,13 +76,13 @@ func TestRun_whenDryRun_thenImagesThenTagThenRelease(t *testing.T) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
 	}
-	build, tag, rel := strings.Index(out, "docker buildx build"), strings.Index(out, "gh api"), strings.Index(out, "gh release")
+	tag, build, rel := strings.Index(out, "gh api"), strings.Index(out, "docker buildx build"), strings.Index(out, "gh release")
 	retag := strings.Index(out, "docker buildx imagetools create -t ghcr.io/owner/repo:1.5 -t ghcr.io/owner/repo:1 -t ghcr.io/owner/repo:latest ghcr.io/owner/repo:1.5.0")
-	if build < 0 || retag < 0 || build > tag || tag > rel || rel > retag {
-		t.Errorf("want build < tag < release < moving tags, got %d %d %d %d", build, tag, rel, retag)
+	if tag < 0 || retag < 0 || tag > build || build > rel || rel > retag {
+		t.Errorf("want tag claim < build < release < moving tags, got %d %d %d %d", tag, build, rel, retag)
 	}
-	if strings.Contains(out[:tag], ":latest") {
-		t.Error(":latest pushed before the tag exists")
+	if strings.Contains(out[:rel], ":latest") {
+		t.Error(":latest pushed before the release exists")
 	}
 }
 
@@ -124,10 +126,74 @@ func TestRun_whenHeadAlreadyTagged_thenRefusedWithRecovery(t *testing.T) {
 	if _, err := gitx.Git(work, "tag", "1.4.3"); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := gitx.Git(work, "push", "-q", "--no-verify", "origin", "1.4.3"); err != nil {
+		t.Fatal(err)
+	}
 	c, _ := config.Parse(nil)
 	_, err := capture(t, func() error { return Run(work, c, Options{Bump: "patch", DryRun: true}) })
 	if err == nil || !strings.Contains(err.Error(), "already tagged 1.4.3") || !strings.Contains(err.Error(), "gh release create 1.4.3") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestRun_whenLocalOnlyTag_thenIgnored(t *testing.T) {
+	work := clone(t)
+	t.Setenv("GITHUB_REPOSITORY", "o/r")
+	for _, tag := range []string{"9.9.9", "1.4.3"} { // 1.4.3 on HEAD, local only
+		if _, err := gitx.Git(work, "tag", tag); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c, _ := config.Parse(nil)
+	out, err := capture(t, func() error { return Run(work, c, Options{Bump: "patch", DryRun: true}) })
+	if err != nil || !strings.Contains(out, "1.4.2 -> 1.4.3") {
+		t.Fatalf("local tags counted: %v\n%s", err, out)
+	}
+}
+
+// fakeTools puts docker and gh scripts first on PATH: each logs its arguments, docker exits dockerRC.
+func fakeTools(t *testing.T, dockerRC int) (log string) {
+	t.Helper()
+	bin := t.TempDir()
+	log = filepath.Join(bin, "calls.log")
+	for name, rc := range map[string]int{"docker": dockerRC, "gh": 0} {
+		script := fmt.Sprintf("#!/bin/sh\necho %s \"$@\" >> %s\nexit %d\n", name, log, rc)
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return log
+}
+
+func TestRun_whenBuildFails_thenClaimedTagDeleted(t *testing.T) {
+	work := clone(t)
+	t.Setenv("GITHUB_REPOSITORY", "o/r")
+	log := fakeTools(t, 1)
+	c, _ := config.Parse([]byte("images:\n  - {}\n"))
+	_, err := capture(t, func() error { return Run(work, c, Options{Bump: "patch"}) })
+	if err == nil || !strings.Contains(err.Error(), "image ghcr.io/o/r") {
+		t.Fatalf("err = %v", err)
+	}
+	b, _ := os.ReadFile(log)
+	calls := string(b)
+	claim, del := strings.Index(calls, "gh api repos/o/r/git/refs -f ref=refs/tags/1.4.3"), strings.Index(calls, "gh api -X DELETE repos/o/r/git/refs/tags/1.4.3")
+	if claim < 0 || del < claim || strings.Contains(calls, "release create") {
+		t.Fatalf("want claim, failed build, delete, no release:\n%s", calls)
+	}
+}
+
+func TestRun_whenAllSucceeds_thenNoDelete(t *testing.T) {
+	work := clone(t)
+	t.Setenv("GITHUB_REPOSITORY", "o/r")
+	log := fakeTools(t, 0)
+	c, _ := config.Parse([]byte("images:\n  - {}\n"))
+	if _, err := capture(t, func() error { return Run(work, c, Options{Bump: "patch"}) }); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(log)
+	if calls := string(b); strings.Contains(calls, "DELETE") || !strings.Contains(calls, "imagetools create") {
+		t.Fatalf("calls:\n%s", calls)
 	}
 }
 

@@ -53,10 +53,11 @@ func SkipMarker(root, base, marker string) (bool, error) {
 // Changed returns the lines the working tree adds or changes against base, per repo-relative path: committed,
 // staged and unstaged edits plus every line of untracked, non-ignored files. Deleted lines are not lines.
 func Changed(root, base string) (map[string][]int, error) {
-	// Explicit prefixes: diff.noprefix or diff.mnemonicPrefix in a user's config would otherwise rename every path
+	// -M: a moved or renamed file counts only its edited lines, as diff-cover did; the +++ header names the new
+	// path. Explicit prefixes: diff.noprefix or diff.mnemonicPrefix in a user's config would otherwise rename every path
 	// and the gate would match nothing, passing untested code.
 	// core.quotePath=false keeps non-ASCII names unquoted; names git still quotes are unquoted in diffPath.
-	diff, err := Git(root, "-c", "core.quotePath=false", "diff", "--no-color", "--no-ext-diff", "-U0", "--no-renames",
+	diff, err := Git(root, "-c", "core.quotePath=false", "diff", "--no-color", "--no-ext-diff", "-U0", "-M",
 		"--src-prefix=a/", "--dst-prefix=b/", base)
 	if err != nil {
 		return nil, err

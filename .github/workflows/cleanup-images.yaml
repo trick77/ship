@@ -43,8 +43,10 @@ jobs:
           OWNER: ${{ github.repository_owner }}
           PACKAGE: ${{ matrix.package }}
         run: |
-          kind=orgs
-          [ "$(gh api "users/$OWNER" --jq .type)" = User ] && kind=users
+          # container-retention-policy takes the org name, or the literal "user" for a personal account.
+          kind=orgs account="$OWNER"
+          if [ "$(gh api "users/$OWNER" --jq .type)" = User ]; then kind=users account=user; fi
+          echo "account=$account" >> "$GITHUB_OUTPUT"
           status=$(gh api "$kind/$OWNER/packages/container/$PACKAGE" --silent -i 2>/dev/null | head -n1 | awk '{print $2}' || true)
           case "$status" in
             200) echo "exists=true" >> "$GITHUB_OUTPUT" ;;
@@ -54,7 +56,7 @@ jobs:
       - if: steps.exists.outputs.exists == 'true'
         uses: snok/container-retention-policy@v3.1.0
         with:
-          account: ${{ github.repository_owner }}
+          account: ${{ steps.exists.outputs.account }}
           token: ${{ secrets.GITHUB_TOKEN }}
           image-names: ${{ matrix.package }}
           tag-selection: both

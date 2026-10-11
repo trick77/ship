@@ -55,6 +55,9 @@ func Excluded(path string, prefixes []string) bool {
 		if p == "" {
 			continue
 		}
+		if !strings.HasSuffix(p, "/") {
+			p += "/" // whole directories: "cmd" must not swallow internal/cmdline
+		}
 		if strings.HasPrefix(path, p) || strings.Contains(path, "/"+p) {
 			return true
 		}

@@ -10,6 +10,11 @@ import (
 	"github.com/trick77/ship/internal/gitx"
 )
 
+const (
+	zero    = "0000000000000000000000000000000000000000"
+	zero256 = "0000000000000000000000000000000000000000000000000000000000000000"
+)
+
 func repo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -39,6 +44,9 @@ func TestParseRefsAndGated(t *testing.T) {
 	g := Gated(refs)
 	if len(g) != 1 || g[0].Local != "refs/heads/a" {
 		t.Fatalf("%v", g)
+	}
+	if g := Gated([]Ref{{Local: "(delete)", LocalSHA: zero256}}); len(g) != 0 {
+		t.Fatalf("SHA-256 delete gated: %v", g)
 	}
 	if _, err := ParseRefs(strings.NewReader("only two\n")); err == nil {
 		t.Fatal("malformed accepted")
@@ -112,6 +120,7 @@ func TestScript(t *testing.T) {
 	head, _ := gitx.Head(dir)
 	for in, wantOK := range map[string]bool{
 		"(delete) " + zero + " refs/heads/x " + head + "\n":           true,
+		"(delete) " + zero256 + " refs/heads/x " + head + "\n":        true,
 		"refs/tags/1.0.0 " + head + " refs/tags/1.0.0 " + zero + "\n": true,
 		"": true,
 		"refs/heads/master " + head + " refs/heads/master " + zero + "\n": false,

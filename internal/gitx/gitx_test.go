@@ -199,6 +199,21 @@ func TestDiffPath(t *testing.T) {
 	}
 }
 
+func TestChanged_whenFileMoved_thenOnlyEditedLines(t *testing.T) {
+	body := "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n"
+	dir := repo(t, map[string]string{"a/x.go": body})
+	base := mustGit(t, dir, "rev-parse", "HEAD")
+	if err := os.MkdirAll(filepath.Join(dir, "b"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustGit(t, dir, "mv", "a/x.go", "b/x.go")
+	write(t, dir, map[string]string{"b/x.go": strings.Replace(body, "5\n", "FIVE\n", 1)})
+	got, err := Changed(dir, base)
+	if err != nil || !slices.Equal(got["b/x.go"], []int{5}) || len(got) != 1 {
+		t.Fatalf("got %v err %v", got, err)
+	}
+}
+
 func TestChanged_whenNoprefixConfig_thenPathsStillRepoRelative(t *testing.T) {
 	dir := repo(t, map[string]string{"a.go": "1\n"})
 	base := mustGit(t, dir, "rev-parse", "HEAD")

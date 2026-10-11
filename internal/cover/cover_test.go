@@ -145,12 +145,13 @@ func TestLcov_whenMalformed_thenError(t *testing.T) {
 }
 
 func TestExcluded(t *testing.T) {
-	ex := []string{"cmd/", "./gen/", ""}
+	ex := []string{"cmd", "./gen/", ""}
 	for p, want := range map[string]bool{
 		"cmd/x/main.go":         true,
 		"backend/cmd/x/main.go": true,
 		"gen/a.go":              true,
 		"internal/cmdline/a.go": false,
+		"cmdutil/a.go":          false,
 		"internal/a.go":         false,
 	} {
 		if got := Excluded(p, ex); got != want {

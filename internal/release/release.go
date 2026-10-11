@@ -1,8 +1,10 @@
-// Package release cuts a version: next semver tag, images built and pushed, then the tag, then the GitHub release.
+// Package release cuts a version: the next semver tag claimed, images built and pushed, the GitHub release, then
+// the moving image tags.
 //
-// The tag is created only after every image push succeeded, so a failed release never leaves an orphan tag; the
-// next version is derived from the newest tag, so an orphan would burn its number for good. Tag and release go
-// through the GitHub API (gh), so no git push credentials are needed.
+// Creating the tag is atomic, so it claims the version against a concurrent release; a failed build deletes it
+// again, so no orphan tag burns a number (the next version derives from the newest tag on origin). :latest and
+// friends move only once the release exists. Tag and release go through the GitHub API (gh): no git push
+// credentials needed.
 package release
 
 import (
@@ -113,20 +115,19 @@ func Run(root string, c *config.Config, o Options) error {
 	} else if dirty != "" {
 		return fmt.Errorf("uncommitted changes:\n%s", dirty)
 	}
-	// A release that died after its tag (GitHub release or moving tags failed) must be finished, not skipped: a
-	// rerun would otherwise move on to the next version and leave this one half done for good.
-	if at, err := gitx.Git(root, "tag", "--points-at", "HEAD"); err != nil {
-		return err
-	} else if v := Latest(strings.Split(at, "\n"), c.TagPrefix); v != (Version{}) {
-		return fmt.Errorf("HEAD is already tagged %s%s: nothing new to release. If that release is incomplete, "+
-			"finish it by hand: gh release create %s%s, then docker buildx imagetools create the moving tags",
-			c.TagPrefix, v, c.TagPrefix, v)
-	}
-	tagList, err := gitx.Git(root, "tag", "--list")
+	// Tags as origin has them: a local-only or since-deleted tag must neither burn a number nor block a release.
+	tags, atHead, err := remoteTags(root, head)
 	if err != nil {
 		return err
 	}
-	prev := Latest(strings.Split(tagList, "\n"), c.TagPrefix)
+	// A release that died after its tag (GitHub release or moving tags failed) must be finished, not skipped: a
+	// rerun would otherwise move on to the next version and leave this one half done for good.
+	if v := Latest(atHead, c.TagPrefix); v != (Version{}) {
+		return fmt.Errorf("HEAD is already tagged %s%s on origin: nothing new to release. If that release is "+
+			"incomplete, finish it by hand: gh release create %s%s, then docker buildx imagetools create the moving tags",
+			c.TagPrefix, v, c.TagPrefix, v)
+	}
+	prev := Latest(tags, c.TagPrefix)
 	next, err := Next(prev, o.Bump)
 	if err != nil {
 		return err
@@ -138,6 +139,20 @@ func Run(root string, c *config.Config, o Options) error {
 	}
 	short := head[:7]
 	fmt.Printf("ship: release %s -> %s (%s) at %s\n", prev, next, o.Bump, short)
+
+	// The tag first: creating a ref is atomic, so it claims the version. A second release racing for the same
+	// number fails here, before it could push its build over this version's image. A failed build gives the
+	// number back by deleting the tag again.
+	tagAPI := "repos/" + repo + "/git/refs"
+	if err := run(root, o.DryRun, "gh", "api", tagAPI, "-f", "ref=refs/tags/"+tag, "-f", "sha="+head); err != nil {
+		return fmt.Errorf("claim tag %s (taken by a concurrent release?): %w", tag, err)
+	}
+	unclaim := func(cause error) error {
+		if err := run(root, o.DryRun, "gh", "api", "-X", "DELETE", tagAPI+"/tags/"+tag); err != nil {
+			return fmt.Errorf("%w; deleting tag %s failed too, delete it by hand: %w", cause, tag, err)
+		}
+		return cause
+	}
 
 	var images, names []string
 	for _, im := range c.Images {
@@ -157,16 +172,12 @@ func Run(root string, c *config.Config, o Options) error {
 		}
 		args = append(args, im.Context)
 		if err := run(root, o.DryRun, "docker", args...); err != nil {
-			return fmt.Errorf("image %s: %w", name, err)
+			return unclaim(fmt.Errorf("image %s: %w", name, err))
 		}
 		images = append(images, fmt.Sprintf("`%s:%s`", name, next))
 		names = append(names, name)
 	}
 
-	if err := run(root, o.DryRun, "gh", "api", "repos/"+repo+"/git/refs",
-		"-f", "ref=refs/tags/"+tag, "-f", "sha="+head); err != nil {
-		return fmt.Errorf("tag: %w", err)
-	}
 	notes := "Release " + next.String()
 	if len(images) > 0 {
 		notes = "Container images: " + strings.Join(images, ", ")
@@ -189,6 +200,30 @@ func Run(root string, c *config.Config, o Options) error {
 	}
 	fmt.Printf("ship: released %s\n", tag)
 	return nil
+}
+
+// remoteTags lists origin's tag names, and those pointing at head (an annotated tag via its peeled ^{} line).
+func remoteTags(root, head string) (all, atHead []string, err error) {
+	out, err := gitx.Git(root, "ls-remote", "--tags", "origin")
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, line := range strings.Split(out, "\n") {
+		sha, ref, ok := strings.Cut(line, "\t")
+		if !ok {
+			continue
+		}
+		name := strings.TrimPrefix(ref, "refs/tags/")
+		peeled := strings.HasSuffix(name, "^{}")
+		name = strings.TrimSuffix(name, "^{}")
+		if !peeled {
+			all = append(all, name)
+		}
+		if sha == head {
+			atHead = append(atHead, name)
+		}
+	}
+	return all, atHead, nil
 }
 
 // repoSlug is owner/name: GITHUB_REPOSITORY in Actions, else from gh.

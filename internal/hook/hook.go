@@ -21,11 +21,10 @@ const marker = "Installed by ship hooks"
 const script = `#!/bin/sh
 # Installed by ship hooks (github.com/trick77/ship). Runs the checked-out branch's ship pre-push.
 refs="$(cat)"
-zero=0000000000000000000000000000000000000000
 gate=0
 while read -r local_ref local_sha _ _; do
 	[ -z "$local_ref" ] && continue
-	[ "$local_sha" = "$zero" ] && continue
+	case "$local_sha" in *[!0]*) ;; *) continue ;; esac # a delete: all zeros, 40 (SHA-1) or 64 (SHA-256)
 	case "$local_ref" in refs/tags/*) continue ;; esac
 	gate=1
 done <<EOF
@@ -68,7 +67,8 @@ func ours(s string) bool { return strings.Contains(s, marker) }
 // Ref is one line git feeds a pre-push hook.
 type Ref struct{ Local, LocalSHA, Remote, RemoteSHA string }
 
-const zero = "0000000000000000000000000000000000000000"
+// isZero reports git's null object id, which marks a delete: 40 zeros under SHA-1, 64 under SHA-256.
+func isZero(sha string) bool { return sha != "" && strings.Trim(sha, "0") == "" }
 
 // ParseRefs reads the pre-push stdin lines.
 func ParseRefs(r io.Reader) ([]Ref, error) {
@@ -91,7 +91,7 @@ func ParseRefs(r io.Reader) ([]Ref, error) {
 func Gated(refs []Ref) []Ref {
 	var out []Ref
 	for _, r := range refs {
-		if r.LocalSHA == zero || strings.HasPrefix(r.Local, "refs/tags/") {
+		if isZero(r.LocalSHA) || strings.HasPrefix(r.Local, "refs/tags/") {
 			continue
 		}
 		out = append(out, r)

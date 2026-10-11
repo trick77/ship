@@ -103,10 +103,16 @@ func (r runner) gofmt() error {
 			files = append(files, f)
 		}
 	}
+	// The gofmt of the toolchain go.mod selects (GOTOOLCHAIN), as build and lint use, not whichever is on PATH.
+	goroot, err := goOutput(r.goDir(), "env", "GOROOT")
+	if err != nil {
+		return err
+	}
+	gofmt := filepath.Join(goroot, "bin", "gofmt")
 	var bad []string
 	for len(files) > 0 {
 		n := min(len(files), 500)
-		cmd := exec.Command("gofmt", append([]string{"-l"}, files[:n]...)...) //nolint:gosec // files git lists in the repo
+		cmd := exec.Command(gofmt, append([]string{"-l"}, files[:n]...)...) //nolint:gosec // files git lists in the repo
 		cmd.Dir = r.root
 		out, err := cmd.CombinedOutput()
 		if err != nil {
@@ -121,6 +127,17 @@ func (r runner) gofmt() error {
 		return fmt.Errorf("not gofmt'd, run gofmt -w:\n%s", strings.Join(bad, "\n"))
 	}
 	return nil
+}
+
+// goOutput runs go in dir and returns trimmed stdout.
+func goOutput(dir string, args ...string) (string, error) {
+	cmd := exec.Command("go", args...) //nolint:gosec // go with ship's own arguments
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("go %s: %w", strings.Join(args, " "), err)
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // ignoredByGo reports whether the go tool skips the file's directory: testdata, vendor, or a name starting with

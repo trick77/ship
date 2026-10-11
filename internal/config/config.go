@@ -12,6 +12,10 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
+// uiTest asks vitest for lcov itself: its default reporters write none, and a repo relying on the default must not
+// fail on a missing report.
+const uiTest = "npm run test -- --coverage --coverage.reporter=lcov --coverage.reporter=text-summary"
+
 // File is the config file name, at the repo root.
 const File = "ship.yaml"
 
@@ -109,7 +113,7 @@ func Parse(b []byte) (*Config, error) {
 	// `ui:` (null) decodes to nil and is put back: naming the key means a UI, never a silently skipped gate.
 	// Two passes, not a UnmarshalYAML method: node.Decode would drop KnownFields inside the ui: block.
 	uiDefaults := func() *UI {
-		return &UI{Dir: "ui", Floor: 75, Build: "npm ci && npm run build", Test: "npm run test -- --coverage"}
+		return &UI{Dir: "ui", Floor: 75, Build: "npm ci && npm run build", Test: uiTest}
 	}
 	var keys map[string]any
 	_ = yaml.Unmarshal(b, &keys) // malformed input fails the strict decode below
