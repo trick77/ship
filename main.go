@@ -43,10 +43,10 @@ func run(args []string) error {
 		fmt.Print(usage)
 		return nil
 	}
-	// The installed hook pins GIT_WORK_TREE whenever GIT_DIR is set. GIT_DIR alone means a hook from ship v0.2.0 or
-	// earlier: from a module dir git would see a wrong tree and refuse as "uncommitted changes".
-	if args[0] == "pre-push" && os.Getenv("GIT_DIR") != "" && os.Getenv("GIT_WORK_TREE") == "" {
-		return fmt.Errorf("pre-push: this hook is from an older ship and misreads the tree here: run go tool ship hooks")
+	// git gives a linked worktree's hooks GIT_DIR without GIT_WORK_TREE; a hook from ship v0.2.0 or one wired by
+	// hand then runs ship from the module dir, where git would take that dir as the top of the tree.
+	if err := gitx.PinWorkTree(); err != nil {
+		return err
 	}
 	wd, err := os.Getwd()
 	if err != nil {

@@ -230,7 +230,7 @@ func TestModulePath(t *testing.T) {
 	}
 }
 
-func TestCleanEnv_whenHookSetsGitDir_thenStepsDoNotSeeIt(t *testing.T) {
+func TestExtra_whenHookSetsGitDir_thenStepsDoNotSeeIt(t *testing.T) {
 	dir, c := fixture(t, "steps:\n  - name: no git dir\n    run: test -z \"$GIT_DIR\"\n", "mode: set\n", "")
 	t.Setenv("GIT_DIR", "/real/repo/.git/worktrees/x")
 	t.Setenv("GIT_WORK_TREE", "/real/repo")

@@ -30,7 +30,7 @@ func Run(root string, c *config.Config) error {
 	}{
 		// ship's own git calls keep git's repo variables (a --git-dir/--work-tree repo needs them); only the
 		// tests and steps check runs lose them.
-		{"fetch origin/" + c.Base, func() error { _, err := gitx.Git(root, "fetch", "-q", "origin", c.Base); return err }},
+		{"fetch origin/" + c.Base, func() error { return r.runGit(root, "fetch", "-q", "origin", c.Base) }},
 		{"ui build", r.uiBuild},
 		{"gofmt", r.gofmt},
 		{"go build", func() error { return r.goCmd("build", "./...") }},
@@ -72,6 +72,14 @@ func (r runner) run(dir string, env []string, name string, args ...string) error
 	cmd.Dir = dir
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	cmd.Env = gitx.CleanEnv(env...)
+	return cmd.Run()
+}
+
+// runGit runs ship's own git call, output streamed, with git's repo variables kept.
+func (r runner) runGit(dir string, args ...string) error {
+	cmd := exec.Command("git", args...) //nolint:gosec // git with ship's own arguments
+	cmd.Dir = dir
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	return cmd.Run()
 }
 

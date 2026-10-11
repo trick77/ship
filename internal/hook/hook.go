@@ -34,8 +34,8 @@ EOF
 # git runs hooks from the top of the work tree, with GIT_DIR set in a linked worktree (or by --git-dir), possibly
 # relative, GIT_WORK_TREE unset or relative, other repo paths possibly relative. After the cd into a module dir
 # (backend/) git would take that dir as the top or miss the repo: every file outside it read as deleted. Pin them,
-# absolute, from here; ship pre-push takes GIT_DIR without GIT_WORK_TREE for a hook from before this.
-top="$(git rev-parse --show-toplevel)" || exit 1
+# absolute, from here (ship pre-push also pins GIT_WORK_TREE itself, for hooks from before this).
+top="$(git rev-parse --show-toplevel)" || { echo "pre-push: ship gates pushes from a work tree; this repo has none (bare or mirror clone)"; exit 1; }
 if [ -n "$GIT_DIR" ]; then
 	GIT_DIR="$(git rev-parse --absolute-git-dir)" || exit 1
 	GIT_WORK_TREE="$top"
