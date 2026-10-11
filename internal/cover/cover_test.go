@@ -1,6 +1,7 @@
 package cover
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -236,5 +237,21 @@ func TestCodeLines_whenScanError_thenNil(t *testing.T) {
 	}
 	if codeLines(p) != nil {
 		t.Fatal("scan error must keep every line")
+	}
+}
+
+func TestMapped(t *testing.T) {
+	root := writeSrc(t) // backend/x/x.go
+	if err := Mapped("go", Lines{"backend/x/x.go": {4: true}}, root); err != nil {
+		t.Fatal(err)
+	}
+	// vitest rooted elsewhere: SF: paths land one level off and name nothing on disk.
+	l := Lines{"backend/x/x.go": {4: true}, "src/a.ts": {1: true}}
+	for i := range 7 {
+		l[fmt.Sprintf("gone/%d.ts", i)] = map[int]bool{1: false}
+	}
+	err := Mapped("ui", l, root)
+	if err == nil || !strings.Contains(err.Error(), "gone/0.ts") || !strings.Contains(err.Error(), "... 3 more") {
+		t.Fatalf("err = %v", err)
 	}
 }

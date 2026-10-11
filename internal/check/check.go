@@ -242,6 +242,9 @@ func (r runner) gates() error {
 	if err != nil {
 		return err
 	}
+	if err := cover.Mapped("go", goLines, r.root); err != nil {
+		return err
+	}
 	all := cover.Lines{}
 	all.Merge(goLines)
 	var errs []error
@@ -258,6 +261,9 @@ func (r runner) gates() error {
 		}
 		if len(uiLines) == 0 {
 			return fmt.Errorf("ui coverage report %s holds no lines", r.c.UI.Lcov)
+		}
+		if err := cover.Mapped("ui", uiLines, r.root); err != nil {
+			return err
 		}
 		errs = append(errs, cover.Floor("ui", uiLines, r.c.UI.Floor))
 		all.Merge(uiLines)

@@ -71,6 +71,27 @@ func Excluded(path string, prefixes []string) bool {
 	return false
 }
 
+// Mapped fails when a report path names no file in the repo. Reports are written from the current tree, so every
+// path must exist; one that does not means the report's paths and git's disagree (a moved vitest root, a wrong
+// ui.dir or ui.lcov), and the patch gate, matching changed lines by path, would see nothing and pass blind.
+func Mapped(name string, l Lines, root string) error {
+	var missing []string
+	for p := range l {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(p))); err != nil {
+			missing = append(missing, p)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	slices.Sort(missing)
+	if len(missing) > 5 {
+		missing = append(missing[:5], fmt.Sprintf("... %d more", len(missing)-5))
+	}
+	return fmt.Errorf("%s coverage report names files that are not in the repo, its paths do not match git's "+
+		"(check go.dir, ui.dir, ui.lcov and the test runner's root): %s", name, strings.Join(missing, ", "))
+}
+
 // Percent returns covered and total line counts over every file.
 func (l Lines) Percent() (covered, total int) {
 	for _, m := range l {
