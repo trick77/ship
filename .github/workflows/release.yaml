@@ -1,6 +1,7 @@
 name: Release
 
-# Reusable: `ship release` on a GitHub runner, for repos that do not release from a laptop. A caller's release.yaml:
+# Reusable: `ship release` on a GitHub-hosted runner, the only place a repo with images releases. A caller's
+# release.yaml:
 #
 #   on:
 #     workflow_dispatch:
