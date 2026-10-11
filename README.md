@@ -8,9 +8,12 @@ runs it before every push; CI (by hand) runs the same command.
 
 ## Use in a repo
 
+Unpinned: every run is the newest ship (no pin to bump; a broken release reaches every repo at once, so ship's own
+gate and CI guard each release).
+
 ```sh
-go get -tool github.com/trick77/ship@latest   # pins it in go.mod; Dependabot (gomod) bumps it
-go tool ship hooks                            # once per clone: the pre-push hook
+go run github.com/trick77/ship@latest hooks   # once per clone: the pre-push hook (runs ship@latest on every push)
+go run github.com/trick77/ship@latest check   # the gate by hand
 ```
 
 `ship.yaml` at the repo root (every key optional):
@@ -46,9 +49,9 @@ coverage output.
 
 | | |
 |---|---|
-| `go tool ship check` | fetch, ui build, gofmt, build, golangci-lint (incl. govet), ui lint, steps, go test (-race, coverage), ui test, floors, patch gate |
-| `go tool ship hooks` | install the pre-push hook (respects core.hooksPath, never overwrites a foreign hook) |
-| `go tool ship release [patch\|minor\|major] [-cache gha] [-dry-run]` | next version from tags, images pushed (version + sha), tag (API), GitHub release, then :MAJOR.MINOR, :MAJOR, :latest. With `images:` only on a GitHub-hosted runner (the Release workflow); elsewhere `-dry-run` only |
+| `ship check` | fetch, ui build, gofmt, build, golangci-lint (incl. govet), ui lint, steps, go test (-race, coverage), ui test, floors, patch gate |
+| `ship hooks` | install the pre-push hook (respects core.hooksPath, never overwrites a foreign hook) |
+| `ship release [patch\|minor\|major] [-cache gha] [-dry-run]` | next version from tags, images pushed (version + sha), tag (API), GitHub release, then :MAJOR.MINOR, :MAJOR, :latest. With `images:` only on a GitHub-hosted runner (the Release workflow); elsewhere `-dry-run` only |
 
 TypeScript/React: `ui.build` is the typecheck (`tsc -b && vite build`), `ui.lint` runs ESLint/Prettier, `ui.test`
 runs vitest with coverage; its lcov feeds the UI floor and the patch gate for changed `.ts`/`.tsx` lines.
@@ -72,9 +75,9 @@ Reusable, for running the same commands on GitHub by hand:
 ```yaml
 jobs:
   check:
-    uses: trick77/ship/.github/workflows/check.yaml@v0.1.0      # inputs: go-dir, node-version, ui-dir
+    uses: trick77/ship/.github/workflows/check.yaml@master      # inputs: go-dir, node-version, ui-dir
   release:
-    uses: trick77/ship/.github/workflows/release.yaml@v0.1.0    # inputs: bump, go-dir
+    uses: trick77/ship/.github/workflows/release.yaml@master    # inputs: bump, go-dir
   cleanup:
-    uses: trick77/ship/.github/workflows/cleanup-images.yaml@v0.1.0   # inputs: packages (JSON), keep, dry-run
+    uses: trick77/ship/.github/workflows/cleanup-images.yaml@master   # inputs: packages (JSON), keep, dry-run
 ```

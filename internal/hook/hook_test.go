@@ -141,7 +141,7 @@ func TestInstall_whenHooksPathOutsideRepo_thenRefused(t *testing.T) {
 	}
 }
 
-// The installed script: deletes and tags pass, a branch without ship in go.mod is refused.
+// The installed script: deletes and tags pass, a branch without ship.yaml is refused, one with it runs ship.
 func TestScript(t *testing.T) {
 	dir := repo(t)
 	p, err := Install(dir)
@@ -165,43 +165,33 @@ func TestScript(t *testing.T) {
 		if (err == nil) != wantOK {
 			t.Errorf("%q: err=%v out=%s", in, err, out)
 		}
-		if !wantOK && !strings.Contains(string(out), "no ship tool") {
+		if !wantOK && !strings.Contains(string(out), "no ship.yaml") {
 			t.Errorf("%q: message %s", in, out)
 		}
 	}
 
-	// ship's own module line or a require entry is not the tool directive; the module may live in any tracked dir.
-	push := "refs/heads/master " + head + " refs/heads/master " + zero + "\n"
-	if err := os.MkdirAll(filepath.Join(dir, "server"), 0o755); err != nil {
+	// With ship.yaml the gate runs, here a stand-in for ship (SHIP) that receives the refs and the arguments.
+	if err := os.WriteFile(filepath.Join(dir, "ship.yaml"), []byte("{}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	for gomod, isTool := range map[string]bool{
-		"module github.com/trick77/ship\n":                                       false,
-		"module x\nrequire github.com/trick77/ship v0.1.0\n":                     false,
-		"module x\ntool github.com/trick77/ship\n":                               true,
-		"module x\ntool github.com/trick77/ship // gate\n":                       true,
-		"module x\ntool (\n\tgithub.com/x/other\n\tgithub.com/trick77/ship\n)\n": true,
-	} {
-		if err := os.WriteFile(filepath.Join(dir, "server", "go.mod"), []byte(gomod), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := gitx.Git(dir, "add", "server/go.mod"); err != nil {
-			t.Fatal(err)
-		}
-		cmd := exec.Command(p)
-		cmd.Dir = dir
-		cmd.Stdin = strings.NewReader(push)
-		out, _ := cmd.CombinedOutput()
-		if found := !strings.Contains(string(out), "no ship tool"); found != isTool {
-			t.Errorf("%q: tool found=%v, out %s", gomod, found, out)
-		}
+	stub := filepath.Join(t.TempDir(), "ship")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\necho \"ran $*\"\ncat\n"), 0o755); err != nil {
+		t.Fatal(err)
 	}
+	cmd := exec.Command(p, "origin", "url")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "SHIP="+stub)
+	cmd.Stdin = strings.NewReader("refs/heads/master " + head + " refs/heads/master " + zero + "\n")
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "ran pre-push origin url") || !strings.Contains(string(out), "refs/heads/master "+head) {
+		t.Fatalf("ship not run with refs and args: %v %s", err, out)
+	}
+
 }
 
 // Real pushes, so the hook gets whatever environment git really gives it: from a linked worktree (GIT_DIR set,
-// absolute), with --git-dir=.git --work-tree=. (both relative) and plainly. The script cds into the module dir
-// (backend/) before ship runs; ship's git calls there must still see the whole tree, unchanged. A stand-in go
-// reports what git sees from there.
+// absolute), with --git-dir=.git --work-tree=. (both relative) and plainly. ship, here a stand-in (SHIP), must see
+// the whole tree, unchanged, also from the module dir (backend/) it may work in.
 func TestScript_whenRealPushes_thenModuleInSubdirSeesWholeTree(t *testing.T) {
 	// The developer's global and system config (hooksPath, url rewrites, templates) must not reach these pushes.
 	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
@@ -210,7 +200,7 @@ func TestScript_whenRealPushes_thenModuleInSubdirSeesWholeTree(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, "backend"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for p, s := range map[string]string{"README.md": "x\n", "backend/go.mod": "module m\n\ntool github.com/trick77/ship\n"} {
+	for p, s := range map[string]string{"README.md": "x\n", "backend/go.mod": "module m\n", "ship.yaml": "go:\n  dir: backend\n"} {
 		if err := os.WriteFile(filepath.Join(dir, p), []byte(s), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -230,7 +220,7 @@ func TestScript_whenRealPushes_thenModuleInSubdirSeesWholeTree(t *testing.T) {
 		t.Fatal(err)
 	}
 	bin := t.TempDir()
-	fakeGo := "#!/bin/sh\necho \"top=$(git rev-parse --show-toplevel)\"\necho \"dirty=$(git status --short | wc -l | tr -d ' ')\"\n"
+	fakeGo := "#!/bin/sh\ncd backend || exit 1\necho \"top=$(git rev-parse --show-toplevel)\"\necho \"dirty=$(git status --short | wc -l | tr -d ' ')\"\n"
 	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(fakeGo), 0o755); err != nil {
 		t.Fatal(err)
 	}

@@ -5,7 +5,7 @@ name: Check
 #   on: workflow_dispatch
 #   jobs:
 #     check:
-#       uses: trick77/ship/.github/workflows/check.yaml@v0.1.0
+#       uses: trick77/ship/.github/workflows/check.yaml@master
 #       with: { node-version: "22" }   # only with a UI
 on:
   workflow_call:
@@ -24,7 +24,7 @@ on:
       ship:
         description: How to run ship; ship's own repo uses "go run .".
         type: string
-        default: go tool ship
+        default: go run github.com/trick77/ship@latest
 
 permissions:
   contents: read

@@ -16,8 +16,8 @@ import (
 const marker = "Installed by ship hooks"
 
 // script is installed as the pre-push hook. Deletes and tags pass without a gate (nothing to check; release tags
-// are made via the API). Anything else needs the checked-out branch to have ship as a go tool: a branch cut before
-// ship came in is refused, rebase it.
+// are made via the API). Anything else needs the checked-out branch to have a ship.yaml: a branch cut before ship
+// came in is refused, rebase it. The gate is always the newest ship (go run ...@latest; SHIP overrides the command).
 const script = `#!/bin/sh
 # Installed by ship hooks (github.com/trick77/ship). Runs the checked-out branch's ship pre-push.
 refs="$(cat)"
@@ -32,9 +32,8 @@ $refs
 EOF
 [ "$gate" = 1 ] || exit 0
 # git runs hooks from the top of the work tree, with GIT_DIR set in a linked worktree (or by --git-dir), possibly
-# relative, GIT_WORK_TREE unset or relative, other repo paths possibly relative. After the cd into a module dir
-# (backend/) git would take that dir as the top or miss the repo: every file outside it read as deleted. Pin them,
-# absolute, from here (ship pre-push also pins GIT_WORK_TREE itself, for hooks from before this).
+# relative, GIT_WORK_TREE unset or relative, other repo paths possibly relative. Pin them, absolute, so ship's git
+# calls from any directory see this tree (ship pre-push also pins GIT_WORK_TREE itself, for older hooks).
 top="$(git rev-parse --show-toplevel)" || { echo "pre-push: ship gates pushes from a work tree; this repo has none (bare or mirror clone)"; exit 1; }
 if [ -n "$GIT_DIR" ]; then
 	GIT_DIR="$(git rev-parse --absolute-git-dir)" || exit 1
@@ -46,15 +45,12 @@ for var in GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY; do
 	case "$val" in "" | /*) ;; *) eval "$var=\"\$PWD/\$val\"; export $var" ;; esac
 done
 cd "$top" || exit 1
-for gomod in $(git ls-files -- go.mod '*/go.mod'); do
-	if grep -qE '^[[:space:]]*(tool[[:space:]]+)?github.com/trick77/ship[[:space:]]*(//.*)?$' "$gomod"; then
-		cd "$(dirname "$gomod")" || exit 1
-		printf '%s\n' "$refs" | go tool ship pre-push "$@"
-		exit $?
-	fi
-done
-echo "pre-push: this branch has no ship tool in go.mod (cut before ship): rebase it onto the base branch (ship.yaml base:, default master)"
-exit 1
+if [ ! -f ship.yaml ]; then
+	echo "pre-push: this branch has no ship.yaml (cut before ship): rebase it onto the base branch"
+	exit 1
+fi
+# Always the newest ship, no pin to bump: go caches the build, the version lookup needs the network.
+printf '%s\n' "$refs" | ${SHIP:-go run github.com/trick77/ship@latest} pre-push "$@"
 `
 
 // Install writes the pre-push hook where git looks for it (core.hooksPath respected). An existing hook ship did not
@@ -76,7 +72,7 @@ func Install(root string) (string, error) {
 	if _, ok := gitx.Inside(common, p); !ok {
 		if _, inTree := gitx.Inside(root, p); inTree {
 			return "", fmt.Errorf("pre-push hook path %s is in the working tree (core.hooksPath, e.g. husky or a "+
-				"tracked hooks dir): ship never writes tracked files; add `go tool ship pre-push` to that hook by hand", p)
+				"tracked hooks dir): ship never writes tracked files; add `go run github.com/trick77/ship@latest pre-push` to that hook by hand", p)
 		}
 		return "", fmt.Errorf("pre-push hook path %s is outside this repo (core.hooksPath): installing there would "+
 			"gate every repo sharing it; unset core.hooksPath for this repo or add the hook to that dir by hand", p)
