@@ -55,7 +55,8 @@ func SkipMarker(root, base, marker string) (bool, error) {
 func Changed(root, base string) (map[string][]int, error) {
 	// Explicit prefixes: diff.noprefix or diff.mnemonicPrefix in a user's config would otherwise rename every path
 	// and the gate would match nothing, passing untested code.
-	diff, err := Git(root, "diff", "--no-color", "--no-ext-diff", "-U0", "--no-renames",
+	// core.quotePath=false keeps non-ASCII names unquoted; names git still quotes are unquoted in diffPath.
+	diff, err := Git(root, "-c", "core.quotePath=false", "diff", "--no-color", "--no-ext-diff", "-U0", "--no-renames",
 		"--src-prefix=a/", "--dst-prefix=b/", base)
 	if err != nil {
 		return nil, err
@@ -64,11 +65,12 @@ func Changed(root, base string) (map[string][]int, error) {
 	if err != nil {
 		return nil, err
 	}
-	untracked, err := Git(root, "ls-files", "-o", "--exclude-standard")
+	// -z: names verbatim, NUL-separated; without it git quotes names with special characters.
+	untracked, err := Git(root, "ls-files", "-z", "-o", "--exclude-standard")
 	if err != nil {
 		return nil, err
 	}
-	for _, f := range strings.Split(untracked, "\n") {
+	for _, f := range strings.Split(untracked, "\x00") {
 		if f == "" {
 			continue
 		}
@@ -108,12 +110,7 @@ func parseDiff(diff string) (map[string][]int, error) {
 		}
 		switch {
 		case strings.HasPrefix(line, "+++ "):
-			p := strings.TrimPrefix(line, "+++ ")
-			if p == "/dev/null" {
-				cur = ""
-			} else {
-				cur = strings.TrimPrefix(p, "b/")
-			}
+			cur = diffPath(strings.TrimPrefix(line, "+++ "))
 		case strings.HasPrefix(line, "@@ "):
 			oldN, start, n, err := hunk(line)
 			if err != nil {
@@ -126,6 +123,21 @@ func parseDiff(diff string) (map[string][]int, error) {
 		}
 	}
 	return out, sc.Err()
+}
+
+// diffPath turns a "+++ " header name into a repo path, "" for /dev/null. git appends a tab to a name containing a
+// space and C-quotes one with a quote, backslash or control character ("b/a\"b.go"); both are undone here.
+func diffPath(h string) string {
+	h = strings.TrimSuffix(h, "\t")
+	if strings.HasPrefix(h, `"`) {
+		if u, err := strconv.Unquote(h); err == nil {
+			h = u
+		}
+	}
+	if h == "/dev/null" {
+		return ""
+	}
+	return strings.TrimPrefix(h, "b/")
 }
 
 // hunk parses "@@ -a,b +c,d @@": the removed count b, the added start c and count d; counts default to 1.
@@ -176,13 +188,13 @@ func countLines(path string) (int, error) {
 
 // GoFiles lists tracked and untracked, non-ignored .go files that exist in the working tree.
 func GoFiles(root string) ([]string, error) {
-	out, err := Git(root, "ls-files", "-co", "--exclude-standard", "--", "*.go")
+	out, err := Git(root, "ls-files", "-z", "-co", "--exclude-standard", "--", "*.go")
 	if err != nil {
 		return nil, err
 	}
 	var files []string
 	seen := map[string]bool{}
-	for _, f := range strings.Split(out, "\n") {
+	for _, f := range strings.Split(out, "\x00") {
 		if f == "" || seen[f] {
 			continue
 		}

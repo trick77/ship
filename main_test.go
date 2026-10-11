@@ -18,6 +18,15 @@ func TestRun_whenNoOrUnknownCommand_thenError(t *testing.T) {
 	}
 }
 
+func TestRun_whenHelpOutsideRepo_thenUsage(t *testing.T) {
+	t.Chdir(t.TempDir())
+	for _, h := range []string{"help", "-h", "--help"} {
+		if err := run([]string{h}); err != nil {
+			t.Errorf("%s: %v", h, err)
+		}
+	}
+}
+
 func TestRun_whenNoShipYaml_thenCheckAndReleaseRefuse(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)

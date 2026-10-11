@@ -12,8 +12,8 @@ import (
 	"github.com/trick77/ship/internal/gitx"
 )
 
-// marker identifies a hook ship may overwrite. "by make hooks" is the dispatcher ipverse-core installed before ship.
-var markers = []string{"Installed by ship hooks", "by make hooks"}
+// marker identifies a hook ship may overwrite; any other pre-push hook is the user's to merge by hand.
+const marker = "Installed by ship hooks"
 
 // script is installed as the pre-push hook. Deletes and tags pass without a gate (nothing to check; release tags
 // are made via the API). Anything else needs the checked-out branch to have ship as a go tool: a branch cut before
@@ -63,14 +63,7 @@ func Install(root string) (string, error) {
 	return p, os.WriteFile(p, []byte(script), 0o755) //nolint:gosec // a git hook must be executable
 }
 
-func ours(s string) bool {
-	for _, m := range markers {
-		if strings.Contains(s, m) {
-			return true
-		}
-	}
-	return false
-}
+func ours(s string) bool { return strings.Contains(s, marker) }
 
 // Ref is one line git feeds a pre-push hook.
 type Ref struct{ Local, LocalSHA, Remote, RemoteSHA string }

@@ -39,6 +39,10 @@ func run(args []string) error {
 		fmt.Fprint(os.Stderr, usage)
 		return fmt.Errorf("no command")
 	}
+	if h := args[0]; h == "-h" || h == "-help" || h == "--help" || h == "help" {
+		fmt.Print(usage)
+		return nil
+	}
 	wd, err := os.Getwd()
 	if err != nil {
 		return err
@@ -88,9 +92,6 @@ func run(args []string) error {
 			return err
 		}
 		return release.Run(root, c, o)
-	case "-h", "-help", "--help", "help":
-		fmt.Print(usage)
-		return nil
 	}
 	fmt.Fprint(os.Stderr, usage)
 	return fmt.Errorf("unknown command %q", args[0])

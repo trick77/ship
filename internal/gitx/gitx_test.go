@@ -154,6 +154,51 @@ func TestHunk(t *testing.T) {
 	}
 }
 
+func TestChanged_whenUnusualNames_thenVerbatimPaths(t *testing.T) {
+	names := []string{"Übersicht.tsx", "a b.go", `q"uote.go`, "tab\tname.go"}
+	files := map[string]string{}
+	for _, n := range names {
+		files[n] = "1\n"
+	}
+	dir := repo(t, files)
+	base := mustGit(t, dir, "rev-parse", "HEAD")
+	more := map[string]string{"new ü.go": "x\ny\n"}
+	for _, n := range names {
+		more[n] = "1\n2\n"
+	}
+	write(t, dir, more)
+	got, err := Changed(dir, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range names {
+		if !slices.Equal(got[n], []int{2}) {
+			t.Errorf("%q: %v (all %v)", n, got[n], got)
+		}
+	}
+	if !slices.Equal(got["new ü.go"], []int{1, 2}) {
+		t.Errorf("untracked: %v", got)
+	}
+	gofiles, err := GoFiles(dir)
+	if err != nil || len(gofiles) != 4 || !slices.Contains(gofiles, "new ü.go") || !slices.Contains(gofiles, "tab\tname.go") {
+		t.Errorf("GoFiles %q %v", gofiles, err)
+	}
+}
+
+func TestDiffPath(t *testing.T) {
+	for in, want := range map[string]string{
+		"b/a.go":           "a.go",
+		"b/a b.go\t":       "a b.go",
+		`"b/q\"uote.go"`:   `q"uote.go`,
+		`"b/\303\234.tsx"`: "Ü.tsx",
+		"/dev/null":        "",
+	} {
+		if got := diffPath(in); got != want {
+			t.Errorf("%q: %q", in, got)
+		}
+	}
+}
+
 func TestChanged_whenNoprefixConfig_thenPathsStillRepoRelative(t *testing.T) {
 	dir := repo(t, map[string]string{"a.go": "1\n"})
 	base := mustGit(t, dir, "rev-parse", "HEAD")

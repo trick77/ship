@@ -58,6 +58,15 @@ func TestParse_whenExplicitZero_thenZeroNotDefault(t *testing.T) {
 	}
 }
 
+func TestParse_whenBareUIKey_thenUIWithDefaults(t *testing.T) {
+	for _, in := range []string{"ui:\n", "ui: ~\n", "ui: {}\n"} {
+		c, err := Parse([]byte(in))
+		if err != nil || c.UI == nil || c.UI.Dir != "ui" || c.UI.Floor != 75 || c.UI.Lcov == "" {
+			t.Errorf("%q: %+v %v", in, c, err)
+		}
+	}
+}
+
 func TestParse_whenUnknownKeyOrBadValue_thenError(t *testing.T) {
 	for _, in := range []string{
 		"pach: 80\n",            // typo must not silently drop a gate
@@ -66,6 +75,8 @@ func TestParse_whenUnknownKeyOrBadValue_thenError(t *testing.T) {
 		"ui:\n  floor: 200\n",   // out of range
 		"steps:\n  - name: x\n", // no run
 		"go: [1, 2]\n",          // wrong type
+		"ui:\n  flor: 80\n",     // typo inside the ui block
+		"ui: [\n",               // malformed
 	} {
 		if _, err := Parse([]byte(in)); err == nil {
 			t.Errorf("%q: no error", in)

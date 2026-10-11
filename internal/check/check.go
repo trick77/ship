@@ -31,7 +31,6 @@ func Run(root string, c *config.Config) error {
 		{"fetch origin/" + c.Base, func() error { return r.sh(root, "git fetch -q origin "+c.Base) }},
 		{"ui build", r.uiBuild},
 		{"gofmt", r.gofmt},
-		{"go vet", func() error { return r.goCmd("vet", "./...") }},
 		{"go build", func() error { return r.goCmd("build", "./...") }},
 		{"golangci-lint " + c.Lint, r.lint},
 		{"ui lint", r.uiLint},

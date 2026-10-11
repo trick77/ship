@@ -105,17 +105,25 @@ func Parse(b []byte) (*Config, error) {
 		Patch: 75,
 		Go:    Go{Dir: ".", Floor: 75, Exclude: []string{"cmd/"}},
 	}
-	// yaml fills an already set pointer in place: a ui: block keeps the defaults it does not override.
+	// yaml fills an already set pointer in place: a ui: block keeps the defaults it does not override. A bare
+	// `ui:` (null) decodes to nil and is put back: naming the key means a UI, never a silently skipped gate.
+	// Two passes, not a UnmarshalYAML method: node.Decode would drop KnownFields inside the ui: block.
+	uiDefaults := func() *UI {
+		return &UI{Dir: "ui", Floor: 75, Build: "npm ci && npm run build", Test: "npm run test -- --coverage"}
+	}
 	var keys map[string]any
-	if err := yaml.Unmarshal(b, &keys); err == nil {
-		if _, ok := keys["ui"]; ok {
-			c.UI = &UI{Dir: "ui", Floor: 75, Build: "npm ci && npm run build", Test: "npm run test -- --coverage"}
-		}
+	_ = yaml.Unmarshal(b, &keys) // malformed input fails the strict decode below
+	_, hasUI := keys["ui"]
+	if hasUI {
+		c.UI = uiDefaults()
 	}
 	dec := yaml.NewDecoder(bytes.NewReader(b))
 	dec.KnownFields(true)
 	if err := dec.Decode(&c); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("%s: %w", File, err)
+	}
+	if hasUI && c.UI == nil {
+		c.UI = uiDefaults()
 	}
 	c.defaults()
 	return &c, c.validate()

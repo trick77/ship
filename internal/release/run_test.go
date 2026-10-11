@@ -10,7 +10,7 @@ import (
 	"github.com/trick77/ship/internal/gitx"
 )
 
-// origin is a bare repo with master and tag 1.4.2; the clone's HEAD is origin/master.
+// origin is a bare repo with master and tag 1.4.2 on master's parent; the clone's HEAD is origin/master.
 func clone(t *testing.T) string {
 	t.Helper()
 	origin, work := t.TempDir(), t.TempDir()
@@ -27,6 +27,7 @@ func clone(t *testing.T) string {
 	git(work, "config", "commit.gpgsign", "false")
 	git(work, "commit", "-q", "--allow-empty", "-m", "one")
 	git(work, "tag", "1.4.2")
+	git(work, "commit", "-q", "--allow-empty", "-m", "two")
 	git(work, "remote", "add", "origin", origin)
 	git(work, "push", "-q", "--no-verify", "origin", "master", "1.4.2")
 	git(work, "fetch", "-q", "origin")
@@ -114,6 +115,19 @@ func TestRun_whenNotOnOriginOrDirty_thenRefused(t *testing.T) {
 	}
 	if _, err := capture(t, func() error { return Run(work, c, Options{Bump: "patch", DryRun: true}) }); err == nil || !strings.Contains(err.Error(), "not origin/master") {
 		t.Fatalf("ahead: %v", err)
+	}
+}
+
+func TestRun_whenHeadAlreadyTagged_thenRefusedWithRecovery(t *testing.T) {
+	work := clone(t)
+	t.Setenv("GITHUB_REPOSITORY", "o/r")
+	if _, err := gitx.Git(work, "tag", "1.4.3"); err != nil {
+		t.Fatal(err)
+	}
+	c, _ := config.Parse(nil)
+	_, err := capture(t, func() error { return Run(work, c, Options{Bump: "patch", DryRun: true}) })
+	if err == nil || !strings.Contains(err.Error(), "already tagged 1.4.3") || !strings.Contains(err.Error(), "gh release create 1.4.3") {
+		t.Fatalf("err = %v", err)
 	}
 }
 

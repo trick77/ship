@@ -113,6 +113,15 @@ func Run(root string, c *config.Config, o Options) error {
 	} else if dirty != "" {
 		return fmt.Errorf("uncommitted changes:\n%s", dirty)
 	}
+	// A release that died after its tag (GitHub release or moving tags failed) must be finished, not skipped: a
+	// rerun would otherwise move on to the next version and leave this one half done for good.
+	if at, err := gitx.Git(root, "tag", "--points-at", "HEAD"); err != nil {
+		return err
+	} else if v := Latest(strings.Split(at, "\n"), c.TagPrefix); v != (Version{}) {
+		return fmt.Errorf("HEAD is already tagged %s%s: nothing new to release. If that release is incomplete, "+
+			"finish it by hand: gh release create %s%s, then docker buildx imagetools create the moving tags",
+			c.TagPrefix, v, c.TagPrefix, v)
+	}
 	tagList, err := gitx.Git(root, "tag", "--list")
 	if err != nil {
 		return err
@@ -162,9 +171,10 @@ func Run(root string, c *config.Config, o Options) error {
 	if len(images) > 0 {
 		notes = "Container images: " + strings.Join(images, ", ")
 	}
-	if err := run(root, o.DryRun, "gh", "release", "create", tag, "--repo", repo,
-		"--title", tag, "--notes", notes); err != nil {
-		return fmt.Errorf("github release: %w", err)
+	relArgs := []string{"release", "create", tag, "--repo", repo, "--title", tag, "--notes", notes}
+	if err := run(root, o.DryRun, "gh", relArgs...); err != nil {
+		return fmt.Errorf("github release (tag %s exists; finish by hand: gh %s, then the moving tags): %w",
+			tag, strings.Join(relArgs, " "), err)
 	}
 	// Retag the pushed manifest (all platforms) in the registry, no rebuild.
 	for _, name := range names {

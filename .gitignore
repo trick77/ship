@@ -1,2 +1,2 @@
-.claude/settings.local.json
-.claude/worktrees/
+# Go coverage report of an older layout; ship writes it to the git dir now.
+.ship/

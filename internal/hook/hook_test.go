@@ -79,12 +79,6 @@ func TestInstall(t *testing.T) {
 	if _, err := Install(dir); err != nil {
 		t.Fatalf("reinstall over ours: %v", err)
 	}
-	if err := os.WriteFile(p, []byte("#!/bin/sh\n# by make hooks\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Install(dir); err != nil {
-		t.Fatalf("over the make-hooks dispatcher: %v", err)
-	}
 	if err := os.WriteFile(p, []byte("#!/bin/sh\necho mine\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
