@@ -178,19 +178,28 @@ func TestScript(t *testing.T) {
 	if err := os.WriteFile(stub, []byte("#!/bin/sh\necho \"ran $*\"\ncat\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(p, "origin", "url")
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "SHIP="+stub)
-	cmd.Stdin = strings.NewReader("refs/heads/master " + head + " refs/heads/master " + zero + "\n")
-	out, err := cmd.CombinedOutput()
+	push := func() ([]byte, error) {
+		cmd := exec.Command(p, "origin", "url")
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "SHIP_CMD="+stub)
+		cmd.Stdin = strings.NewReader("refs/heads/master " + head + " refs/heads/master " + zero + "\n")
+		return cmd.CombinedOutput()
+	}
+	// Untracked, the branch does not have it: refused.
+	if out, err := push(); err == nil || !strings.Contains(string(out), "no ship.yaml") {
+		t.Fatalf("untracked ship.yaml accepted: %v %s", err, out)
+	}
+	if _, err := gitx.Git(dir, "add", "ship.yaml"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := push()
 	if err != nil || !strings.Contains(string(out), "ran pre-push origin url") || !strings.Contains(string(out), "refs/heads/master "+head) {
 		t.Fatalf("ship not run with refs and args: %v %s", err, out)
 	}
-
 }
 
 // Real pushes, so the hook gets whatever environment git really gives it: from a linked worktree (GIT_DIR set,
-// absolute), with --git-dir=.git --work-tree=. (both relative) and plainly. ship, here a stand-in (SHIP), must see
+// absolute), with --git-dir=.git --work-tree=. (both relative) and plainly. ship, here a stand-in go, must see
 // the whole tree, unchanged, also from the module dir (backend/) it may work in.
 func TestScript_whenRealPushes_thenModuleInSubdirSeesWholeTree(t *testing.T) {
 	// The developer's global and system config (hooksPath, url rewrites, templates) must not reach these pushes.
@@ -224,7 +233,8 @@ func TestScript_whenRealPushes_thenModuleInSubdirSeesWholeTree(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(fakeGo), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	env := gitx.CleanEnv("PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"))
+	// No SHIP_CMD override here (ship's own CI exports SHIP): the hook's default go run must reach the stand-in go.
+	env := gitx.CleanEnv("SHIP_CMD=", "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	for name, tc := range map[string]struct {
 		top    string
 		branch string

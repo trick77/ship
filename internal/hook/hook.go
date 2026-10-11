@@ -17,9 +17,10 @@ const marker = "Installed by ship hooks"
 
 // script is installed as the pre-push hook. Deletes and tags pass without a gate (nothing to check; release tags
 // are made via the API). Anything else needs the checked-out branch to have a ship.yaml: a branch cut before ship
-// came in is refused, rebase it. The gate is always the newest ship (go run ...@latest; SHIP overrides the command).
+// came in is refused, rebase it. The gate is always the newest ship (go run ...@latest, straight from GitHub so a
+// fresh release counts at once; SHIP_CMD overrides the command).
 const script = `#!/bin/sh
-# Installed by ship hooks (github.com/trick77/ship). Runs the checked-out branch's ship pre-push.
+# Installed by ship hooks (github.com/trick77/ship). Runs the newest ship pre-push on this tree.
 refs="$(cat)"
 gate=0
 while read -r local_ref local_sha remote_ref _; do
@@ -45,12 +46,17 @@ for var in GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY; do
 	case "$val" in "" | /*) ;; *) eval "$var=\"\$PWD/\$val\"; export $var" ;; esac
 done
 cd "$top" || exit 1
-if [ ! -f ship.yaml ]; then
+if ! git ls-files --error-unmatch -- ship.yaml >/dev/null 2>&1; then
 	echo "pre-push: this branch has no ship.yaml (cut before ship): rebase it onto the base branch"
 	exit 1
 fi
-# Always the newest ship, no pin to bump: go caches the build, the version lookup needs the network.
-printf '%s\n' "$refs" | ${SHIP:-go run github.com/trick77/ship@latest} pre-push "$@"
+# Always the newest ship, no pin to bump: go caches the build; GOPROXY=direct asks GitHub, not a proxy that may
+# still answer @latest with the previous release.
+if [ -n "$SHIP_CMD" ]; then
+	printf '%s\n' "$refs" | $SHIP_CMD pre-push "$@"
+else
+	printf '%s\n' "$refs" | GOPROXY=direct go run github.com/trick77/ship@latest pre-push "$@"
+fi
 `
 
 // Install writes the pre-push hook where git looks for it (core.hooksPath respected). An existing hook ship did not

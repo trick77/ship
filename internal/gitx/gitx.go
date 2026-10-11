@@ -83,7 +83,7 @@ func PinWorkTree() error {
 	}
 	if top == "" {
 		return fmt.Errorf("GIT_DIR=%s without GIT_WORK_TREE: cannot tell the top of the tree from here; "+
-			"run go run github.com/trick77/ship@latest hooks, or set GIT_WORK_TREE", gd)
+			"rerun `go run github.com/trick77/ship@latest hooks`, or set GIT_WORK_TREE", gd)
 	}
 	return os.Setenv("GIT_WORK_TREE", top)
 }

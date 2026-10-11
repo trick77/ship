@@ -22,8 +22,9 @@ on:
         type: string
         default: "."
       ship:
+        description: How to run ship; empty = ship at this workflow's own commit.
         type: string
-        default: go run github.com/trick77/ship@latest
+        default: ""
 
 jobs:
   release:
@@ -54,7 +55,8 @@ jobs:
       - working-directory: ${{ inputs.go-dir }}
         env:
           GH_TOKEN: ${{ github.token }}
-          SHIP: ${{ inputs.ship }}
+          # The binary from this workflow's own commit: a consumer calling @master never pairs it with an older release.
+          SHIP: ${{ inputs.ship || format('go run github.com/trick77/ship@{0}', github.job_workflow_sha) }}
           BUMP: ${{ inputs.bump }}
         run: |
           case "$BUMP" in patch|minor|major) ;; *) echo "::error::bump '$BUMP'"; exit 1 ;; esac
