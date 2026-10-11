@@ -80,7 +80,7 @@ func Install(root string) (string, error) {
 	if _, ok := gitx.Inside(common, p); !ok {
 		if _, inTree := gitx.Inside(root, p); inTree {
 			return "", fmt.Errorf("pre-push hook path %s is in the working tree (core.hooksPath, e.g. husky or a "+
-				"tracked hooks dir): ship never writes tracked files; add `go run github.com/trick77/ship@master pre-push` to that hook by hand", p)
+				"tracked hooks dir): ship never writes tracked files; add ship pre-push to that hook by hand, run at master's sha as the installed hook does (see README)", p)
 		}
 		return "", fmt.Errorf("pre-push hook path %s is outside this repo (core.hooksPath): installing there would "+
 			"gate every repo sharing it; unset core.hooksPath for this repo or add the hook to that dir by hand", p)

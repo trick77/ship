@@ -1,5 +1,6 @@
 // Command ship is the gate, hook and release tool shared by the trick77 and ipverse Go repos. Each repo runs the
-// newest one, master (go run github.com/trick77/ship@master <command>), and describes itself in ship.yaml.
+// newest one, master's head (go run github.com/trick77/ship@<master's sha> <command>), and describes itself in
+// ship.yaml.
 //
 //	ship check                     everything CI checks, locally
 //	ship hooks                     install the pre-push hook
