@@ -197,3 +197,91 @@ func TestScript(t *testing.T) {
 		}
 	}
 }
+
+// Real pushes, so the hook gets whatever environment git really gives it: from a linked worktree (GIT_DIR set,
+// absolute), with --git-dir=.git --work-tree=. (both relative) and plainly. The script cds into the module dir
+// (backend/) before ship runs; ship's git calls there must still see the whole tree, unchanged. A stand-in go
+// reports what git sees from there.
+func TestScript_whenRealPushes_thenModuleInSubdirSeesWholeTree(t *testing.T) {
+	// The developer's global and system config (hooksPath, url rewrites, templates) must not reach these pushes.
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	dir := repo(t)
+	if err := os.MkdirAll(filepath.Join(dir, "backend"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for p, s := range map[string]string{"README.md": "x\n", "backend/go.mod": "module m\n\ntool github.com/trick77/ship\n"} {
+		if err := os.WriteFile(filepath.Join(dir, p), []byte(s), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	wt := filepath.Join(t.TempDir(), "wt")
+	for _, args := range [][]string{
+		{"add", "-A"}, {"commit", "-q", "-m", "module"},
+		{"init", "-q", "--bare", remote}, {"remote", "add", "origin", remote},
+		{"worktree", "add", "-q", "-b", "wt", wt},
+	} {
+		if _, err := gitx.Git(dir, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Install(dir); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	fakeGo := "#!/bin/sh\necho \"top=$(git rev-parse --show-toplevel)\"\necho \"dirty=$(git status --short | wc -l | tr -d ' ')\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(fakeGo), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env := gitx.CleanEnv("PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"))
+	for name, tc := range map[string]struct {
+		top    string
+		branch string
+		push   []string
+	}{
+		"linked worktree": {wt, "wt", []string{"push", "-q", "origin", "wt"}},
+		"relative dirs":   {dir, "master", []string{"--git-dir=.git", "--work-tree=.", "push", "-q", "origin", "master"}},
+		"plain":           {dir, "master", []string{"push", "-q", "origin", "master"}},
+	} {
+		if _, err := gitx.Git(tc.top, "commit", "-q", "--allow-empty", "-m", name); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("git", tc.push...)
+		cmd.Dir, cmd.Env = tc.top, env
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s: %v: %s", name, err, out)
+		}
+		if want := "top=" + gitx.Resolve(tc.top); !strings.Contains(string(out), want) || !strings.Contains(string(out), "dirty=0") {
+			t.Errorf("%s: want %s and dirty=0, got:\n%s", name, want, out)
+		}
+	}
+}
+
+// A bare or mirror clone has no work tree: git runs its hooks with GIT_DIR=. there. Deletes and tags have nothing
+// to check and must pass before the script asks git for a top of the tree it does not have.
+func TestScript_whenBareCloneDeletesOrTags_thenPass(t *testing.T) {
+	dir := repo(t)
+	bare := filepath.Join(t.TempDir(), "bare.git")
+	if _, err := gitx.Git(dir, "clone", "-q", "--bare", dir, bare); err != nil {
+		t.Fatal(err)
+	}
+	p, err := Install(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, _ := gitx.Head(dir)
+	for _, in := range []string{
+		"(delete) " + zero + " refs/heads/x " + head + "\n",
+		"refs/tags/v1 " + head + " refs/tags/v1 " + zero + "\n",
+	} {
+		cmd := exec.Command(p)
+		cmd.Dir = bare
+		cmd.Env = append(gitx.CleanEnv(), "GIT_DIR=.")
+		cmd.Stdin = strings.NewReader(in)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Errorf("%q: %v: %s", in, err, out)
+		}
+	}
+}

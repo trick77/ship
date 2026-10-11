@@ -255,3 +255,50 @@ func TestCountLines(t *testing.T) {
 		t.Error("missing file")
 	}
 }
+
+func TestCleanEnv(t *testing.T) {
+	t.Setenv("GIT_DIR", "/real/repo/.git")
+	t.Setenv("GIT_WORK_TREE", "/real/repo")
+	t.Setenv("GIT_SSH_COMMAND", "ssh") // not a repo pointer: kept
+	env := strings.Join(CleanEnv("EXTRA=1"), "\n")
+	if strings.Contains(env, "GIT_DIR=") || strings.Contains(env, "GIT_WORK_TREE=") ||
+		!strings.Contains(env, "GIT_SSH_COMMAND=ssh") || !strings.HasSuffix(env, "EXTRA=1") {
+		t.Fatalf("env:\n%s", env)
+	}
+}
+
+func TestPinWorkTree(t *testing.T) {
+	dir := repo(t, map[string]string{"a.go": "1\n"})
+	wt := filepath.Join(t.TempDir(), "wt")
+	mustGit(t, dir, "worktree", "add", "-q", "-b", "wt", wt)
+	wtGitDir := mustGit(t, wt, "rev-parse", "--absolute-git-dir")
+	for name, tc := range map[string]struct {
+		gitDir, workTree, want string
+		err                    bool
+	}{
+		"no GIT_DIR":         {"", "", "", false},
+		"work tree set":      {"/x/.git", "/given", "/given", false},
+		"linked worktree":    {wtGitDir, "", wt, false},
+		"main repo":          {filepath.Join(dir, ".git"), "", dir, false},
+		"relative":           {".git", "", "", true},
+		"bare, no work tree": {filepath.Join(dir, "other.git"), "", "", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("GIT_DIR", tc.gitDir)
+			t.Setenv("GIT_WORK_TREE", tc.workTree)
+			if tc.gitDir == "" {
+				_ = os.Unsetenv("GIT_DIR")
+			}
+			if tc.workTree == "" {
+				_ = os.Unsetenv("GIT_WORK_TREE")
+			}
+			err := PinWorkTree()
+			if (err != nil) != tc.err {
+				t.Fatalf("err = %v", err)
+			}
+			if got := os.Getenv("GIT_WORK_TREE"); !tc.err && Resolve(got) != Resolve(tc.want) && got != tc.want {
+				t.Fatalf("GIT_WORK_TREE = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

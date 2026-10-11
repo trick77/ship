@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
@@ -29,7 +28,9 @@ func Run(root string, c *config.Config) error {
 		name string
 		fn   func() error
 	}{
-		{"fetch origin/" + c.Base, func() error { return r.run(root, nil, "git", "fetch", "-q", "origin", c.Base) }},
+		// ship's own git calls keep git's repo variables (a --git-dir/--work-tree repo needs them); only the
+		// tests and steps check runs lose them.
+		{"fetch origin/" + c.Base, func() error { return r.runGit(root, "fetch", "-q", "origin", c.Base) }},
 		{"ui build", r.uiBuild},
 		{"gofmt", r.gofmt},
 		{"go build", func() error { return r.goCmd("build", "./...") }},
@@ -62,32 +63,23 @@ func (r runner) sh(dir, command string) error {
 	cmd := exec.Command("sh", "-c", command) //nolint:gosec // runs the repo's own ship.yaml commands, by design
 	cmd.Dir = dir
 	cmd.Stdout, cmd.Stderr, cmd.Stdin = os.Stdout, os.Stderr, nil
-	cmd.Env = cleanEnv()
+	cmd.Env = gitx.CleanEnv()
 	return cmd.Run()
-}
-
-// gitRepoVars point git at one repo. git sets them for hooks (GIT_DIR in a linked worktree): passed on, a test's
-// `git init` + `git commit` in a temp dir would write into the real repo and its checked-out branch.
-var gitRepoVars = []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
-	"GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_PREFIX", "GIT_QUARANTINE_PATH", "GIT_NAMESPACE"}
-
-// cleanEnv is the environment without gitRepoVars, for everything check runs.
-func cleanEnv(extra ...string) []string {
-	var env []string
-	for _, kv := range os.Environ() {
-		k, _, _ := strings.Cut(kv, "=")
-		if !slices.Contains(gitRepoVars, k) {
-			env = append(env, kv)
-		}
-	}
-	return append(env, extra...)
 }
 
 func (r runner) run(dir string, env []string, name string, args ...string) error {
 	cmd := exec.Command(name, args...) //nolint:gosec // go and git with ship's own arguments
 	cmd.Dir = dir
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	cmd.Env = cleanEnv(env...)
+	cmd.Env = gitx.CleanEnv(env...)
+	return cmd.Run()
+}
+
+// runGit runs ship's own git call, output streamed, with git's repo variables kept.
+func (r runner) runGit(dir string, args ...string) error {
+	cmd := exec.Command("git", args...) //nolint:gosec // git with ship's own arguments
+	cmd.Dir = dir
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	return cmd.Run()
 }
 

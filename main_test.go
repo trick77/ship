@@ -2,8 +2,12 @@ package main
 
 import (
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/trick77/ship/internal/gitx"
 )
 
 func TestRun_whenNoOrUnknownCommand_thenError(t *testing.T) {
@@ -98,5 +102,64 @@ func TestRun_whenHooks_thenInstalled(t *testing.T) {
 	}
 	if err := run([]string{"hooks"}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A hook from ship v0.2.0 in a linked worktree: git sets GIT_DIR alone, the hook cds into backend/ and runs ship
+// pre-push there. ship pins the top itself: the clean tree reads clean (the ship.yaml error is the next step).
+func TestRun_whenOldHookFromModuleSubdirInLinkedWorktree_thenTreeSeenWhole(t *testing.T) {
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	dir := t.TempDir()
+	wt := filepath.Join(t.TempDir(), "wt")
+	if out, err := gitInit(dir); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "backend"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for p, s := range map[string]string{"README.md": "x\n", "backend/go.mod": "module m\n"} {
+		if err := os.WriteFile(filepath.Join(dir, p), []byte(s), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, args := range [][]string{
+		{"-c", "user.email=t@example.com", "-c", "user.name=t", "add", "-A"},
+		{"-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "one"},
+		{"worktree", "add", "-q", "-b", "wt", wt},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir, cmd.Env = dir, gitx.CleanEnv()
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v %s", err, out)
+		}
+	}
+	gd := exec.Command("git", "rev-parse", "--absolute-git-dir")
+	gd.Dir, gd.Env = wt, gitx.CleanEnv()
+	gitDir, err := gd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := exec.Command("git", "rev-parse", "HEAD")
+	head.Dir, head.Env = wt, gitx.CleanEnv()
+	sha, err := head.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(filepath.Join(wt, "backend"))
+	t.Setenv("GIT_DIR", strings.TrimSpace(string(gitDir)))
+	_ = os.Unsetenv("GIT_WORK_TREE")
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = w.WriteString("refs/heads/wt " + strings.TrimSpace(string(sha)) + " refs/heads/wt 0000000000000000000000000000000000000000\n")
+	_ = w.Close()
+	old := os.Stdin
+	os.Stdin = r
+	t.Cleanup(func() { os.Stdin = old; _ = r.Close() })
+	err = run([]string{"pre-push"})
+	if err == nil || strings.Contains(err.Error(), "uncommitted") || !strings.Contains(err.Error(), "ship.yaml") {
+		t.Fatalf("want the ship.yaml error past a clean tree check, got: %v", err)
 	}
 }

@@ -44,6 +44,55 @@ func GitZ(dir string, args ...string) ([]string, error) {
 	return names, nil
 }
 
+// repoVars point git at one repo; git sets some of them for hooks.
+var repoVars = []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
+	"GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_PREFIX", "GIT_QUARANTINE_PATH", "GIT_NAMESPACE"}
+
+// CleanEnv is this process's environment without git's repo variables, plus extra: for the tests and steps check
+// runs, whose `git init` + `git commit` in a temp dir would otherwise write into the real repo.
+func CleanEnv(extra ...string) []string {
+	var env []string
+	for _, kv := range os.Environ() {
+		if k, _, _ := strings.Cut(kv, "="); !slices.Contains(repoVars, k) {
+			env = append(env, kv)
+		}
+	}
+	return append(env, extra...)
+}
+
+// PinWorkTree sets GIT_WORK_TREE when GIT_DIR is set without it, as git leaves it for a linked worktree's hooks:
+// git would otherwise take the current directory as the top of the tree, and from a module dir (backend/) every
+// file outside it reads as deleted. The top: a linked worktree's git dir names its .git file in "gitdir"; a main
+// repo's git dir is <top>/.git. A relative or other GIT_DIR cannot be placed from here: an error says what to do.
+func PinWorkTree() error {
+	gd := os.Getenv("GIT_DIR")
+	if gd == "" || os.Getenv("GIT_WORK_TREE") != "" {
+		return nil
+	}
+	top := ""
+	switch {
+	case !filepath.IsAbs(gd):
+	case fileExists(filepath.Join(gd, "gitdir")):
+		b, err := os.ReadFile(filepath.Join(gd, "gitdir")) //nolint:gosec // git's own pointer file
+		if err != nil {
+			return err
+		}
+		top = filepath.Dir(strings.TrimSpace(string(b)))
+	case filepath.Base(gd) == ".git":
+		top = filepath.Dir(gd)
+	}
+	if top == "" {
+		return fmt.Errorf("GIT_DIR=%s without GIT_WORK_TREE: cannot tell the top of the tree from here; "+
+			"run go tool ship hooks, or set GIT_WORK_TREE", gd)
+	}
+	return os.Setenv("GIT_WORK_TREE", top)
+}
+
+func fileExists(p string) bool {
+	_, err := os.Stat(p) //nolint:gosec // a path inside GIT_DIR, which git itself set
+	return err == nil
+}
+
 // Root is the repo's top-level directory containing dir.
 func Root(dir string) (string, error) {
 	return Git(dir, "rev-parse", "--show-toplevel")
