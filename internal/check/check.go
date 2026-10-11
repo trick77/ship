@@ -28,7 +28,9 @@ func Run(root string, c *config.Config) error {
 		name string
 		fn   func() error
 	}{
-		{"fetch origin/" + c.Base, func() error { return r.run(root, nil, "git", "fetch", "-q", "origin", c.Base) }},
+		// ship's own git calls keep git's repo variables (a --git-dir/--work-tree repo needs them); only the
+		// tests and steps check runs lose them.
+		{"fetch origin/" + c.Base, func() error { _, err := gitx.Git(root, "fetch", "-q", "origin", c.Base); return err }},
 		{"ui build", r.uiBuild},
 		{"gofmt", r.gofmt},
 		{"go build", func() error { return r.goCmd("build", "./...") }},

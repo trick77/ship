@@ -203,6 +203,9 @@ func TestScript(t *testing.T) {
 // (backend/) before ship runs; ship's git calls there must still see the whole tree, unchanged. A stand-in go
 // reports what git sees from there.
 func TestScript_whenRealPushes_thenModuleInSubdirSeesWholeTree(t *testing.T) {
+	// The developer's global and system config (hooksPath, url rewrites, templates) must not reach these pushes.
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	dir := repo(t)
 	if err := os.MkdirAll(filepath.Join(dir, "backend"), 0o755); err != nil {
 		t.Fatal(err)
@@ -252,6 +255,33 @@ func TestScript_whenRealPushes_thenModuleInSubdirSeesWholeTree(t *testing.T) {
 		}
 		if want := "top=" + gitx.Resolve(tc.top); !strings.Contains(string(out), want) || !strings.Contains(string(out), "dirty=0") {
 			t.Errorf("%s: want %s and dirty=0, got:\n%s", name, want, out)
+		}
+	}
+}
+
+// A bare or mirror clone has no work tree: git runs its hooks with GIT_DIR=. there. Deletes and tags have nothing
+// to check and must pass before the script asks git for a top of the tree it does not have.
+func TestScript_whenBareCloneDeletesOrTags_thenPass(t *testing.T) {
+	dir := repo(t)
+	bare := filepath.Join(t.TempDir(), "bare.git")
+	if _, err := gitx.Git(dir, "clone", "-q", "--bare", dir, bare); err != nil {
+		t.Fatal(err)
+	}
+	p, err := Install(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, _ := gitx.Head(dir)
+	for _, in := range []string{
+		"(delete) " + zero + " refs/heads/x " + head + "\n",
+		"refs/tags/v1 " + head + " refs/tags/v1 " + zero + "\n",
+	} {
+		cmd := exec.Command(p)
+		cmd.Dir = bare
+		cmd.Env = append(gitx.CleanEnv(), "GIT_DIR=.")
+		cmd.Stdin = strings.NewReader(in)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Errorf("%q: %v: %s", in, err, out)
 		}
 	}
 }

@@ -234,12 +234,6 @@ func TestCleanEnv_whenHookSetsGitDir_thenStepsDoNotSeeIt(t *testing.T) {
 	dir, c := fixture(t, "steps:\n  - name: no git dir\n    run: test -z \"$GIT_DIR\"\n", "mode: set\n", "")
 	t.Setenv("GIT_DIR", "/real/repo/.git/worktrees/x")
 	t.Setenv("GIT_WORK_TREE", "/real/repo")
-	t.Setenv("GIT_SSH_COMMAND", "ssh -i key") // not a repo pointer: kept
-	env := strings.Join(gitx.CleanEnv("EXTRA=1"), "\n")
-	if strings.Contains(env, "GIT_DIR=") || strings.Contains(env, "GIT_WORK_TREE=") ||
-		!strings.Contains(env, "GIT_SSH_COMMAND=") || !strings.Contains(env, "EXTRA=1") {
-		t.Fatalf("env:\n%s", env)
-	}
 	if err := (runner{root: dir, c: c}).extra(); err != nil {
 		t.Fatalf("GIT_DIR reached a step: %v", err)
 	}

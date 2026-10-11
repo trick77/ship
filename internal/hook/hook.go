@@ -21,14 +21,6 @@ const marker = "Installed by ship hooks"
 const script = `#!/bin/sh
 # Installed by ship hooks (github.com/trick77/ship). Runs the checked-out branch's ship pre-push.
 refs="$(cat)"
-# git runs hooks from the top of the work tree, with GIT_DIR set in a linked worktree (or by --git-dir), possibly
-# relative, and GIT_WORK_TREE unset or relative. After the cd into a module dir (backend/) git would take that dir
-# as the top, or miss the repo: every file outside it read as deleted. Pin both, absolute, from here.
-if [ -n "$GIT_DIR" ]; then
-	GIT_WORK_TREE="$(git rev-parse --show-toplevel)" || exit 1
-	GIT_DIR="$(git rev-parse --absolute-git-dir)" || exit 1
-	export GIT_DIR GIT_WORK_TREE
-fi
 gate=0
 while read -r local_ref local_sha remote_ref _; do
 	[ -z "$local_ref" ] && continue
@@ -39,7 +31,21 @@ done <<EOF
 $refs
 EOF
 [ "$gate" = 1 ] || exit 0
-cd "$(git rev-parse --show-toplevel)" || exit 1
+# git runs hooks from the top of the work tree, with GIT_DIR set in a linked worktree (or by --git-dir), possibly
+# relative, GIT_WORK_TREE unset or relative, other repo paths possibly relative. After the cd into a module dir
+# (backend/) git would take that dir as the top or miss the repo: every file outside it read as deleted. Pin them,
+# absolute, from here; ship pre-push takes GIT_DIR without GIT_WORK_TREE for a hook from before this.
+top="$(git rev-parse --show-toplevel)" || exit 1
+if [ -n "$GIT_DIR" ]; then
+	GIT_DIR="$(git rev-parse --absolute-git-dir)" || exit 1
+	GIT_WORK_TREE="$top"
+	export GIT_DIR GIT_WORK_TREE
+fi
+for var in GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY; do
+	eval "val=\${$var}"
+	case "$val" in "" | /*) ;; *) eval "$var=\"\$PWD/\$val\"; export $var" ;; esac
+done
+cd "$top" || exit 1
 for gomod in $(git ls-files -- go.mod '*/go.mod'); do
 	if grep -qE '^[[:space:]]*(tool[[:space:]]+)?github.com/trick77/ship[[:space:]]*(//.*)?$' "$gomod"; then
 		cd "$(dirname "$gomod")" || exit 1

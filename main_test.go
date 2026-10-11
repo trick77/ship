@@ -100,3 +100,11 @@ func TestRun_whenHooks_thenInstalled(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestRun_whenPrePushFromOldHook_thenSaysRerunHooks(t *testing.T) {
+	t.Setenv("GIT_DIR", "/repo/.git/worktrees/x")
+	t.Setenv("GIT_WORK_TREE", "")
+	if err := run([]string{"pre-push"}); err == nil || !strings.Contains(err.Error(), "go tool ship hooks") {
+		t.Fatalf("err = %v", err)
+	}
+}
