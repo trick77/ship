@@ -43,9 +43,6 @@ func run(args []string) error {
 		fmt.Print(usage)
 		return nil
 	}
-	if args[0] == "pre-push" {
-		gitx.UnsetRepoVars() // git's hook environment; hooks installed by ship v0.2.0 do not unset it themselves
-	}
 	wd, err := os.Getwd()
 	if err != nil {
 		return err

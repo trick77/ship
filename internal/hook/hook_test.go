@@ -197,3 +197,52 @@ func TestScript(t *testing.T) {
 		}
 	}
 }
+
+// git runs a linked worktree's hooks at the top of its tree with GIT_DIR set and no GIT_WORK_TREE. The script cds
+// into the module dir before ship runs; ship's git calls there must still see the whole tree, unchanged. A stand-in
+// go reports what git sees from there.
+func TestScript_whenLinkedWorktreeModuleInSubdir_thenWholeTreeClean(t *testing.T) {
+	dir := repo(t)
+	if err := os.MkdirAll(filepath.Join(dir, "backend"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for p, s := range map[string]string{"README.md": "x\n", "backend/go.mod": "module m\n\ntool github.com/trick77/ship\n"} {
+		if err := os.WriteFile(filepath.Join(dir, p), []byte(s), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, args := range [][]string{{"add", "-A"}, {"commit", "-q", "-m", "module"}} {
+		if _, err := gitx.Git(dir, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wt := filepath.Join(t.TempDir(), "wt")
+	if _, err := gitx.Git(dir, "worktree", "add", "-q", "-b", "wt", wt); err != nil {
+		t.Fatal(err)
+	}
+	p, err := Install(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitDir, err := gitx.Git(wt, "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, _ := gitx.Head(wt)
+	bin := t.TempDir()
+	fakeGo := "#!/bin/sh\necho \"top=$(git rev-parse --show-toplevel)\"\necho \"dirty=$(git status --short | wc -l | tr -d ' ')\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(fakeGo), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(p, "origin", "git@example.com:x.git")
+	cmd.Dir = wt
+	cmd.Env = append(os.Environ(), "GIT_DIR="+gitDir, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cmd.Stdin = strings.NewReader("refs/heads/wt " + head + " refs/heads/wt " + zero + "\n")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	if want := "top=" + gitx.Resolve(wt); !strings.Contains(string(out), want) || !strings.Contains(string(out), "dirty=0") {
+		t.Fatalf("want %s and dirty=0, got:\n%s", want, out)
+	}
+}

@@ -21,8 +21,10 @@ const marker = "Installed by ship hooks"
 const script = `#!/bin/sh
 # Installed by ship hooks (github.com/trick77/ship). Runs the checked-out branch's ship pre-push.
 refs="$(cat)"
-# git sets GIT_DIR for hooks in a linked worktree; with it, git calls from a subdirectory see a wrong tree.
-unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_PREFIX
+# git runs hooks from the top of the work tree. In a linked worktree it sets GIT_DIR without GIT_WORK_TREE, and git
+# then takes the current directory as the top: after the cd into a module dir (backend/) every file outside it would
+# read as deleted. Pin the top here; a GIT_WORK_TREE the user set stays as it is.
+if [ -n "$GIT_DIR" ] && [ -z "$GIT_WORK_TREE" ]; then GIT_WORK_TREE="$(pwd)"; export GIT_WORK_TREE; fi
 gate=0
 while read -r local_ref local_sha remote_ref _; do
 	[ -z "$local_ref" ] && continue
