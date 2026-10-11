@@ -56,8 +56,9 @@ jobs:
         # module proxy can still serve an older master. Not github.job_workflow_sha: empty for a caller (2026-10-11).
         run: |
           if [ -z "$SHIP" ]; then
-            sha="$(git ls-remote https://github.com/trick77/ship refs/heads/master | cut -f1)"
-            [ -n "$sha" ] || { echo "::error::cannot resolve ship's master on GitHub (git ls-remote, error above)"; exit 1; }
+            # Exactly refs/heads/master: ls-remote matches by suffix, so x/refs/heads/master would match too.
+            sha="$(git ls-remote https://github.com/trick77/ship refs/heads/master | awk '$2 == "refs/heads/master" { print $1 }')"
+            [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::cannot resolve ship's master on GitHub: '$sha'"; exit 1; }
             SHIP="go run github.com/trick77/ship@$sha"
           fi
           $SHIP check
