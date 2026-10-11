@@ -1,0 +1,55 @@
+name: Check
+
+# Reusable: `ship check` on a GitHub runner, the same gate the pre-push hook runs locally. A caller's ci.yaml:
+#
+#   on: workflow_dispatch
+#   jobs:
+#     check:
+#       uses: trick77/ship/.github/workflows/check.yaml@v0.1.0
+#       with: { node-version: "22" }   # only with a UI
+on:
+  workflow_call:
+    inputs:
+      go-dir:
+        description: Go module directory (where go.mod pins ship).
+        type: string
+        default: "."
+      node-version:
+        description: Node version for the UI; empty = no UI.
+        type: string
+        default: ""
+      ui-dir:
+        type: string
+        default: ui
+      ship:
+        description: How to run ship; ship's own repo uses "go run .".
+        type: string
+        default: go tool ship
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: ship check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # fetch-depth: 0: the patch gate diffs against origin/<base>.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: ${{ inputs.go-dir }}/go.mod
+          cache-dependency-path: ${{ inputs.go-dir }}/go.sum
+      - if: inputs.node-version != ''
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+          cache-dependency-path: ${{ inputs.ui-dir }}/package-lock.json
+      - working-directory: ${{ inputs.go-dir }}
+        env:
+          SHIP: ${{ inputs.ship }}
+        run: $SHIP check

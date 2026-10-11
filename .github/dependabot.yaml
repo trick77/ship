@@ -1,0 +1,27 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      go-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # The UI end-to-end fixture: kept on current React/vite/vitest so the test proves today's toolchain.
+  - package-ecosystem: npm
+    directory: /testdata/ui
+    schedule:
+      interval: weekly
+    groups:
+      ui-fixture:
+        patterns: ["*"]
