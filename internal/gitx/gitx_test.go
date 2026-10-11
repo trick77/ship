@@ -255,3 +255,14 @@ func TestCountLines(t *testing.T) {
 		t.Error("missing file")
 	}
 }
+
+func TestCleanEnv(t *testing.T) {
+	t.Setenv("GIT_DIR", "/real/repo/.git")
+	t.Setenv("GIT_WORK_TREE", "/real/repo")
+	t.Setenv("GIT_SSH_COMMAND", "ssh") // not a repo pointer: kept
+	env := strings.Join(CleanEnv("EXTRA=1"), "\n")
+	if strings.Contains(env, "GIT_DIR=") || strings.Contains(env, "GIT_WORK_TREE=") ||
+		!strings.Contains(env, "GIT_SSH_COMMAND=ssh") || !strings.HasSuffix(env, "EXTRA=1") {
+		t.Fatalf("env:\n%s", env)
+	}
+}

@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
@@ -62,28 +61,15 @@ func (r runner) sh(dir, command string) error {
 	cmd := exec.Command("sh", "-c", command) //nolint:gosec // runs the repo's own ship.yaml commands, by design
 	cmd.Dir = dir
 	cmd.Stdout, cmd.Stderr, cmd.Stdin = os.Stdout, os.Stderr, nil
-	cmd.Env = cleanEnv()
+	cmd.Env = gitx.CleanEnv()
 	return cmd.Run()
-}
-
-// cleanEnv is the environment without gitx.RepoVars, for everything check runs: passed on, a test's `git init` +
-// `git commit` in a temp dir would write into the real repo and its checked-out branch.
-func cleanEnv(extra ...string) []string {
-	var env []string
-	for _, kv := range os.Environ() {
-		k, _, _ := strings.Cut(kv, "=")
-		if !slices.Contains(gitx.RepoVars, k) {
-			env = append(env, kv)
-		}
-	}
-	return append(env, extra...)
 }
 
 func (r runner) run(dir string, env []string, name string, args ...string) error {
 	cmd := exec.Command(name, args...) //nolint:gosec // go and git with ship's own arguments
 	cmd.Dir = dir
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	cmd.Env = cleanEnv(env...)
+	cmd.Env = gitx.CleanEnv(env...)
 	return cmd.Run()
 }
 

@@ -21,10 +21,14 @@ const marker = "Installed by ship hooks"
 const script = `#!/bin/sh
 # Installed by ship hooks (github.com/trick77/ship). Runs the checked-out branch's ship pre-push.
 refs="$(cat)"
-# git runs hooks from the top of the work tree. In a linked worktree it sets GIT_DIR without GIT_WORK_TREE, and git
-# then takes the current directory as the top: after the cd into a module dir (backend/) every file outside it would
-# read as deleted. Pin the top here; a GIT_WORK_TREE the user set stays as it is.
-if [ -n "$GIT_DIR" ] && [ -z "$GIT_WORK_TREE" ]; then GIT_WORK_TREE="$(pwd)"; export GIT_WORK_TREE; fi
+# git runs hooks from the top of the work tree, with GIT_DIR set in a linked worktree (or by --git-dir), possibly
+# relative, and GIT_WORK_TREE unset or relative. After the cd into a module dir (backend/) git would take that dir
+# as the top, or miss the repo: every file outside it read as deleted. Pin both, absolute, from here.
+if [ -n "$GIT_DIR" ]; then
+	GIT_WORK_TREE="$(git rev-parse --show-toplevel)" || exit 1
+	GIT_DIR="$(git rev-parse --absolute-git-dir)" || exit 1
+	export GIT_DIR GIT_WORK_TREE
+fi
 gate=0
 while read -r local_ref local_sha remote_ref _; do
 	[ -z "$local_ref" ] && continue

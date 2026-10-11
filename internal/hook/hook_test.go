@@ -198,10 +198,11 @@ func TestScript(t *testing.T) {
 	}
 }
 
-// git runs a linked worktree's hooks at the top of its tree with GIT_DIR set and no GIT_WORK_TREE. The script cds
-// into the module dir before ship runs; ship's git calls there must still see the whole tree, unchanged. A stand-in
-// go reports what git sees from there.
-func TestScript_whenLinkedWorktreeModuleInSubdir_thenWholeTreeClean(t *testing.T) {
+// Real pushes, so the hook gets whatever environment git really gives it: from a linked worktree (GIT_DIR set,
+// absolute), with --git-dir=.git --work-tree=. (both relative) and plainly. The script cds into the module dir
+// (backend/) before ship runs; ship's git calls there must still see the whole tree, unchanged. A stand-in go
+// reports what git sees from there.
+func TestScript_whenRealPushes_thenModuleInSubdirSeesWholeTree(t *testing.T) {
 	dir := repo(t)
 	if err := os.MkdirAll(filepath.Join(dir, "backend"), 0o755); err != nil {
 		t.Fatal(err)
@@ -211,38 +212,46 @@ func TestScript_whenLinkedWorktreeModuleInSubdir_thenWholeTreeClean(t *testing.T
 			t.Fatal(err)
 		}
 	}
-	for _, args := range [][]string{{"add", "-A"}, {"commit", "-q", "-m", "module"}} {
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	wt := filepath.Join(t.TempDir(), "wt")
+	for _, args := range [][]string{
+		{"add", "-A"}, {"commit", "-q", "-m", "module"},
+		{"init", "-q", "--bare", remote}, {"remote", "add", "origin", remote},
+		{"worktree", "add", "-q", "-b", "wt", wt},
+	} {
 		if _, err := gitx.Git(dir, args...); err != nil {
 			t.Fatal(err)
 		}
 	}
-	wt := filepath.Join(t.TempDir(), "wt")
-	if _, err := gitx.Git(dir, "worktree", "add", "-q", "-b", "wt", wt); err != nil {
+	if _, err := Install(dir); err != nil {
 		t.Fatal(err)
 	}
-	p, err := Install(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	gitDir, err := gitx.Git(wt, "rev-parse", "--absolute-git-dir")
-	if err != nil {
-		t.Fatal(err)
-	}
-	head, _ := gitx.Head(wt)
 	bin := t.TempDir()
 	fakeGo := "#!/bin/sh\necho \"top=$(git rev-parse --show-toplevel)\"\necho \"dirty=$(git status --short | wc -l | tr -d ' ')\"\n"
 	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(fakeGo), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(p, "origin", "git@example.com:x.git")
-	cmd.Dir = wt
-	cmd.Env = append(os.Environ(), "GIT_DIR="+gitDir, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	cmd.Stdin = strings.NewReader("refs/heads/wt " + head + " refs/heads/wt " + zero + "\n")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("%v: %s", err, out)
-	}
-	if want := "top=" + gitx.Resolve(wt); !strings.Contains(string(out), want) || !strings.Contains(string(out), "dirty=0") {
-		t.Fatalf("want %s and dirty=0, got:\n%s", want, out)
+	env := gitx.CleanEnv("PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"))
+	for name, tc := range map[string]struct {
+		top    string
+		branch string
+		push   []string
+	}{
+		"linked worktree": {wt, "wt", []string{"push", "-q", "origin", "wt"}},
+		"relative dirs":   {dir, "master", []string{"--git-dir=.git", "--work-tree=.", "push", "-q", "origin", "master"}},
+		"plain":           {dir, "master", []string{"push", "-q", "origin", "master"}},
+	} {
+		if _, err := gitx.Git(tc.top, "commit", "-q", "--allow-empty", "-m", name); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("git", tc.push...)
+		cmd.Dir, cmd.Env = tc.top, env
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s: %v: %s", name, err, out)
+		}
+		if want := "top=" + gitx.Resolve(tc.top); !strings.Contains(string(out), want) || !strings.Contains(string(out), "dirty=0") {
+			t.Errorf("%s: want %s and dirty=0, got:\n%s", name, want, out)
+		}
 	}
 }

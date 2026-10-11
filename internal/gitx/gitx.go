@@ -44,10 +44,21 @@ func GitZ(dir string, args ...string) ([]string, error) {
 	return names, nil
 }
 
-// RepoVars point git at one repo; git sets some of them for hooks. Commands check runs (tests, steps) get none of
-// them: a test's `git init` + `git commit` in a temp dir would otherwise write into the real repo.
-var RepoVars = []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
+// repoVars point git at one repo; git sets some of them for hooks.
+var repoVars = []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
 	"GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_PREFIX", "GIT_QUARANTINE_PATH", "GIT_NAMESPACE"}
+
+// CleanEnv is this process's environment without git's repo variables, plus extra: for the tests and steps check
+// runs, whose `git init` + `git commit` in a temp dir would otherwise write into the real repo.
+func CleanEnv(extra ...string) []string {
+	var env []string
+	for _, kv := range os.Environ() {
+		if k, _, _ := strings.Cut(kv, "="); !slices.Contains(repoVars, k) {
+			env = append(env, kv)
+		}
+	}
+	return append(env, extra...)
+}
 
 // Root is the repo's top-level directory containing dir.
 func Root(dir string) (string, error) {
