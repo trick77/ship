@@ -255,3 +255,19 @@ func TestCountLines(t *testing.T) {
 		t.Error("missing file")
 	}
 }
+
+func TestUnsetRepoVars(t *testing.T) {
+	for _, k := range RepoVars {
+		t.Setenv(k, "/somewhere")
+	}
+	t.Setenv("GIT_SSH_COMMAND", "ssh") // not a repo pointer: kept
+	UnsetRepoVars()
+	for _, k := range RepoVars {
+		if v, ok := os.LookupEnv(k); ok {
+			t.Errorf("%s still set: %q", k, v)
+		}
+	}
+	if os.Getenv("GIT_SSH_COMMAND") != "ssh" {
+		t.Error("GIT_SSH_COMMAND dropped")
+	}
+}
