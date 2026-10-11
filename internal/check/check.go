@@ -242,13 +242,18 @@ func (r runner) gates() error {
 	if err != nil {
 		return err
 	}
-	if err := cover.Mapped("go", goLines, r.root); err != nil {
+	listed, err := gitx.GitZ(r.root, "ls-files", "-z", "-co", "--exclude-standard")
+	if err != nil {
 		return err
+	}
+	files := make(map[string]bool, len(listed))
+	for _, f := range listed {
+		files[f] = true
 	}
 	all := cover.Lines{}
 	all.Merge(goLines)
-	var errs []error
-	errs = append(errs, cover.Floor("go", goLines, r.c.Go.Floor))
+	// Every result in one run: a mapping error does not hide the floors or the patch gate.
+	errs := []error{cover.Mapped("go", goLines, files), cover.Floor("go", goLines, r.c.Go.Floor)}
 	if r.c.UI != nil {
 		f, err := os.Open(filepath.Join(r.root, r.c.UI.Lcov))
 		if err != nil {
@@ -262,10 +267,7 @@ func (r runner) gates() error {
 		if len(uiLines) == 0 {
 			return fmt.Errorf("ui coverage report %s holds no lines", r.c.UI.Lcov)
 		}
-		if err := cover.Mapped("ui", uiLines, r.root); err != nil {
-			return err
-		}
-		errs = append(errs, cover.Floor("ui", uiLines, r.c.UI.Floor))
+		errs = append(errs, cover.Mapped("ui", uiLines, files), cover.Floor("ui", uiLines, r.c.UI.Floor))
 		all.Merge(uiLines)
 	}
 	errs = append(errs, r.patch(all))

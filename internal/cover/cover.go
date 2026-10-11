@@ -71,13 +71,15 @@ func Excluded(path string, prefixes []string) bool {
 	return false
 }
 
-// Mapped fails when a report path names no file in the repo. Reports are written from the current tree, so every
-// path must exist; one that does not means the report's paths and git's disagree (a moved vitest root, a wrong
-// ui.dir or ui.lcov), and the patch gate, matching changed lines by path, would see nothing and pass blind.
-func Mapped(name string, l Lines, root string) error {
+// Mapped fails when a report path is not one of git's files (files: tracked and untracked, not ignored, as git
+// spells them). Reports are written from the current tree, so every path must be there; one that is not means the
+// report's paths and git's disagree (a moved vitest root, a wrong ui.dir or ui.lcov), and the patch gate, matching
+// changed lines by path, would see nothing and pass blind. git's list, not the disk: a wrong mapping can still hit
+// a real file (dist/, node_modules, a case-insensitive file system).
+func Mapped(name string, l Lines, files map[string]bool) error {
 	var missing []string
 	for p := range l {
-		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(p))); err != nil {
+		if !files[p] {
 			missing = append(missing, p)
 		}
 	}
@@ -88,8 +90,9 @@ func Mapped(name string, l Lines, root string) error {
 	if len(missing) > 5 {
 		missing = append(missing[:5], fmt.Sprintf("... %d more", len(missing)-5))
 	}
-	return fmt.Errorf("%s coverage report names files that are not in the repo, its paths do not match git's "+
-		"(check go.dir, ui.dir, ui.lcov and the test runner's root): %s", name, strings.Join(missing, ", "))
+	return fmt.Errorf("%s coverage report names files git does not have, its paths do not match git's "+
+		"(check go.dir, ui.dir, ui.lcov and the test runner's root; generated code: go.exclude): %s",
+		name, strings.Join(missing, ", "))
 }
 
 // Percent returns covered and total line counts over every file.

@@ -241,17 +241,19 @@ func TestCodeLines_whenScanError_thenNil(t *testing.T) {
 }
 
 func TestMapped(t *testing.T) {
-	root := writeSrc(t) // backend/x/x.go
-	if err := Mapped("go", Lines{"backend/x/x.go": {4: true}}, root); err != nil {
+	files := map[string]bool{"backend/x/x.go": true, "ui/src/a.ts": true}
+	if err := Mapped("go", Lines{"backend/x/x.go": {4: true}, "ui/src/a.ts": {1: true}}, files); err != nil {
 		t.Fatal(err)
 	}
-	// vitest rooted elsewhere: SF: paths land one level off and name nothing on disk.
-	l := Lines{"backend/x/x.go": {4: true}, "src/a.ts": {1: true}}
-	for i := range 7 {
+	// vitest rooted one level off: src/a.ts may exist on disk elsewhere, but git has ui/src/a.ts. Present files
+	// never appear in the list.
+	l := Lines{"backend/x/x.go": {4: true}, "src/a.ts": {1: true}, "UI/src/a.ts": {1: true}}
+	for i := range 6 {
 		l[fmt.Sprintf("gone/%d.ts", i)] = map[int]bool{1: false}
 	}
-	err := Mapped("ui", l, root)
-	if err == nil || !strings.Contains(err.Error(), "gone/0.ts") || !strings.Contains(err.Error(), "... 3 more") {
+	err := Mapped("ui", l, files)
+	if err == nil || !strings.Contains(err.Error(), "UI/src/a.ts") || !strings.Contains(err.Error(), "gone/0.ts") ||
+		!strings.Contains(err.Error(), "... 3 more") || strings.Contains(err.Error(), "backend/x/x.go") {
 		t.Fatalf("err = %v", err)
 	}
 }
