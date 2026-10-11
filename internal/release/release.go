@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -148,6 +149,16 @@ func Run(root string, c *config.Config, o Options) error {
 	}
 	short := head[:7]
 	fmt.Printf("ship: release %s -> %s (%s) at %s\n", prev, next, o.Bump, short)
+
+	// Without images nothing below compiles the code, and a Go module tag is permanent once the proxy has it: build
+	// before the tag, in a dry run too (no side effects, -o: no binary left in the tree). With images the build is
+	// the image's. With a UI it is skipped: a go:embed of the UI's build output needs node, which the Release
+	// workflow does not set up.
+	if len(c.Images) == 0 && c.UI == nil {
+		if err := run(filepath.Join(root, c.Go.Dir), false, "go", "build", "-o", os.DevNull, "./..."); err != nil {
+			return fmt.Errorf("go build (nothing tagged): %w", err)
+		}
+	}
 
 	// The tag first: creating a ref is atomic, so it claims the version. A second release racing for the same
 	// number fails here, before it could push its build over this version's image. A failed build gives the
