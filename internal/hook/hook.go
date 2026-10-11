@@ -50,13 +50,14 @@ if ! git ls-files --error-unmatch -- ship.yaml >/dev/null 2>&1; then
 	exit 1
 fi
 # Always the newest ship: master, as the reusable workflows consumers call @master run it, so the hook and CI gate
-# alike. Its version is asked of GitHub (a proxy lags), then run as usual: GOPROXY=direct on the run would reach
-# every go command ship starts.
+# alike. Its sha is asked of GitHub by git (a proxy lags on @master; go list would run inside this module and fail
+# on its vendor/, go.work or go line), then run by sha through the proxy, which fetches it on demand.
 if [ -n "$SHIP_CMD" ]; then
 	printf '%s\n' "$refs" | $SHIP_CMD pre-push "$@"
 else
-	v="$(GOPROXY=direct go list -m -f '{{.Version}}' github.com/trick77/ship@master)" || { echo "pre-push: cannot resolve ship@master (network?)"; exit 1; }
-	printf '%s\n' "$refs" | go run "github.com/trick77/ship@$v" pre-push "$@"
+	sha="$(git ls-remote https://github.com/trick77/ship refs/heads/master | cut -f1)"
+	[ -n "$sha" ] || { echo "pre-push: cannot resolve ship's master on GitHub (git ls-remote, error above)"; exit 1; }
+	printf '%s\n' "$refs" | go run "github.com/trick77/ship@$sha" pre-push "$@"
 fi
 `
 

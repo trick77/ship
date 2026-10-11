@@ -33,6 +33,18 @@ func repo(t *testing.T) string {
 	return dir
 }
 
+// shipOnGitHub points the hook's git ls-remote of ship on GitHub at src instead, via a global config of its own (the
+// developer's must not reach the pushes either), so no test asks GitHub.
+func shipOnGitHub(t *testing.T, src string) {
+	t.Helper()
+	cfg := filepath.Join(t.TempDir(), "gitconfig")
+	if _, err := gitx.Git("", "config", "--file", cfg, "url."+src+".insteadOf", "https://github.com/trick77/ship"); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", cfg)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+}
+
 func TestParseRefsAndGated(t *testing.T) {
 	in := "refs/heads/a 1111111111111111111111111111111111111111 refs/heads/a " + zero + "\n" +
 		"(delete) " + zero + " refs/heads/old 2222222222222222222222222222222222222222\n" +
@@ -203,8 +215,9 @@ func TestScript(t *testing.T) {
 // the whole tree, unchanged, also from the module dir (backend/) it may work in.
 func TestScript_whenRealPushes_thenModuleInSubdirSeesWholeTree(t *testing.T) {
 	// The developer's global and system config (hooksPath, url rewrites, templates) must not reach these pushes.
-	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	src := repo(t)
+	shipOnGitHub(t, src)
+	master, _ := gitx.Head(src)
 	dir := repo(t)
 	if err := os.MkdirAll(filepath.Join(dir, "backend"), 0o755); err != nil {
 		t.Fatal(err)
@@ -229,7 +242,7 @@ func TestScript_whenRealPushes_thenModuleInSubdirSeesWholeTree(t *testing.T) {
 		t.Fatal(err)
 	}
 	bin := t.TempDir()
-	fakeGo := "#!/bin/sh\ncd backend || exit 1\necho \"top=$(git rev-parse --show-toplevel)\"\necho \"dirty=$(git status --short | wc -l | tr -d ' ')\"\n"
+	fakeGo := "#!/bin/sh\necho \"go $*\"\ncd backend || exit 1\necho \"top=$(git rev-parse --show-toplevel)\"\necho \"dirty=$(git status --short | wc -l | tr -d ' ')\"\n"
 	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(fakeGo), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -255,6 +268,44 @@ func TestScript_whenRealPushes_thenModuleInSubdirSeesWholeTree(t *testing.T) {
 		}
 		if want := "top=" + gitx.Resolve(tc.top); !strings.Contains(string(out), want) || !strings.Contains(string(out), "dirty=0") {
 			t.Errorf("%s: want %s and dirty=0, got:\n%s", name, want, out)
+		}
+		if want := "go run github.com/trick77/ship@" + master + " pre-push origin"; !strings.Contains(string(out), want) {
+			t.Errorf("%s: want %q (master's sha), got:\n%s", name, want, out)
+		}
+	}
+}
+
+// Master cannot be resolved: no such repo (git says why) or no master there. The push is refused before go runs.
+func TestScript_whenMasterUnresolved_thenRefused(t *testing.T) {
+	dir := repo(t)
+	if err := os.WriteFile(filepath.Join(dir, "ship.yaml"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gitx.Git(dir, "add", "ship.yaml"); err != nil {
+		t.Fatal(err)
+	}
+	p, err := Install(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, _ := gitx.Head(dir)
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "go"), []byte("#!/bin/sh\necho ran go\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	empty := t.TempDir()
+	if _, err := gitx.Git(empty, "init", "-q"); err != nil {
+		t.Fatal(err)
+	}
+	for name, src := range map[string]string{"no repo": filepath.Join(t.TempDir(), "missing"), "no master": empty} {
+		shipOnGitHub(t, src)
+		cmd := exec.Command(p, "origin", "url")
+		cmd.Dir = dir
+		cmd.Env = gitx.CleanEnv("SHIP_CMD=", "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+		cmd.Stdin = strings.NewReader("refs/heads/master " + head + " refs/heads/master " + zero + "\n")
+		out, err := cmd.CombinedOutput()
+		if err == nil || !strings.Contains(string(out), "cannot resolve ship's master") || strings.Contains(string(out), "ran go") {
+			t.Errorf("%s: %v: %s", name, err, out)
 		}
 	}
 }
