@@ -90,15 +90,24 @@ func TestRun_whenDryRun_thenTagImagesReleaseMovingTags(t *testing.T) {
 }
 
 func TestRun_whenImagesOffGitHub_thenRefusedBeforeAnyCommand(t *testing.T) {
-	t.Setenv("RUNNER_ENVIRONMENT", "self-hosted")
 	c, err := config.Parse([]byte("images:\n  - {}\n"))
-	if err != nil || len(c.Images) != 1 {
-		t.Fatalf("parse: %v", err)
+	if err != nil {
+		t.Fatal(err)
 	}
-	// No clone: the refusal comes before git, gh or docker run.
-	out, err := capture(t, func() error { return Run(t.TempDir(), c, Options{Bump: "patch"}) })
-	if err == nil || !strings.Contains(err.Error(), "GitHub-hosted runners only") || out != "" {
-		t.Fatalf("err %v, out %q", err, out)
+	if len(c.Images) != 1 {
+		t.Fatalf("images: %+v", c.Images)
+	}
+	// Self-hosted runner, then a laptop (no RUNNER_ENVIRONMENT at all).
+	for _, env := range []string{"self-hosted", ""} {
+		t.Setenv("RUNNER_ENVIRONMENT", env)
+		if env == "" {
+			_ = os.Unsetenv("RUNNER_ENVIRONMENT")
+		}
+		// No clone: the refusal comes before git, gh or docker run.
+		out, err := capture(t, func() error { return Run(t.TempDir(), c, Options{Bump: "patch"}) })
+		if err == nil || !strings.Contains(err.Error(), "GitHub-hosted runners only") || out != "" {
+			t.Fatalf("RUNNER_ENVIRONMENT %q: err %v, out %q", env, err, out)
+		}
 	}
 }
 
