@@ -22,10 +22,10 @@ const script = `#!/bin/sh
 # Installed by ship hooks (github.com/trick77/ship). Runs the checked-out branch's ship pre-push.
 refs="$(cat)"
 gate=0
-while read -r local_ref local_sha _ _; do
+while read -r local_ref local_sha remote_ref _; do
 	[ -z "$local_ref" ] && continue
 	case "$local_sha" in *[!0]*) ;; *) continue ;; esac # a delete: all zeros, 40 (SHA-1) or 64 (SHA-256)
-	case "$local_ref" in refs/tags/*) continue ;; esac
+	case "$remote_ref" in refs/tags/*) continue ;; esac # what is updated decides, not the local name
 	gate=1
 done <<EOF
 $refs
@@ -59,7 +59,11 @@ func Install(root string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !inside(p, common) {
+	if _, ok := gitx.Inside(common, p); !ok {
+		if _, inTree := gitx.Inside(root, p); inTree {
+			return "", fmt.Errorf("pre-push hook path %s is in the working tree (core.hooksPath, e.g. husky or a "+
+				"tracked hooks dir): ship never writes tracked files; add `go tool ship pre-push` to that hook by hand", p)
+		}
 		return "", fmt.Errorf("pre-push hook path %s is outside this repo (core.hooksPath): installing there would "+
 			"gate every repo sharing it; unset core.hooksPath for this repo or add the hook to that dir by hand", p)
 	}
@@ -73,13 +77,6 @@ func Install(root string) (string, error) {
 }
 
 func ours(s string) bool { return strings.Contains(s, marker) }
-
-// inside reports whether p lies under dir, symlinks resolved (macOS /var vs /private/var) even where p does not
-// exist yet.
-func inside(p, dir string) bool {
-	rel, err := filepath.Rel(gitx.Resolve(dir), gitx.Resolve(p))
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, "../")
-}
 
 // Ref is one line git feeds a pre-push hook.
 type Ref struct{ Local, LocalSHA, Remote, RemoteSHA string }
@@ -108,7 +105,7 @@ func ParseRefs(r io.Reader) ([]Ref, error) {
 func Gated(refs []Ref) []Ref {
 	var out []Ref
 	for _, r := range refs {
-		if isZero(r.LocalSHA) || strings.HasPrefix(r.Local, "refs/tags/") {
+		if isZero(r.LocalSHA) || strings.HasPrefix(r.Remote, "refs/tags/") {
 			continue
 		}
 		out = append(out, r)

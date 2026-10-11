@@ -31,7 +31,7 @@ ui:                   # omit for no UI
   floor: 75
   build: npm ci && npm run build      # tsc -b && vite build: the typecheck
   lint: npm run lint                  # eslint / prettier --check; empty = none
-  test: npm run test -- --coverage    # must write lcov
+  test: npm run test -- --coverage --coverage.reporter=lcov --coverage.reporter=text-summary  # must write lcov
   lcov: ui/coverage/lcov.info         # repo-relative; SF: paths relative to ui.dir
 steps:                # repo-specific checks, run after lint
   - { name: openapi lint, run: npx spectral lint api.yaml }

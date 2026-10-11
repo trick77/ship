@@ -199,6 +199,23 @@ func TestDiffPath(t *testing.T) {
 	}
 }
 
+func TestChanged_whenInterHunkContextConfigured_thenOnlyChangedLines(t *testing.T) {
+	body := "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n"
+	dir := repo(t, map[string]string{"a.go": body})
+	base := mustGit(t, dir, "rev-parse", "HEAD")
+	mustGit(t, dir, "config", "diff.interHunkContext", "10")
+	write(t, dir, map[string]string{"a.go": strings.Replace(strings.Replace(body, "2\n", "TWO\n", 1), "9\n", "NINE\n", 1)})
+	got, err := Changed(dir, base)
+	if err != nil || !slices.Equal(got["a.go"], []int{2, 9}) {
+		t.Fatalf("got %v err %v", got, err)
+	}
+	// A hunk with context lines inside: only the + lines count, numbered across the context.
+	d, err := parseDiff("--- a/x\n+++ b/x\n@@ -1,4 +1,4 @@\n-a\n+A\n b\n c\n-d\n+D\n")
+	if err != nil || !slices.Equal(d["x"], []int{1, 4}) {
+		t.Fatalf("got %v err %v", d, err)
+	}
+}
+
 func TestChanged_whenFileMoved_thenOnlyEditedLines(t *testing.T) {
 	body := "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n"
 	dir := repo(t, map[string]string{"a/x.go": body})

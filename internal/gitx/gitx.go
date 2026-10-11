@@ -76,7 +76,7 @@ func Changed(root, base string) (map[string][]int, error) {
 	// path. Explicit prefixes: diff.noprefix or diff.mnemonicPrefix in a user's config would otherwise rename every path
 	// and the gate would match nothing, passing untested code.
 	// core.quotePath=false keeps non-ASCII names unquoted; names git still quotes are unquoted in diffPath.
-	diff, err := Git(root, "-c", "core.quotePath=false", "diff", "--no-color", "--no-ext-diff", "-U0", "-M",
+	diff, err := Git(root, "-c", "core.quotePath=false", "diff", "--no-color", "--no-ext-diff", "-U0", "--inter-hunk-context=0", "-M",
 		"--src-prefix=a/", "--dst-prefix=b/", base)
 	if err != nil {
 		return nil, err
@@ -102,13 +102,14 @@ func Changed(root, base string) (map[string][]int, error) {
 	return out, nil
 }
 
-// parseDiff reads a -U0 unified diff: "+++ b/<path>" names the file, "@@ -a,b +c,d @@" the added range. Hunk
-// bodies are skipped by their line counts, never by their text: a removed "-- x" and an added "++ y" read
-// "--- x" / "+++ y" and would otherwise pass for a file header.
+// parseDiff reads a -U0 unified diff: "+++ b/<path>" names the file, "@@ -a,b +c,d @@" opens a hunk. Changed lines
+// are the hunk's "+" lines, numbered from c; context lines (diff.interHunkContext can merge hunks across them) are
+// counted but never changed. Hunk bodies are walked by their line counts, never by their text: a removed "-- x"
+// and an added "++ y" read "--- x" / "+++ y" and would otherwise pass for a file header.
 func parseDiff(diff string) (map[string][]int, error) {
 	out := map[string][]int{}
 	cur := ""
-	oldLeft, newLeft := 0, 0
+	oldLeft, newLeft, newLine := 0, 0, 0
 	sc := bufio.NewScanner(strings.NewReader(diff))
 	sc.Buffer(make([]byte, 0, 1<<20), 64<<20)
 	for sc.Scan() {
@@ -118,10 +119,15 @@ func parseDiff(diff string) (map[string][]int, error) {
 			case strings.HasPrefix(line, "-"):
 				oldLeft--
 			case strings.HasPrefix(line, "+"):
+				if cur != "" {
+					out[cur] = append(out[cur], newLine)
+				}
 				newLeft--
+				newLine++
 			case strings.HasPrefix(line, " "):
 				oldLeft--
 				newLeft--
+				newLine++
 			}
 			continue // "\ No newline at end of file" and the like count for nothing
 		}
@@ -133,10 +139,7 @@ func parseDiff(diff string) (map[string][]int, error) {
 			if err != nil {
 				return nil, err
 			}
-			oldLeft, newLeft = oldN, n
-			for i := 0; cur != "" && i < n; i++ {
-				out[cur] = append(out[cur], start+i)
-			}
+			oldLeft, newLeft, newLine = oldN, n, start
 		}
 	}
 	return out, sc.Err()
@@ -222,6 +225,15 @@ func GoFiles(root string) ([]string, error) {
 	}
 	slices.Sort(files)
 	return files, nil
+}
+
+// Inside reports whether p lies under dir, both resolved (Resolve): never via a "../" path.
+func Inside(dir, p string) (rel string, ok bool) {
+	rel, err := filepath.Rel(Resolve(dir), Resolve(p))
+	if err != nil || rel == ".." || strings.HasPrefix(rel, "../") || strings.HasPrefix(rel, `..\`) {
+		return "", false
+	}
+	return filepath.ToSlash(rel), true
 }
 
 // Resolve resolves symlinks in the deepest existing ancestor of p and keeps the rest: the file (or its dirs) may

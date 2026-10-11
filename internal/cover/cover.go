@@ -55,6 +55,12 @@ func Excluded(path string, prefixes []string) bool {
 		if p == "" {
 			continue
 		}
+		if strings.HasSuffix(p, ".go") {
+			if path == p || strings.HasSuffix(path, "/"+p) {
+				return true // a single file
+			}
+			continue
+		}
 		if !strings.HasSuffix(p, "/") {
 			p += "/" // whole directories: "cmd" must not swallow internal/cmdline
 		}

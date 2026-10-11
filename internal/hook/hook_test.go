@@ -48,6 +48,14 @@ func TestParseRefsAndGated(t *testing.T) {
 	if g := Gated([]Ref{{Local: "(delete)", LocalSHA: zero256}}); len(g) != 0 {
 		t.Fatalf("SHA-256 delete gated: %v", g)
 	}
+	// The updated remote ref decides: a tag pushed onto a branch is gated, HEAD pushed as a tag is not.
+	g = Gated([]Ref{
+		{Local: "refs/tags/v1", LocalSHA: "1111111111111111111111111111111111111111", Remote: "refs/heads/master"},
+		{Local: "HEAD", LocalSHA: "2222222222222222222222222222222222222222", Remote: "refs/tags/x"},
+	})
+	if len(g) != 1 || g[0].Remote != "refs/heads/master" {
+		t.Fatalf("%v", g)
+	}
 	if _, err := ParseRefs(strings.NewReader("only two\n")); err == nil {
 		t.Fatal("malformed accepted")
 	}
@@ -109,6 +117,16 @@ func TestInstall_whenHooksPathInsideRepo_thenThere(t *testing.T) {
 	}
 }
 
+func TestInstall_whenHooksPathInWorkingTree_thenRefusedAsTracked(t *testing.T) {
+	dir := repo(t)
+	if _, err := gitx.Git(dir, "config", "core.hooksPath", ".husky/_"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Install(dir); err == nil || !strings.Contains(err.Error(), "in the working tree") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestInstall_whenHooksPathOutsideRepo_thenRefused(t *testing.T) {
 	dir := repo(t)
 	shared := filepath.Join(t.TempDir(), "hooks")
@@ -135,6 +153,8 @@ func TestScript(t *testing.T) {
 		"(delete) " + zero + " refs/heads/x " + head + "\n":           true,
 		"(delete) " + zero256 + " refs/heads/x " + head + "\n":        true,
 		"refs/tags/1.0.0 " + head + " refs/tags/1.0.0 " + zero + "\n": true,
+		"HEAD " + head + " refs/tags/x " + zero + "\n":                true,
+		"refs/tags/v1 " + head + " refs/heads/master " + zero + "\n":  false,
 		"": true,
 		"refs/heads/master " + head + " refs/heads/master " + zero + "\n": false,
 	} {

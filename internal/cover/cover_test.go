@@ -136,6 +136,13 @@ func TestLcov_whenSymlinkedRootOrOutside_thenResolvedOrError(t *testing.T) {
 	}
 }
 
+func TestLcov_whenRelativePathLeavesRepo_thenError(t *testing.T) {
+	in := "SF:../../lib/x.ts\nDA:1,1\nend_of_record\n"
+	if _, err := Lcov(strings.NewReader(in), "ui", t.TempDir()); err == nil || !strings.Contains(err.Error(), "outside the repo") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestLcov_whenMalformed_thenError(t *testing.T) {
 	for _, in := range []string{"DA:1,1\n", "SF:a\nDA:1\n", "SF:a\nDA:x,1\n", "SF:a\nDA:1,y\n"} {
 		if _, err := Lcov(strings.NewReader(in), "ui", "/r"); err == nil {
@@ -145,14 +152,17 @@ func TestLcov_whenMalformed_thenError(t *testing.T) {
 }
 
 func TestExcluded(t *testing.T) {
-	ex := []string{"cmd", "./gen/", ""}
+	ex := []string{"cmd", "./gen/", "", "internal/zz_generated.go"}
 	for p, want := range map[string]bool{
-		"cmd/x/main.go":         true,
-		"backend/cmd/x/main.go": true,
-		"gen/a.go":              true,
-		"internal/cmdline/a.go": false,
-		"cmdutil/a.go":          false,
-		"internal/a.go":         false,
+		"cmd/x/main.go":              true,
+		"backend/cmd/x/main.go":      true,
+		"gen/a.go":                   true,
+		"internal/cmdline/a.go":      false,
+		"cmdutil/a.go":               false,
+		"internal/zz_generated.go":   true,
+		"x/internal/zz_generated.go": true,
+		"internal/zz_generated.go2":  false,
+		"internal/a.go":              false,
 	} {
 		if got := Excluded(p, ex); got != want {
 			t.Errorf("%s: %v", p, got)

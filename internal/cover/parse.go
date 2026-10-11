@@ -104,11 +104,11 @@ func parseBlock(line string) (file string, start, end, stmts int, count int64, e
 // /private/var/... while a tool may write /var/..., and the paths must still meet. A path outside root is an error,
 // never a "../" path that silently matches no changed line.
 func relTo(root, p string) (string, error) {
-	rel, err := filepath.Rel(gitx.Resolve(root), gitx.Resolve(p))
-	if err != nil || rel == ".." || strings.HasPrefix(rel, "../") || strings.HasPrefix(rel, `..\`) {
+	rel, ok := gitx.Inside(root, p)
+	if !ok {
 		return "", fmt.Errorf("lcov: %s is outside the repo %s", p, root)
 	}
-	return filepath.ToSlash(rel), nil
+	return rel, nil
 }
 
 // Lcov reads an lcov report (vitest, c8, istanbul) into Lines from its DA: records. SF: paths that are relative
@@ -131,6 +131,9 @@ func Lcov(r io.Reader, base, root string) (Lines, error) {
 				cur = rel
 			} else {
 				cur = path.Clean(path.Join(filepath.ToSlash(base), filepath.ToSlash(sf)))
+				if cur == ".." || strings.HasPrefix(cur, "../") {
+					return nil, fmt.Errorf("lcov: %s (relative to %s) is outside the repo", sf, base)
+				}
 			}
 		case strings.HasPrefix(line, "DA:"):
 			if cur == "" {
