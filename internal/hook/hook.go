@@ -64,12 +64,9 @@ fi
 // Install writes the pre-push hook where git looks for it (core.hooksPath respected). An existing hook ship did not
 // install is never overwritten.
 func Install(root string) (string, error) {
-	p, err := gitx.Git(root, "rev-parse", "--git-path", "hooks/pre-push")
+	p, err := path(root)
 	if err != nil {
 		return "", err
-	}
-	if !filepath.IsAbs(p) {
-		p = filepath.Join(root, p)
 	}
 	// A core.hooksPath outside this repo (a global or shared hooks dir) would gate every repo using it, and refuse
 	// every push of a repo without ship.
@@ -95,6 +92,30 @@ func Install(root string) (string, error) {
 }
 
 func ours(s string) bool { return strings.Contains(s, marker) }
+
+// path is where git looks for the pre-push hook, absolute.
+func path(root string) (string, error) {
+	p, err := gitx.Git(root, "rev-parse", "--git-path", "hooks/pre-push")
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(root, p)
+	}
+	return p, nil
+}
+
+// Stale says whether the installed hook is ship's but not this ship's script: the hook is a copy made by ship hooks
+// while ship itself runs unpinned, so a clone keeps an old copy until someone reinstalls it. A hook ship did not
+// install, or none, is never stale.
+func Stale(root string) bool {
+	p, err := path(root)
+	if err != nil {
+		return false
+	}
+	b, err := os.ReadFile(p) //nolint:gosec // the hook path git reports
+	return err == nil && ours(string(b)) && string(b) != script
+}
 
 // Ref is one line git feeds a pre-push hook.
 type Ref struct{ Local, LocalSHA, Remote, RemoteSHA string }
