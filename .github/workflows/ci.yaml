@@ -1,0 +1,18 @@
+name: CI
+
+# By hand only: the pre-push hook runs the same gate locally. gh workflow run CI --ref <branch>
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    uses: ./.github/workflows/check.yaml
+    with:
+      ship: go run .

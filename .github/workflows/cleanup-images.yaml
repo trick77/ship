@@ -1,0 +1,64 @@
+name: Cleanup images
+
+# Reusable: keep the newest tagged versions of each ghcr package, delete the rest (orphaned untagged included;
+# multi-arch and attestation children of kept images are protected). A caller's cleanup-images.yaml:
+#
+#   on: workflow_dispatch
+#   jobs:
+#     cleanup:
+#       uses: trick77/ship/.github/workflows/cleanup-images.yaml@v0
+#       with: { packages: '["ipverse-core", "ipverse-core-dashboard"]' }
+#       permissions: { contents: read, packages: write }
+on:
+  workflow_call:
+    inputs:
+      packages:
+        description: JSON array of container package names.
+        type: string
+        required: true
+      keep:
+        type: number
+        default: 10
+      dry-run:
+        type: boolean
+        default: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJSON(inputs.packages) }}
+    steps:
+      # container-retention-policy panics on a package that does not exist yet (before the first release). Only a
+      # 404 means "not published yet": treating every non-2xx so would let a 403 skip retention forever, green.
+      - id: exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ github.repository_owner }}
+          PACKAGE: ${{ matrix.package }}
+        run: |
+          kind=orgs
+          [ "$(gh api "users/$OWNER" --jq .type)" = User ] && kind=users
+          status=$(gh api "$kind/$OWNER/packages/container/$PACKAGE" --silent -i 2>/dev/null | head -n1 | awk '{print $2}' || true)
+          case "$status" in
+            200) echo "exists=true" >> "$GITHUB_OUTPUT" ;;
+            404) echo "exists=false" >> "$GITHUB_OUTPUT"; echo "No $PACKAGE package yet." >> "$GITHUB_STEP_SUMMARY" ;;
+            *) echo "::error::packages API status '${status:-none}' for $PACKAGE"; exit 1 ;;
+          esac
+      - if: steps.exists.outputs.exists == 'true'
+        uses: snok/container-retention-policy@v3.1.0
+        with:
+          account: ${{ github.repository_owner }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          image-names: ${{ matrix.package }}
+          tag-selection: both
+          keep-n-most-recent: ${{ inputs.keep }}
+          # Never catch a release pushed in the last hour.
+          cut-off: 1h
+          dry-run: ${{ inputs.dry-run }}

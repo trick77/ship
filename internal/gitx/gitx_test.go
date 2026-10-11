@@ -1,0 +1,161 @@
+package gitx
+
+import (
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+)
+
+// Repo makes a git repo in a temp dir with one commit of files, for tests.
+func repo(t *testing.T, files map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "master"},
+		{"config", "user.email", "t@example.com"},
+		{"config", "user.name", "t"},
+		{"config", "commit.gpgsign", "false"},
+		{"config", "core.hooksPath", "/dev/null"},
+	} {
+		mustGit(t, dir, args...)
+	}
+	write(t, dir, files)
+	mustGit(t, dir, "add", "-A")
+	mustGit(t, dir, "commit", "-q", "-m", "init")
+	return dir
+}
+
+func write(t *testing.T, dir string, files map[string]string) {
+	t.Helper()
+	for p, s := range files {
+		full := filepath.Join(dir, p)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(s), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func mustGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	out, err := Git(dir, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func TestChanged_whenCommittedStagedUnstagedUntracked_thenAddedLines(t *testing.T) {
+	dir := repo(t, map[string]string{"a.go": "1\n2\n3\n4\n", "gone.go": "x\n"})
+	base := mustGit(t, dir, "rev-parse", "HEAD")
+	write(t, dir, map[string]string{"a.go": "1\nTWO\n3\n4\n5\n"})
+	mustGit(t, dir, "commit", "-qam", "change")
+	write(t, dir, map[string]string{"a.go": "ONE\nTWO\n3\n4\n5\n", "new.go": "a\nb", "ignored.log": "x\n", ".gitignore": "*.log\n"})
+	mustGit(t, dir, "rm", "-q", "gone.go")
+
+	got, err := Changed(dir, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got["a.go"], []int{1, 2, 5}) {
+		t.Errorf("a.go %v", got["a.go"])
+	}
+	if !slices.Equal(got["new.go"], []int{1, 2}) {
+		t.Errorf("new.go %v", got["new.go"])
+	}
+	if _, ok := got["ignored.log"]; ok {
+		t.Error("ignored file counted")
+	}
+	if _, ok := got["gone.go"]; ok {
+		t.Error("deleted file counted")
+	}
+	if !slices.Equal(got[".gitignore"], []int{1}) {
+		t.Errorf(".gitignore %v", got[".gitignore"])
+	}
+}
+
+func TestRepoQueries(t *testing.T) {
+	dir := repo(t, map[string]string{"a.go": "package a\n", "b.txt": "x\n"})
+	root, err := Root(filepath.Join(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r1, _ := filepath.EvalSymlinks(root); r1 != mustEval(t, dir) {
+		t.Fatalf("root %s, want %s", root, dir)
+	}
+	if d, _ := Dirty(dir); d != "" {
+		t.Fatalf("dirty %q", d)
+	}
+	write(t, dir, map[string]string{"c.go": "package a\n"})
+	if d, _ := Dirty(dir); !strings.Contains(d, "c.go") {
+		t.Fatalf("dirty %q", d)
+	}
+	files, err := GoFiles(dir)
+	if err != nil || !slices.Equal(files, []string{"a.go", "c.go"}) {
+		t.Fatalf("files %v err %v", files, err)
+	}
+	if err := os.Remove(filepath.Join(dir, "a.go")); err != nil {
+		t.Fatal(err)
+	}
+	if files, _ := GoFiles(dir); !slices.Equal(files, []string{"c.go"}) {
+		t.Fatalf("deleted file listed: %v", files)
+	}
+	head, _ := Head(dir)
+	mustGit(t, dir, "commit", "-q", "--allow-empty", "-m", "x [skip patch-coverage]")
+	if skip, err := SkipMarker(dir, head, "[skip patch-coverage]"); err != nil || !skip {
+		t.Fatalf("skip %v err %v", skip, err)
+	}
+	if mb, err := MergeBase(dir, head); err != nil || mb != head {
+		t.Fatalf("merge-base %s err %v", mb, err)
+	}
+	if _, err := Git(dir, "no-such-command"); err == nil {
+		t.Fatal("git error swallowed")
+	}
+}
+
+func mustEval(t *testing.T, p string) string {
+	t.Helper()
+	r, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+func TestAddedRange(t *testing.T) {
+	for h, want := range map[string][2]int{
+		"@@ -1,2 +3,4 @@":  {3, 4},
+		"@@ -1 +3 @@ func": {3, 1},
+		"@@ -5,2 +4,0 @@":  {4, 0},
+	} {
+		s, n, err := addedRange(h)
+		if err != nil || s != want[0] || n != want[1] {
+			t.Errorf("%s: %d,%d %v", h, s, n, err)
+		}
+	}
+	for _, h := range []string{"@@ -1", "@@ -1 3 @@", "@@ -1 +x @@", "@@ -1 +1,y @@"} {
+		if _, _, err := addedRange(h); err == nil {
+			t.Errorf("%s: no error", h)
+		}
+	}
+	if _, err := parseDiff("+++ b/a.go\n@@ bad\n"); err == nil {
+		t.Error("bad hunk accepted")
+	}
+}
+
+func TestCountLines(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, map[string]string{"e": "", "n": "a\nb\n", "u": "a\nb"})
+	for f, want := range map[string]int{"e": 0, "n": 2, "u": 2} {
+		if n, err := countLines(filepath.Join(dir, f)); err != nil || n != want {
+			t.Errorf("%s: %d %v", f, n, err)
+		}
+	}
+	if _, err := countLines(filepath.Join(dir, "missing")); err == nil {
+		t.Error("missing file")
+	}
+}
