@@ -11,10 +11,11 @@ name: Release
 #     release:
 #       uses: trick77/ship/.github/workflows/release.yaml@master
 #       with: { bump: "${{ inputs.bump }}" }
-#       permissions: { contents: write, packages: write }   # no images (ship.yaml): contents: write only
+#       permissions: { contents: write, packages: write, id-token: write }   # no images (ship.yaml): contents: write only
 #
-# The job sets no permissions of its own: it inherits the caller's grant, so a repo without images needs no
-# packages: write. The docker steps run only when ship.yaml has images:.
+# The job sets no permissions of its own: it inherits the caller's grant, so a repo without images needs neither
+# packages: write nor id-token: write (cosign's keyless signature: the workflow's OIDC token). The docker and cosign
+# steps run only when ship.yaml has images:.
 on:
   workflow_call:
     inputs:
@@ -24,6 +25,10 @@ on:
       go-dir:
         type: string
         default: "."
+      dir:
+        description: A nested Go module to release instead (ship release -dir), e.g. kit; empty = the repo.
+        type: string
+        default: ""
       ship:
         description: How to run ship; empty = ship at master's sha on GitHub.
         type: string
@@ -34,7 +39,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
-      group: release-${{ github.repository }}
+      # Per module: their tags never collide, and a group holds one pending run only, cancelling a third.
+      group: release-${{ github.repository }}-${{ inputs.dir }}
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7
@@ -44,10 +50,13 @@ jobs:
         with:
           go-version-file: ${{ inputs.go-dir }}/go.mod
           cache-dependency-path: ${{ inputs.go-dir }}/go.sum
-      # ship.yaml lives at the repo root; a top-level images: key (even an empty list) turns the docker steps on.
+      # ship.yaml lives at the repo root; a top-level images: key (even an empty list) turns the docker steps on. A
+      # nested module (dir) never builds them.
       - id: shape
+        env:
+          DIR: ${{ inputs.dir }}
         run: |
-          if [ -f ship.yaml ] && grep -q '^images:' ship.yaml; then
+          if [ -z "$DIR" ] && [ -f ship.yaml ] && grep -q '^images:' ship.yaml; then
             echo "images=true" >> "$GITHUB_OUTPUT"
           fi
       # Emulation for non-amd64 platforms (images.platforms, e.g. linux/arm64): a RUN step in a foreign-arch stage
@@ -65,11 +74,17 @@ jobs:
       # Exposes the Actions cache to buildx for --cache gha.
       - if: steps.shape.outputs.images == 'true'
         uses: crazy-max/ghaction-github-runtime@v4
+      # Signs each pushed image's digest. Version: internal/pins.Cosign (a test keeps them equal).
+      - if: steps.shape.outputs.images == 'true'
+        uses: sigstore/cosign-installer@v4
+        with:
+          cosign-release: v3.1.3
       - working-directory: ${{ inputs.go-dir }}
         env:
           GH_TOKEN: ${{ github.token }}
           SHIP: ${{ inputs.ship }}
           BUMP: ${{ inputs.bump }}
+          DIR: ${{ inputs.dir }}
         # Default: master's sha on GitHub, as the pre-push hook runs it. Not @master: the module proxy can still serve
         # an older master, and a release cannot be undone. Not github.job_workflow_sha: empty for a caller (2026-10-11).
         run: |
@@ -80,4 +95,5 @@ jobs:
             [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::cannot resolve ship's master on GitHub: '$sha'"; exit 1; }
             SHIP="go run github.com/trick77/ship@$sha"
           fi
-          $SHIP release "$BUMP" -cache gha
+          # -dir only when set: a ship input from before -dir still runs.
+          $SHIP release "$BUMP" -cache gha ${DIR:+-dir "$DIR"}
