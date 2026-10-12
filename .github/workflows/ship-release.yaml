@@ -1,12 +1,13 @@
 name: Ship release
 
-# By hand: tags ship itself (v-prefixed, a Go module). Usually run locally instead: go run . release minor
+# By hand: tags ship itself (v-prefixed, a Go module). CI cuts it on every master push (bump auto); this is the
+# fallback when that run failed, or to force a size.
 on:
   workflow_dispatch:
     inputs:
       bump:
         type: choice
-        options: [patch, minor, major]
+        options: [patch, minor, major, auto]
         default: patch
 
 jobs:

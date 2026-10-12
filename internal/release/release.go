@@ -8,6 +8,7 @@
 package release
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -25,7 +26,7 @@ import (
 
 // Options are the release flags.
 type Options struct {
-	Bump string // patch, minor, major
+	Bump string // patch, minor, major or Auto
 	// Cache is passed to buildx as cache backend type, e.g. "gha" in GitHub Actions; empty = no cache flags.
 	Cache  string
 	DryRun bool
@@ -118,6 +119,11 @@ func Run(root string, c *config.Config, o Options) error {
 	if err != nil {
 		return err
 	}
+	if head != tip && o.Bump == Auto {
+		// A newer push is on its way; its own run releases this commit with it.
+		fmt.Printf("ship: release auto SKIPPED: HEAD %s is behind origin/%s %s\n", head[:12], c.Base, tip[:12])
+		return nil
+	}
 	if head != tip {
 		return fmt.Errorf("HEAD %s is not origin/%s %s: release only what %s holds", head[:12], c.Base, tip[:12], c.Base)
 	}
@@ -141,7 +147,19 @@ func Run(root string, c *config.Config, o Options) error {
 			"gh api -X DELETE repos/<owner>/<repo>/git/refs/tags/%s", t, t, t)
 	}
 	prev := Latest(tags, c.TagPrefix)
-	next, err := Next(prev, o.Bump)
+	prevCommit := tagCommit[c.TagPrefix+prev.String()]
+	bump, plan := o.Bump, Plan{}
+	if o.Bump == Auto {
+		plan, err = auto(root, prevCommit)
+		if errors.Is(err, errSkip) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		bump = plan.Bump
+	}
+	next, err := Next(prev, bump)
 	if err != nil {
 		return err
 	}
@@ -151,7 +169,11 @@ func Run(root string, c *config.Config, o Options) error {
 		return err
 	}
 	short := head[:7]
-	fmt.Printf("ship: release %s -> %s (%s) at %s\n", prev, next, o.Bump, short)
+	label := bump
+	if o.Bump == Auto {
+		label = Auto + ": " + bump
+	}
+	fmt.Printf("ship: release %s -> %s (%s) at %s\n", prev, next, label, short)
 
 	// Without images nothing below compiles the code, and a Go module tag is permanent once the proxy has it: build
 	// before the tag, in a dry run too (no side effects, -o: no binary left in the tree). With images the build is
@@ -203,9 +225,12 @@ func Run(root string, c *config.Config, o Options) error {
 		names = append(names, name)
 	}
 
-	notes := changes(root, tagCommit[c.TagPrefix+prev.String()])
+	notes := changes(root, prevCommit)
 	if notes == "" {
 		notes = "Release " + next.String()
+	}
+	if len(plan.Notes) > 0 {
+		notes = strings.Join(plan.Notes, "\n\n") + "\n\n" + notes
 	}
 	if len(images) > 0 {
 		notes += "\n\nContainer images: " + strings.Join(images, ", ")
