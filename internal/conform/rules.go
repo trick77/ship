@@ -95,18 +95,9 @@ var uiDevDependencies = []string{"typescript", "prettier", "eslint", "typescript
 // exactVersion is an npm version with no range: x.y.z, a pre-release allowed.
 var exactVersion = regexp.MustCompile(`^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$`)
 
-// typescriptCap: typescript-eslint has no release supporting TypeScript 7 yet (its peer dependency caps below it);
-// dependabot's typescript ignore holds the major back, this catches a hand bump. Lift both once it does.
-const typescriptCap = 7
-
-// major is an exact version's major, -1 when it has none.
-func major(v string) int {
-	m, err := strconv.Atoi(v[:max(strings.IndexByte(v, '.'), 0)])
-	if err != nil {
-		return -1
-	}
-	return m
-}
+// typescriptCap: typescript-eslint's peer dependency takes typescript <6.1.0; dependabot's typescript ignore
+// (>=6.1.0) holds it back, this catches a hand bump. Lift both once typescript-eslint supports newer TypeScript.
+const typescriptCap = "6.1"
 
 // SetupImport is the first statement of the UI's src/test/setup.ts: jest-dom's matchers on vitest's expect, before
 // anything a repo adds there.
@@ -153,8 +144,8 @@ func (e *env) ui() result {
 		case !exactVersion.MatchString(v):
 			fs = append(fs, finding{what: fmt.Sprintf("devDependency %s %q: want an exact version (.npmrc save-exact)",
 				d, v), file: pj})
-		case d == "typescript" && major(v) >= typescriptCap:
-			fs = append(fs, finding{what: fmt.Sprintf("devDependency typescript %s: want below %d, typescript-eslint "+
+		case d == "typescript" && atLeast(v, typescriptCap):
+			fs = append(fs, finding{what: fmt.Sprintf("devDependency typescript %s: want below %s, typescript-eslint "+
 				"does not support it", v, typescriptCap), file: pj})
 		}
 	}

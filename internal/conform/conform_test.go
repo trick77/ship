@@ -325,13 +325,13 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 			"FAIL ui: devDependency typescript-eslint missing", "FAIL ui: devDependency eslint-config-prettier missing",
 			"FAIL ui: devDependency @eslint/js missing", "FAIL ui: devDependency eslint-plugin-react-hooks missing",
 			"FAIL ui: missing (ship init) (ui/eslint.config.js)"}},
-		// Dependabot moves a version per repo: any exact one passes, a range or TypeScript 7 does not.
+		// Dependabot moves a version per repo: any exact one passes, a range or TypeScript 6.1+ does not.
 		{"ui devDependency versions", appShip, func(r *repo) {
 			r.edit("ui/package.json", `"eslint": "10.12.0"`, `"eslint": "~10.13.0"`)
-			r.edit("ui/package.json", `"typescript": "6.0.3"`, `"typescript": "7.0.2"`)
+			r.edit("ui/package.json", `"typescript": "6.0.3"`, `"typescript": "6.1.0"`)
 			r.edit("ui/package.json", `"prettier": "3.9.9"`, `"prettier": "3.10.0"`)
 		}, []string{`FAIL ui: devDependency eslint "~10.13.0": want an exact version`,
-			"FAIL ui: devDependency typescript 7.0.2: want below 7, typescript-eslint does not support it"}},
+			"FAIL ui: devDependency typescript 6.1.0: want below 6.1, typescript-eslint does not support it"}},
 		{"ui script extra flag", appShip, func(r *repo) { r.edit("ui/package.json", `"vitest run"`, `"vitest run --passWithNoTests"`) },
 			[]string{`FAIL ui: script test "vitest run --passWithNoTests", want "vitest run"`}},
 		{"ui tsconfig without reference", appShip, func(r *repo) {
