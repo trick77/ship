@@ -276,6 +276,11 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 			r.edit(scaffold.Dependabot, "package-ecosystem: docker", "package-ecosystem: dockerx")
 		}, []string{`FAIL dependabot: gomod /backend: commit-message prefix "chore", want deps`,
 			"FAIL dependabot: no docker entry for /"}},
+		// transmission-ui's dev compose pins the daemon's image: only the docker-compose ecosystem bumps it.
+		{"dependabot compose", appShip, func(r *repo) {
+			r.write("compose.yaml", "services:\n  app:\n    image: ghcr.io/o/app:latest\n")
+			r.write("compose.dev.yaml", "services:\n  d:\n    image: \"ghcr.io/linuxserver/transmission:4.1.3-r0-ls360\"\n")
+		}, []string{"FAIL dependabot: no docker-compose entry for /"}},
 		{"dependabot nested module", strings.Replace(appShip, "dir: backend\n", "dir: backend\n  modules: [lib]\n", 1),
 			func(r *repo) { r.write("lib/go.mod", "module example.com/lib\n\ngo 1.27.1\n") },
 			[]string{"FAIL dependabot: no gomod entry for /lib"}},
@@ -445,6 +450,36 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestComposePins(t *testing.T) {
+	for _, tt := range []struct {
+		files map[string]string
+		want  bool
+	}{
+		{map[string]string{"compose.yaml": "    image: postgres:17-alpine\n"}, true},
+		{map[string]string{"docker-compose.override.yml": "  image: 'nginx:1.29@sha256:abc' # pinned\n"}, true},
+		{map[string]string{"compose.yaml": "    image: ghcr.io/o/app:latest\n    build: .\n"}, false},
+		{map[string]string{"compose.yaml": "    image: ghcr.io/o/app\n    image: localhost:5000/x\n"}, false},
+		{map[string]string{"compose.yaml": "    image: ghcr.io/o/app:${TAG}\n"}, false},
+		// Dependabot's "/" entry reads the root only.
+		{map[string]string{"deploy/compose.yaml": "    image: postgres:17\n"}, false},
+		{map[string]string{"stack.yaml": "    image: postgres:17\n"}, false},
+	} {
+		r := newRepo(t, tt.files)
+		if got := (&env{root: r.dir}).composePins(); got != tt.want {
+			t.Errorf("%v: %v, want %v", tt.files, got, tt.want)
+		}
+	}
+	// A conforming app gets the entry from init.
+	r := app(t)
+	r.write("compose.dev.yaml", "services:\n  db:\n    image: postgres:17-alpine\n")
+	if err := Init(r.dir, r.config(appShip), r.opts, false); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := r.run(appShip); err != nil {
+		t.Errorf("%v\n%s", err, out)
 	}
 }
 

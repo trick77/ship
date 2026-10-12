@@ -178,6 +178,20 @@ func TestFiles_whenGoModules_thenGomodEntryEach(t *testing.T) {
 	}
 }
 
+func TestFiles_whenComposePins_thenComposeEntry(t *testing.T) {
+	for _, compose := range []bool{false, true} {
+		files, err := Files(t.TempDir(), parse(t, ""), Facts{Visibility: "private", Compose: compose})
+		if err != nil {
+			t.Fatal(err)
+		}
+		dep := string(byPath(t, files, Dependabot).Want)
+		entry := "  - package-ecosystem: docker-compose\n    directory: /\n"
+		if strings.Contains(dep, entry) != compose || compose && !strings.Contains(dep, "      compose-major:") {
+			t.Errorf("compose %v, dependabot:\n%s", compose, dep)
+		}
+	}
+}
+
 func TestFiles_whenUIElsewhere_thenInputsAndOwnedFilesThere(t *testing.T) {
 	dir := t.TempDir()
 	c := parse(t, "ui:\n  dir: web\n")

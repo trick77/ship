@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -148,7 +149,7 @@ func newEnv(root string, c *config.Config, o Options) *env {
 // render renders the owned files with the visibility ship.yaml names, else GitHub's.
 func (e *env) render() {
 	f := scaffold.Facts{Repo: e.repo, Visibility: e.c.Visibility, DockerDirs: e.dockerDirs(),
-		NodeVersion: e.nodeVersion()}
+		Compose: e.composePins(), NodeVersion: e.nodeVersion()}
 	if f.Visibility == "" {
 		f.Visibility = e.vis
 	}
@@ -318,6 +319,37 @@ func (e *env) dockerDirs() []string {
 		}
 	}
 	return dirs
+}
+
+var (
+	// composeFile: the names Dependabot's docker-compose ecosystem reads at a directory (compose.yaml,
+	// compose.dev.yaml, docker-compose.override.yml).
+	composeFile = regexp.MustCompile(`^(?:docker-)?compose(?:[.-][\w.-]+)?\.ya?ml$`)
+	composeImg  = regexp.MustCompile(`(?m)^\s*image:\s*["']?([^\s"'#]+)`)
+)
+
+// composePins: a compose file at the root (tracked or untracked, not ignored) names an image by a version tag. A
+// :latest, untagged or ${VAR} reference is not one Dependabot could bump.
+func (e *env) composePins() bool {
+	for f := range e.listed() {
+		if strings.Contains(f, "/") || !composeFile.MatchString(f) {
+			continue
+		}
+		b, err := e.read(f)
+		if err != nil {
+			continue
+		}
+		for _, m := range composeImg.FindAllSubmatch(b, -1) {
+			ref, _, _ := strings.Cut(string(m[1]), "@")
+			if strings.Contains(ref, "$") {
+				continue
+			}
+			if i := strings.LastIndexByte(ref, ':'); i > strings.LastIndexByte(ref, '/') && ref[i+1:] != "latest" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // kitTags lists the kit/v* tags of ship on GitHub.
