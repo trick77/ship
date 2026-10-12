@@ -82,9 +82,10 @@ func (r runner) subjects() error {
 	if _, _, err := subject.Release(messages); err != nil {
 		return fmt.Errorf("release lines (reword: git rebase -i origin/%s): %w", r.c.Base, err)
 	}
+	what := "commits"
 	if t := os.Getenv(PRTitle); t != "" {
 		if os.Getenv(PRFork) == "true" {
-			cs = nil
+			cs, what = nil, "fork PR, title only"
 		}
 		cs = append(cs, gitx.Commit{Hash: "PR title", Subject: t})
 	}
@@ -103,7 +104,7 @@ func (r runner) subjects() error {
 		return fmt.Errorf("%d of %d not Go style `area: what` (reword: git rebase -i origin/%s):\n%s",
 			len(bad), n, r.c.Base, strings.Join(bad, "\n"))
 	}
-	fmt.Printf("ship: subjects ok: %d commits\n", n)
+	fmt.Printf("ship: subjects ok: %d %s\n", n, what)
 	return nil
 }
 
