@@ -412,7 +412,7 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 			r.write("backend/tools/x.go", "package x\n\nconst p = \"/"+"health\"\n")
 		}, []string{"FAIL handrolled: own version package: use github.com/trick77/ship/kit/version (backend/internal/version)",
 			"FAIL handrolled: own health route: use kit's (backend/internal/api/api.go)",
-			"FAIL handrolled: own shutdown signal handling: use kit's (backend/cmd/app/main.go)"}},
+			"FAIL handrolled: own shutdown signal handling: use kit's (run.Context, httpx.Serve) (backend/cmd/app/main.go)"}},
 		{"agents", appShip, func(r *repo) { r.write("AGENTS.md", "# AGENTS.md\n") },
 			[]string{"FAIL agents: no commit-subject line"}},
 		{"agents missing", appShip, func(r *repo) { r.remove("AGENTS.md") },

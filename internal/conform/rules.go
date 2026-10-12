@@ -466,7 +466,7 @@ func (e *env) handrolled() result {
 			fs = append(fs, finding{what: "own health route: use kit's", file: f})
 		}
 		if signalWait.Match(b) {
-			fs = append(fs, finding{what: "own shutdown signal handling: use kit's", file: f})
+			fs = append(fs, finding{what: "own shutdown signal handling: use kit's (run.Context, httpx.Serve)", file: f})
 		}
 	}
 	return result{findings: fs}
