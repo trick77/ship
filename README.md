@@ -89,3 +89,17 @@ jobs:
   cleanup:
     uses: trick77/ship/.github/workflows/cleanup-images.yaml@master   # inputs: packages (JSON), keep, dry-run
 ```
+
+## Adopting ship
+
+A repo moving to ship, in one PR (its own subject already Go style: the new gate checks it):
+
+1. `ship.yaml` at the root: only the keys that differ from the defaults above.
+2. `ship hooks` in every clone; drop the repo's own gate scripts and hooks.
+3. `.github/workflows/ci.yaml` and `release.yaml` calling the reusable ones, `workflow_dispatch` only: copy the
+   caller from the head comment of `check.yaml` / `release.yaml`.
+4. `ship check` green locally, then push: the hook runs it.
+5. AGENTS.md, verbatim with the repo's own areas:
+   ``- Commit subjects + PR titles: Go style `area: what` (`<area>: …`, `<area>: …`), gated by ship; release notes list them by area.``
+6. `.github/dependabot.yaml`: `commit-message: { prefix: deps }` on every ecosystem (`deps: bump …`). The gate
+   skips bots either way; the prefix keeps them out of "other" in the release notes.
