@@ -410,9 +410,12 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 			r.write("backend/testdata/x.go", "package x\n\nconst p = \"/"+"health\"\n")
 			r.write("backend/tools/go.mod", "module tools\n")
 			r.write("backend/tools/x.go", "package x\n\nconst p = \"/"+"health\"\n")
+			r.write("backend/internal/auth/oidc.go", "package auth\n\nimport (\n\toidc \"github.com/coreos/"+"go-oidc/v3/oidc\"\n)\n")
+			r.write("backend/internal/auth/oidc_test.go", "package auth\n\nimport _ \"github.com/coreos/"+"go-oidc/v3/oidc\"\n")
 		}, []string{"FAIL handrolled: own version package: use github.com/trick77/ship/kit/version (backend/internal/version)",
 			"FAIL handrolled: own health route: use kit's (backend/internal/api/api.go)",
-			"FAIL handrolled: own shutdown signal handling: use kit's (run.Context, httpx.Serve) (backend/cmd/app/main.go)"}},
+			"FAIL handrolled: own shutdown signal handling: use kit's (run.Context, httpx.Serve) (backend/cmd/app/main.go)",
+			"FAIL handrolled: own OIDC: use github.com/trick77/ship/kit/auth (backend/internal/auth/oidc.go)"}},
 		{"agents", appShip, func(r *repo) { r.write("AGENTS.md", "# AGENTS.md\n") },
 			[]string{"FAIL agents: no commit-subject line"}},
 		{"agents missing", appShip, func(r *repo) { r.remove("AGENTS.md") },
