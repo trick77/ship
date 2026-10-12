@@ -43,6 +43,7 @@ func Run(root string, c *config.Config) error {
 		// tests and steps check runs lose them.
 		{"fetch origin/" + c.Base, func() error { return r.runGit(root, "fetch", "-q", "origin", c.Base) }},
 		{"commit subjects", r.subjects},
+		{"secret scan", r.secrets},
 		{"ui build", r.uiBuild},
 		{"gofmt", r.gofmt},
 		{"go mod verify", r.modVerify},
