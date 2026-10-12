@@ -5,11 +5,10 @@ import (
 	"errors"
 	"net"
 	"net/http"
-	"os"
-	"os/signal"
 	"strings"
-	"syscall"
 	"time"
+
+	"github.com/trick77/ship/kit/run"
 )
 
 // NewServer is an http.Server with the canonical timeouts. ReadHeaderTimeout stops a slowloris holding connections;
@@ -27,7 +26,7 @@ func NewServer(addr string, h http.Handler) *http.Server {
 // Serve runs srv until ctx ends or the process gets SIGINT/SIGTERM, then drains in-flight requests for up to
 // shutdownTimeout. A clean shutdown returns nil; a listener that cannot bind returns its error at once.
 func Serve(ctx context.Context, srv *http.Server, shutdownTimeout time.Duration) error {
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	ctx, stop := run.Context(ctx)
 	defer stop()
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
