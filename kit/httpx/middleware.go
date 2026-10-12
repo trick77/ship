@@ -79,6 +79,10 @@ func (w *statusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return http.NewResponseController(w.ResponseWriter).Hijack()
 }
 
+// DefaultProbePaths are the paths Health mounts, AccessLog's default ProbePaths. A func, so no caller can change
+// every other caller's default.
+func DefaultProbePaths() []string { return []string{"/healthz", "/readyz"} }
+
 // AccessLogOptions shapes AccessLog. The zero value logs every request under a freshly generated request id.
 type AccessLogOptions struct {
 	// RequestIDHeader names the header the id is echoed on, and read from when TrustRequestID is set. Empty means
@@ -94,8 +98,13 @@ type AccessLogOptions struct {
 	NoRequestID bool
 	// ClientIP resolves the logged ip; nil means ClientIP(r, 0), the TCP peer.
 	ClientIP func(*http.Request) string
-	// Quiet paths are not logged while they succeed (probes, polled endpoints); a failing one still is.
+	// Quiet paths are not logged while they succeed (polled endpoints); a failing one still is.
 	Quiet []string
+	// ProbePaths are never logged, whatever the status, and run no OnRecord: the orchestrator hits them every few
+	// seconds, and Health logs readiness when it changes, so a 503 line per probe is noise. nil means
+	// DefaultProbePaths (where Health mounts them); an app mounting the probes elsewhere names its paths, and an
+	// empty non-nil slice logs probes like any path.
+	ProbePaths []string
 	// Skip drops a request's line, and its OnRecord, when it returns true. Quiet is the common case of it.
 	Skip func(r *http.Request, status int) bool
 	// Attrs appends fields to the line.
@@ -137,6 +146,14 @@ func AccessLog(log *slog.Logger, opts AccessLogOptions) func(http.Handler) http.
 	for _, p := range opts.Quiet {
 		quiet[p] = true
 	}
+	probePaths := opts.ProbePaths
+	if probePaths == nil {
+		probePaths = DefaultProbePaths()
+	}
+	probe := make(map[string]bool, len(probePaths))
+	for _, p := range probePaths {
+		probe[p] = true
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := r.Context()
@@ -161,7 +178,7 @@ func AccessLog(log *slog.Logger, opts AccessLogOptions) func(http.Handler) http.
 				if status == 0 {
 					status = http.StatusOK
 				}
-				if (quiet[r.URL.Path] && status < 400) || (opts.Skip != nil && opts.Skip(r, status)) {
+				if probe[r.URL.Path] || (quiet[r.URL.Path] && status < 400) || (opts.Skip != nil && opts.Skip(r, status)) {
 					return
 				}
 				lvl := routine.Level() // per request: a *slog.LevelVar may change at runtime

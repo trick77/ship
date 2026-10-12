@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -83,6 +84,120 @@ func TestHealth(t *testing.T) {
 	Health(http.NewServeMux(), nil)
 }
 
+// /readyz logs transitions only: the orchestrator probes every few seconds, a line per failing probe is noise.
+func TestHealthLogsTransitions(t *testing.T) {
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	failing := map[string]bool{}
+	check := func(name string) Check {
+		return Check{Name: name, Run: func(context.Context) error {
+			if failing[name] {
+				return errors.New(name + " refused")
+			}
+			return nil
+		}}
+	}
+	mux := http.NewServeMux()
+	Health(mux, log, check("cache"), check("db"))
+	probe := func() []string {
+		logs.Reset()
+		mux.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/readyz", nil))
+		return strings.Split(strings.TrimSpace(logs.String()), "\n")
+	}
+	quiet := func(step string) {
+		t.Helper()
+		if lines := probe(); lines[0] != "" {
+			t.Errorf("%s: logged %q", step, lines)
+		}
+	}
+	logged := func(step string, want ...string) {
+		t.Helper()
+		lines := probe()
+		if len(lines) != 1 {
+			t.Fatalf("%s: want one line, got %q", step, lines)
+		}
+		for _, w := range want {
+			if !strings.Contains(lines[0], w) {
+				t.Errorf("%s: %q lacks %q", step, lines[0], w)
+			}
+		}
+	}
+
+	quiet("ready")
+	failing["db"] = true
+	logged("db fails", "level=WARN", `msg="Readiness check failed"`, "check=db", "db refused")
+	quiet("db still failing")
+	quiet("db still failing")
+	failing["cache"] = true
+	logged("cache fails first", "level=WARN", "check=cache", "cache refused")
+	failing["cache"] = false
+	logged("back to db", "level=WARN", "check=db")
+	failing["db"] = false
+	logged("ready again", "level=INFO", `msg="Readiness restored"`, "check=db")
+	quiet("still ready")
+}
+
+// An unnamed check fails like any other; a probe whose caller hung up changes nothing.
+func TestHealthTransitionEdges(t *testing.T) {
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	dbDown, cacheDown := true, false
+	mux := http.NewServeMux()
+	Health(mux, log,
+		Check{Name: "db", Run: func(context.Context) error {
+			if dbDown {
+				return errors.New("db refused")
+			}
+			return nil
+		}},
+		Check{Run: func(context.Context) error {
+			if cacheDown {
+				return errors.New("cache refused")
+			}
+			return nil
+		}})
+	probe := func(ctx context.Context) string {
+		logs.Reset()
+		mux.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(ctx, http.MethodGet, "/readyz", nil))
+		return logs.String()
+	}
+	if got := probe(t.Context()); !strings.Contains(got, "check=db") {
+		t.Fatalf("db failure not logged: %s", got)
+	}
+	dbDown, cacheDown = false, true
+	if got := probe(t.Context()); !strings.Contains(got, "cache refused") || strings.Contains(got, "restored") {
+		t.Errorf("unnamed check's failure taken for ready: %s", got)
+	}
+	dbDown, cacheDown = true, false
+	gone, cancel := context.WithCancel(t.Context())
+	cancel()
+	if got := probe(gone); got != "" {
+		t.Errorf("hung-up probe logged: %s", got)
+	}
+	dbDown = false
+	if got := probe(t.Context()); !strings.Contains(got, "Readiness restored") {
+		t.Errorf("restore not logged: %s", got)
+	}
+}
+
+// Concurrent failing probes log the transition once (go test -race checks the state).
+func TestHealthTransitionsConcurrent(t *testing.T) {
+	var logs bytes.Buffer // slog's handlers serialize their writes
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	mux := http.NewServeMux()
+	Health(mux, log, Check{Name: "db", Run: func(context.Context) error { return errors.New("down") }})
+	var wg sync.WaitGroup
+	for range 50 {
+		wg.Go(func() {
+			mux.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/readyz", nil))
+		})
+	}
+	wg.Wait()
+	if n := strings.Count(logs.String(), "Readiness check failed"); n != 1 {
+		t.Errorf("transition logged %d times: %s", n, logs.String())
+	}
+}
+
 func TestAccessLog(t *testing.T) {
 	var logs bytes.Buffer
 	log := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -97,14 +212,20 @@ func TestAccessLog(t *testing.T) {
 	mux.HandleFunc("/teapot", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(418); w.WriteHeader(500) })
 	mux.HandleFunc("/boom", func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "x", 500) })
 	mux.HandleFunc("/401", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(401) })
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	failable := func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("fail") != "" {
 			w.WriteHeader(503)
 			return
 		}
 		_, _ = w.Write([]byte("ok"))
-	})
-	h := AccessLog(log, AccessLogOptions{TrustRequestID: true, Quiet: []string{"/healthz"}})(mux)
+	}
+	mux.HandleFunc("/status", failable)
+	mux.HandleFunc("/readyz", failable)
+	mux.HandleFunc("/probe", failable)
+	var records []string
+	opts := AccessLogOptions{TrustRequestID: true, Quiet: []string{"/status"},
+		OnRecord: func(r *http.Request, _ string, _ int, _ time.Duration) { records = append(records, r.URL.Path) }}
+	h := AccessLog(log, opts)(mux)
 
 	type line struct {
 		Level, Msg, Method, Path, RequestID string
@@ -165,11 +286,30 @@ func TestAccessLog(t *testing.T) {
 	if l, _ = do("/no-such-page", ""); l.Level != "DEBUG" || l.Status != 404 {
 		t.Errorf("404 line = %+v", l)
 	}
-	if l, _ = do("/healthz", ""); l.Msg != "" {
+	records = nil
+	if l, _ = do("/status", ""); l.Msg != "" {
 		t.Errorf("quiet path logged: %+v", l)
 	}
-	if l, _ = do("/healthz?fail=1", ""); l.Status != 503 {
+	if l, _ = do("/status?fail=1", ""); l.Status != 503 {
 		t.Errorf("failing quiet path not logged: %+v", l)
+	}
+	// A probe is Health's to report, on the transition: never logged, not even failing.
+	for _, p := range []string{"/readyz", "/readyz?fail=1"} {
+		if l, _ = do(p, ""); l.Msg != "" {
+			t.Errorf("probe %s logged: %+v", p, l)
+		}
+	}
+	if !slices.Equal(records, []string{"/status"}) {
+		t.Errorf("OnRecord ran for %q, want the failing quiet path only", records)
+	}
+	// ProbePaths replaces the default: a probe mounted elsewhere is silent, /readyz is an ordinary path again.
+	opts.ProbePaths = []string{"/probe"}
+	h = AccessLog(log, opts)(mux)
+	if l, _ = do("/probe?fail=1", ""); l.Msg != "" {
+		t.Errorf("custom probe logged: %+v", l)
+	}
+	if l, _ = do("/readyz?fail=1", ""); l.Status != 503 {
+		t.Errorf("/readyz outside ProbePaths not logged: %+v", l)
 	}
 	_ = AccessLog(nil, AccessLogOptions{})
 }
