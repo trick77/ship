@@ -465,6 +465,9 @@ func TestComposePins(t *testing.T) {
 		{map[string]string{"compose.yaml": "    image: ghcr.io/o/app:${TAG}\n"}, false},
 		{map[string]string{"compose.yaml": "    image: timescale/timescaledb-ha:pg17.2-ts2.29.1\n"}, true},
 		{map[string]string{"compose.yaml": "    image: ghcr.io/linuxserver/transmission:4.1.3-r0-ls360\n"}, true},
+		{map[string]string{"compose.yaml": "    image: ghcr.io/o/tool@sha256:0123abcd\n"}, true},
+		{map[string]string{"compose.yaml": "    image: \"redis:alpine@sha256:0123abcd\"\n"}, true},
+		{map[string]string{"compose.yaml": "    image: ghcr.io/o/tool@${DIGEST}\n"}, false},
 		// A channel name is no version.
 		{map[string]string{"compose.yaml": "    image: redis:alpine\n    image: debian:stable\n    image: node:lts\n"}, false},
 		// Dependabot's "/" entry reads the root only.
