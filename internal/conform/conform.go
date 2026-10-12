@@ -328,8 +328,8 @@ var (
 	composeImg  = regexp.MustCompile(`(?m)^\s*image:\s*["']?([^\s"'#]+)`)
 )
 
-// composePins: a compose file at the root (tracked or untracked, not ignored) names an image by a version tag. A
-// :latest, untagged or ${VAR} reference is not one Dependabot could bump.
+// composePins: a compose file at the root (tracked or untracked, not ignored) names an image by a version tag. An
+// untagged, ${VAR} or digit-free tag (latest, alpine, stable, lts) is not one Dependabot could bump.
 func (e *env) composePins() bool {
 	for f := range e.listed() {
 		if strings.Contains(f, "/") || !composeFile.MatchString(f) {
@@ -344,7 +344,9 @@ func (e *env) composePins() bool {
 			if strings.Contains(ref, "$") {
 				continue
 			}
-			if i := strings.LastIndexByte(ref, ':'); i > strings.LastIndexByte(ref, '/') && ref[i+1:] != "latest" {
+			// A version names a number (17-alpine, 2.29.1-pg17, 4.1.3-r0-ls360); a channel name does not.
+			if i := strings.LastIndexByte(ref, ':'); i > strings.LastIndexByte(ref, '/') &&
+				strings.ContainsAny(ref[i+1:], "0123456789") {
 				return true
 			}
 		}
