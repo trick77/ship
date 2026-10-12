@@ -15,7 +15,8 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Never on master: a second push would cancel the release mid-flight, leaving a tag without its GitHub release.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
 jobs:
   check:
@@ -43,3 +44,15 @@ jobs:
           cache: npm
           cache-dependency-path: testdata/ui/package-lock.json
       - run: go test -race -count=1 ./...
+
+  # A merge is already live for every consumer (they run master's sha): tag it, with notes, once both gates pass.
+  # auto: patch, or a `Release: minor|major` + `Release-note:` line in a commit; docs/tests only → no release.
+  release:
+    needs: [check, test-macos]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    uses: ./.github/workflows/release.yaml
+    with:
+      bump: auto
+      ship: go run .
+    permissions:
+      contents: write

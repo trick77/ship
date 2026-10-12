@@ -63,11 +63,20 @@ type runner struct {
 }
 
 // subjects checks that every commit the branch adds to origin/<base> has a Go-style subject (`area: what`). Merges
-// and bots (Dependabot) are skipped: neither is written by hand.
+// and bots (Dependabot) are skipped: neither is written by hand. The branch's `Release:` lines are checked here
+// too: once merged, a typo there would fail every auto release until one is cut by hand.
 func (r runner) subjects() error {
-	cs, err := gitx.Commits(r.root, "origin/"+r.c.Base+"..HEAD")
+	rng := "origin/" + r.c.Base + "..HEAD"
+	cs, err := gitx.Commits(r.root, rng)
 	if err != nil {
 		return err
+	}
+	messages, err := gitx.Messages(r.root, rng)
+	if err != nil {
+		return err
+	}
+	if _, _, err := subject.Release(messages); err != nil {
+		return fmt.Errorf("release lines (reword: git rebase -i origin/%s): %w", r.c.Base, err)
 	}
 	if t := os.Getenv(PRTitle); t != "" {
 		cs = append(cs, gitx.Commit{Hash: "PR title", Subject: t})

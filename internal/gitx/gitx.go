@@ -137,6 +137,11 @@ func Commits(root, rev string) ([]Commit, error) {
 	return cs, nil
 }
 
+// Messages lists the full commit messages of rev (a range like base..HEAD), oldest first, merges included.
+func Messages(root, rev string) ([]string, error) {
+	return GitZ(root, "log", "--reverse", "--format=%B%x00", rev)
+}
+
 // Changed returns the lines the working tree adds or changes against base, per repo-relative path: committed,
 // staged and unstaged edits plus every line of untracked, non-ignored files. Deleted lines are not lines.
 func Changed(root, base string) (map[string][]int, error) {

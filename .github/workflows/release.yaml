@@ -6,7 +6,7 @@ name: Release
 #   on:
 #     workflow_dispatch:
 #       inputs:
-#         bump: { type: choice, options: [patch, minor, major], default: patch }
+#         bump: { type: choice, options: [patch, minor, major, auto], default: patch }
 #   jobs:
 #     release:
 #       uses: trick77/ship/.github/workflows/release.yaml@master
@@ -69,7 +69,7 @@ jobs:
         # Default: master's sha on GitHub, as the pre-push hook runs it. Not @master: the module proxy can still serve
         # an older master, and a release cannot be undone. Not github.job_workflow_sha: empty for a caller (2026-10-11).
         run: |
-          case "$BUMP" in patch|minor|major) ;; *) echo "::error::bump '$BUMP'"; exit 1 ;; esac
+          case "$BUMP" in patch|minor|major|auto) ;; *) echo "::error::bump '$BUMP'"; exit 1 ;; esac
           if [ -z "$SHIP" ]; then
             # Exactly refs/heads/master: ls-remote matches by suffix, so x/refs/heads/master would match too.
             sha="$(git ls-remote https://github.com/trick77/ship refs/heads/master | awk '$2 == "refs/heads/master" { print $1 }')"

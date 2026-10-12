@@ -6,8 +6,9 @@ deliberately.
 
 - Gate here: `go run . check` before every push (ship is not a go tool of itself: no pre-push hook, run it by hand).
   CI runs automatically here (public: free minutes), full gate on Linux + tests on macOS.
-- Release: `go run . release <bump>` (tags `v`-prefixed, Go module). Consumers get it on their next run; a
-  breaking `ship.yaml` or behavior change = minor bump + note in the release.
+- Release: automatic, CI on every master push (`release auto`: patch; docs/tests-only → none). Breaking
+  `ship.yaml` or behavior change = minor: `Release: minor` + `Release-note: …` lines in the commit message, same
+  PR (minor without note fails the run). Fallback by hand: `go run . release <bump>` or the Ship release workflow.
 - master is live: the reusable workflows are consumed `@master`. Merge to master only what is releasable; keep
   workflow inputs and ship.yaml backward compatible.
 - Dependencies stay minimal (stdlib + yaml): `go run ...@master` builds them on every machine. `go 1.24` floor.

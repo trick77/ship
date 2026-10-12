@@ -25,7 +25,7 @@ import (
 
 // Options are the release flags.
 type Options struct {
-	Bump string // patch, minor, major
+	Bump string // patch, minor, major or Auto
 	// Cache is passed to buildx as cache backend type, e.g. "gha" in GitHub Actions; empty = no cache flags.
 	Cache  string
 	DryRun bool
@@ -118,6 +118,13 @@ func Run(root string, c *config.Config, o Options) error {
 	if err != nil {
 		return err
 	}
+	if head != tip && o.Bump == Auto {
+		// Behind: a newer push is on its way, and its own run releases this commit with it. Ahead or diverged is
+		// local work, refused below as for any bump.
+		if _, err := gitx.Git(root, "merge-base", "--is-ancestor", head, tip); err == nil {
+			return skipped("HEAD %s is behind origin/%s %s, whose run releases both", shortSHA(head), c.Base, shortSHA(tip))
+		}
+	}
 	if head != tip {
 		return fmt.Errorf("HEAD %s is not origin/%s %s: release only what %s holds", head[:12], c.Base, tip[:12], c.Base)
 	}
@@ -141,7 +148,35 @@ func Run(root string, c *config.Config, o Options) error {
 			"gh api -X DELETE repos/<owner>/<repo>/git/refs/tags/%s", t, t, t)
 	}
 	prev := Latest(tags, c.TagPrefix)
-	next, err := Next(prev, o.Bump)
+	prevCommit := tagCommit[c.TagPrefix+prev.String()]
+	if o.Bump == Auto && prevCommit == "" {
+		return fmt.Errorf("release auto needs a previous tag on origin: cut the first one by hand")
+	}
+	if o.Bump == Auto {
+		if shipped, err := shippedSince(root, prevCommit); err != nil {
+			return err
+		} else if !shipped {
+			return skipped("only docs, tests or fixtures changed since %s", shortSHA(prevCommit))
+		}
+	}
+	// The Release-note lines go into every release, a bump by hand included: the fallback for a failed auto run
+	// must not drop the breaking change's note. Their errors stop auto only; a bump by hand is the way past them.
+	bump, releaseNotes := o.Bump, []string(nil)
+	if prevCommit != "" {
+		messages, err := gitx.Messages(root, prevCommit+"..HEAD")
+		if err != nil && o.Bump == Auto {
+			return err
+		}
+		asked, n, err := subject.Release(messages)
+		if err != nil && o.Bump == Auto {
+			return fmt.Errorf("release auto (nothing tagged; fix by hand: go run . release minor|major): %w", err)
+		}
+		releaseNotes = n
+		if o.Bump == Auto {
+			bump = asked
+		}
+	}
+	next, err := Next(prev, bump)
 	if err != nil {
 		return err
 	}
@@ -151,7 +186,11 @@ func Run(root string, c *config.Config, o Options) error {
 		return err
 	}
 	short := head[:7]
-	fmt.Printf("ship: release %s -> %s (%s) at %s\n", prev, next, o.Bump, short)
+	label := bump
+	if o.Bump == Auto {
+		label = Auto + ": " + bump
+	}
+	fmt.Printf("ship: release %s -> %s (%s) at %s\n", prev, next, label, short)
 
 	// Without images nothing below compiles the code, and a Go module tag is permanent once the proxy has it: build
 	// before the tag, in a dry run too (no side effects, -o: no binary left in the tree). With images the build is
@@ -203,9 +242,12 @@ func Run(root string, c *config.Config, o Options) error {
 		names = append(names, name)
 	}
 
-	notes := changes(root, tagCommit[c.TagPrefix+prev.String()])
+	notes := changes(root, prevCommit)
 	if notes == "" {
 		notes = "Release " + next.String()
+	}
+	if len(releaseNotes) > 0 {
+		notes = strings.Join(releaseNotes, "\n\n") + "\n\n" + notes
 	}
 	if len(images) > 0 {
 		notes += "\n\nContainer images: " + strings.Join(images, ", ")
@@ -267,7 +309,7 @@ func changes(root, prev string) string {
 	}
 	cs, err := gitx.Commits(root, prev+"..HEAD")
 	if err != nil {
-		fmt.Printf("ship: no notes, commits since %s unreadable: %v\n", prev[:min(12, len(prev))], err)
+		fmt.Printf("ship: no notes, commits since %s unreadable: %v\n", shortSHA(prev), err)
 		return ""
 	}
 	return Notes(cs)

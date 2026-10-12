@@ -5,7 +5,7 @@
 //	ship check                     everything CI checks, locally
 //	ship hooks                     install the pre-push hook
 //	ship pre-push                  the hook's gate (git runs it)
-//	ship release [patch|minor|major] [-cache gha] [-dry-run]
+//	ship release [patch|minor|major|auto] [-cache gha] [-dry-run]
 package main
 
 import (
@@ -22,10 +22,11 @@ import (
 
 const usage = `usage: ship <command>
 
-  check                                  run the gate: everything CI checks, locally
-  hooks                                  install the pre-push hook running the gate
-  pre-push                               the hook's gate (git runs it)
-  release [patch|minor|major] [flags]    tag, build and push images, GitHub release
+  check                                       run the gate: everything CI checks, locally
+  hooks                                       install the pre-push hook running the gate
+  pre-push                                    the hook's gate (git runs it)
+  release [patch|minor|major|auto] [flags]    tag, build and push images, GitHub release; auto: patch, or what
+                                              the commits since the last tag ask for (Release: minor|major)
 `
 
 func main() {
