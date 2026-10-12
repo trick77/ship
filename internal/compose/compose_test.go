@@ -41,7 +41,9 @@ func TestImage_whenServiceNamed_thenItsImage(t *testing.T) {
 			"  db:\n    image: \"timescale/timescaledb:2.29.1-pg17\" # bumped by Dependabot\n",
 		// Same image again: no conflict.
 		"compose.override.yaml": "services:\n  db:\n    image: timescale/timescaledb:2.29.1-pg17\n",
-		"deploy/compose.yaml":   "services:\n  db:\n    image: postgres:16\n",
+		// An override without image: the other files name it.
+		"compose.dev.yaml":    "services:\n  db:\n    ports: [\"5432:5432\"]\n",
+		"deploy/compose.yaml": "services:\n  db:\n    image: postgres:16\n",
 	})
 	img, err := Image(dir, "db")
 	if err != nil || img != "timescale/timescaledb:2.29.1-pg17" {

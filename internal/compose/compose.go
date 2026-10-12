@@ -81,15 +81,16 @@ func Image(root, service string) (string, error) {
 		return "", fmt.Errorf("compose:%s: %w", service, err)
 	}
 	var img, in string
-	var names []string
+	var names, defined []string
 	for _, s := range all {
 		names = append(names, s.Name)
 		if s.Name != service {
 			continue
 		}
+		defined = append(defined, s.File)
 		switch {
 		case s.Image == "":
-			return "", fmt.Errorf("compose:%s: service has no image: (%s)", service, s.File)
+			continue // an override file's ports or env: the image is another file's
 		case strings.Contains(s.Image, "$"):
 			return "", fmt.Errorf("compose:%s: image %q uses a variable, ship cannot resolve it (%s)", service, s.Image, s.File)
 		case !Pinned(s.Image):
@@ -98,6 +99,9 @@ func Image(root, service string) (string, error) {
 			return "", fmt.Errorf("compose:%s: image %q (%s) and %q (%s) differ", service, img, in, s.Image, s.File)
 		}
 		img, in = s.Image, s.File
+	}
+	if img == "" && len(defined) > 0 {
+		return "", fmt.Errorf("compose:%s: service has no image: (%s)", service, strings.Join(defined, ", "))
 	}
 	if img == "" {
 		slices.Sort(names)

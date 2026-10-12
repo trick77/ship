@@ -92,7 +92,7 @@ Gates beyond the build and tests, all hard failures:
 - `postgres:`: `SHIP_TEST_DSN` set already (a server of one's own) is used as is; else check starts the container
   (docker, loopback, free port), waits for it and removes it after go test, on failure and on Ctrl-C too.
   `compose:<service>`: the image that service names in the root compose files (`compose*.yaml`,
-  `docker-compose*.yml`), the one pin Dependabot's docker-compose ecosystem bumps; a missing service, no `image:`,
+  `docker-compose*.yaml`, `.yml` too), the one pin Dependabot's docker-compose ecosystem bumps; a missing service, no `image:`,
   `${VAR}`, no tag or two files disagreeing fail. A literal image a compose service names too fails conform.
 
 TypeScript/React: `ui.build` is the typecheck (`tsc -b && vite build`), `ui.lint` runs ESLint/Prettier, `ui.test`
