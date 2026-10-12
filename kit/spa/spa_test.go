@@ -114,3 +114,83 @@ func TestFiles(t *testing.T) {
 		}
 	}
 }
+
+func revalidate(h http.Handler, path, tag string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.Header.Set("If-None-Match", tag)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestShellETag(t *testing.T) {
+	h := Handler(built, Options{})
+	rec := serve(h, "/hosts/3")
+	tag := rec.Header().Get("ETag")
+	if rec.Code != 200 || tag == "" || rec.Header().Get("Cache-Control") != "no-cache" {
+		t.Fatalf("shell = %d %v", rec.Code, rec.Header())
+	}
+	if rec := revalidate(h, "/", tag); rec.Code != http.StatusNotModified || rec.Body.Len() != 0 {
+		t.Errorf("revalidation = %d %q, want 304", rec.Code, rec.Body.String())
+	}
+	if rec := revalidate(h, "/", `"stale"`); rec.Code != 200 || !strings.Contains(rec.Body.String(), "shell") {
+		t.Errorf("stale tag = %d %q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGate(t *testing.T) {
+	h := Handler(built, Options{Gate: func(w http.ResponseWriter, r *http.Request) bool {
+		if r.Header.Get("Cookie") == "" {
+			http.Redirect(w, r, "/login", http.StatusFound)
+			return false
+		}
+		return true
+	}})
+	for _, p := range []string{"/", "/index.html", "/deep/link"} {
+		if rec := serve(h, p); rec.Code != http.StatusFound || rec.Header().Get("Location") != "/login" ||
+			rec.Header().Get("ETag") != "" {
+			t.Errorf("%s anonymous = %d %v", p, rec.Code, rec.Header())
+		}
+	}
+	// Real files and assets stay reachable: the login page needs them.
+	for _, p := range []string{"/icon.svg", "/assets/app-abc.js"} {
+		if rec := serve(h, p); rec.Code != 200 {
+			t.Errorf("%s = %d", p, rec.Code)
+		}
+	}
+	req := httptest.NewRequest(http.MethodGet, "/deep/link", nil)
+	req.Header.Set("Cookie", "s=1")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "shell") {
+		t.Errorf("signed in = %d %q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestIndex(t *testing.T) {
+	plain := serve(Handler(built, Options{}), "/").Header().Get("ETag")
+	h := Handler(built, Options{Index: func(b []byte, r *http.Request) []byte {
+		return []byte(strings.Replace(string(b), "shell", "shell base="+r.Header.Get("X-Base"), 1))
+	}})
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	req.Header.Set("X-Base", "/tm")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	tag := rec.Header().Get("ETag")
+	if !strings.Contains(rec.Body.String(), "shell base=/tm") || tag == "" || tag == plain {
+		t.Fatalf("rewritten = %q, ETag %q (plain %q)", rec.Body.String(), tag, plain)
+	}
+	req.Header.Set("If-None-Match", tag)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotModified {
+		t.Errorf("revalidation = %d, want 304", rec.Code)
+	}
+	// Another base path is other bytes: the old tag no longer matches.
+	req.Header.Set("X-Base", "/other")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Errorf("other base = %d, want 200", rec.Code)
+	}
+}
