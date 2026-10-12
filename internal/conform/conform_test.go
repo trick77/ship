@@ -297,7 +297,7 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 			r := app(t)
 			tc.mut(r)
 			out, err := r.run(tc.ship)
-			if err == nil || !strings.Contains(err.Error(), "conform:") {
+			if err == nil || !strings.Contains(err.Error(), " failed (") {
 				t.Errorf("err = %v", err)
 			}
 			for _, f := range tc.fails {

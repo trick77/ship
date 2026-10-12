@@ -228,7 +228,7 @@ func (e *env) report() error {
 		}
 	}
 	if fails > 0 {
-		return fmt.Errorf("conform: %d failed (ship conform -fix writes the files ship owns; an exception is a "+
+		return fmt.Errorf("%d failed (ship conform -fix writes the files ship owns; an exception is a "+
 			"ship.yaml allow entry with its why)", fails)
 	}
 	return nil

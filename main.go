@@ -141,9 +141,14 @@ func conformCmd(root, name string, args []string) error {
 	case name == "init":
 		return conform.Init(root, c, conform.Options{}, *diff)
 	case *fix:
-		return conform.Fix(root, c, conform.Options{})
+		err = conform.Fix(root, c, conform.Options{})
+	default:
+		err = conform.Run(root, c, conform.Options{})
 	}
-	return conform.Run(root, c, conform.Options{})
+	if err != nil {
+		return fmt.Errorf("conform: %w", err)
+	}
+	return nil
 }
 
 // releaseOptions parses `release [bump] [flags] [bump]`: the bump may come before or after the flags (default
