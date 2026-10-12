@@ -3,6 +3,7 @@ package hook
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -110,13 +111,37 @@ func Install(root string) (string, error) {
 	return p, os.Rename(tmp.Name(), p)
 }
 
-// Refresh reinstalls a stale hook (Stale) with this ship's script, as Install does, and reports whether it did. A
-// hook ship did not install is never touched.
+// Backup suffixes the previous hook Refresh keeps (pre-push.ship-old), one copy, the last one replaced.
+const Backup = ".ship-old"
+
+// Refresh reinstalls a stale hook (Stale) with this ship's script, as Install does, keeping the old one at its path +
+// Backup, and reports whether it did. A hook ship did not install is never touched; nor is any hook
+// while SHIP_CMD is set: that ship (a local build, a pin) is not master's, whose script the hook must carry, so a
+// stale hook is an error to warn about.
 func Refresh(root string) (string, bool, error) {
 	if !Stale(root) {
 		return "", false, nil
 	}
-	p, err := Install(root)
+	if os.Getenv("SHIP_CMD") != "" {
+		return "", false, errors.New("SHIP_CMD runs a ship other than master's, which only warns: rerun `ship hooks` " +
+			"with master's (see README)")
+	}
+	p, err := path(root)
+	if err != nil {
+		return "", false, err
+	}
+	old, err := os.ReadFile(p) //nolint:gosec // the hook path git reports
+	if err != nil {
+		return "", false, err
+	}
+	// Removed first: a symlink planted at the backup's path is replaced, never written through.
+	if err := os.Remove(p + Backup); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", false, err
+	}
+	if err := os.WriteFile(p+Backup, old, 0o600); err != nil {
+		return "", false, err
+	}
+	p, err = Install(root)
 	return p, err == nil, err
 }
 

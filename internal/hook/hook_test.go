@@ -147,6 +147,7 @@ func TestStale(t *testing.T) {
 
 // A stale hook of ship's is rewritten, by rename (a running sh keeps the old file); a current or foreign one is not.
 func TestRefresh(t *testing.T) {
+	t.Setenv("SHIP_CMD", "")
 	dir := repo(t)
 	if _, ok, err := Refresh(dir); ok || err != nil {
 		t.Fatalf("no hook: %v %v", ok, err)
@@ -177,6 +178,21 @@ func TestRefresh(t *testing.T) {
 	if b, err := io.ReadAll(running); err != nil || string(b) != old {
 		t.Fatalf("running hook's file changed under it: %q %v", b, err)
 	}
+	if b, err := os.ReadFile(p + Backup); err != nil || string(b) != old {
+		t.Fatalf("previous hook not kept: %q %v", b, err)
+	}
+	// SHIP_CMD's ship is not master's: a stale hook stays, with an error to warn about.
+	if err := os.WriteFile(p, []byte(old), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHIP_CMD", "go run .")
+	if _, ok, err := Refresh(dir); ok || err == nil || !strings.Contains(err.Error(), "SHIP_CMD") {
+		t.Fatalf("SHIP_CMD set: %v %v", ok, err)
+	}
+	if b, _ := os.ReadFile(p); string(b) != old {
+		t.Fatalf("hook refreshed under SHIP_CMD: %q", b)
+	}
+	t.Setenv("SHIP_CMD", "")
 	if left, _ := filepath.Glob(filepath.Join(filepath.Dir(p), ".pre-push-*")); len(left) != 0 {
 		t.Fatalf("leftovers: %v", left)
 	}

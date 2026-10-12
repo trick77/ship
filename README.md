@@ -141,7 +141,8 @@ gate does not run rather than pass over the other side alone. Scope is the repor
 Pre-push: deletes and tags pass; anything else must be HEAD with a clean tree (check tests the tree), then
 `ship check`. A tree with no `ship.yaml` in the index (a branch cut before ship) is refused: rebase it. A hook
 ship installed that is not this ship's script is rewritten with it (renamed over, so the running hook is
-unharmed), one line says so; a foreign hook is never touched.
+unharmed; the old one kept as `pre-push.ship-old`), one line says so; a foreign hook is never touched. Under
+`SHIP_CMD` (not master's ship) a stale hook only gets a warning.
 
 ## Workflows
 
