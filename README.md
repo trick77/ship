@@ -38,6 +38,7 @@ go:
   race: true
   coverpkg: ./internal/...
   exclude: [cmd/]     # not counted by either coverage gate
+  modules: [kit, kit/auth]   # nested modules (own go.mod), gated like go.dir; see below
 ui:                   # omit for no UI
   dir: ui
   floor: 75
@@ -59,6 +60,12 @@ A platform other than amd64 builds under QEMU on the amd64 runner: every `RUN` i
 times slower, inside the release job's 30 minutes. Cross-compile Go on the build platform
 (`FROM --platform=$BUILDPLATFORM golang…`, `GOOS=$TARGETOS GOARCH=$TARGETARCH`) so only the runtime stage is emulated.
 
+`go.modules`: every nested Go module (a go.mod below the repo other than go.dir's, outside `testdata/` and
+`vendor/`) is listed, or check fails: `go ./...` stops at a nested go.mod, so nothing else would build, lint or test
+it. Each listed module gets go.dir's gates (mod verify, tidy, build, govulncheck, golangci-lint, go test with
+`go.race`), its own floor at `go.floor` (a module is released and imported on its own: the root's lines never carry
+it), and its changed lines in the patch gate; `go.exclude` applies, `go.coverpkg` is go.dir's alone.
+
 The Go coverage report lives in the git dir (`.git/ship/`), never in the tree. Gitignore the UI test runner's
 coverage output.
 
@@ -66,7 +73,7 @@ coverage output.
 
 | | |
 |---|---|
-| `ship check` | conform, fetch, commit subjects, secret scan, prettier pin, ui embed, ui build, gofmt, go mod verify, go mod tidy, build, govulncheck, golangci-lint (incl. govet), ui lint, shellcheck, steps, postgres, go test (-race, coverage), ui test, floors, patch gate |
+| `ship check` | conform, fetch, commit subjects, secret scan, prettier pin, ui embed, ui build, go modules, gofmt, go mod verify, go mod tidy, build, govulncheck, golangci-lint (incl. govet), ui lint, shellcheck, steps, postgres, go test (-race, coverage), ui test, floors, patch gate |
 | `ship conform [-fix]` / `ship init [-diff]` | the repo against ship's canon / write the files ship owns (see Conform) |
 | `ship lint` | golangci-lint alone, at the version `ship check` runs: a Makefile's quick lint, no version of its own |
 | `ship hooks` | install the pre-push hook (respects core.hooksPath, never overwrites a foreign hook) |
@@ -117,7 +124,8 @@ Nested Go modules (`-dir kit`; the Release workflow's `dir` input): tags `<dir>/
 changes, never those of a module nested below it (kit's release ignores `kit/auth/`); the root's release ignores
 its nested modules too, unless it has `images:` (a build context may copy them). No images, not the repo's
 "Latest" release. No go.mod in the dir: auto skips (CI can list a module before it merges). No previous tag: auto
-cuts 0.1.0, nothing to confuse a nested module's prefix with. ship's CI releases `kit` and `kit/auth` this way.
+cuts 0.1.0, nothing to confuse a nested module's prefix with. ship's CI releases `kit` and `kit/auth` this way;
+`go.modules` gates them in check.
 
 Patch gate: changed lines (committed, staged, unstaged, untracked) against the merge-base with origin/<base>,
 intersected with the coverage reports; comment and blank lines never count. `[skip patch-coverage]` in a commit
