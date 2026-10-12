@@ -36,7 +36,7 @@ func fixture(t *testing.T, cfg string, profile, lcov string) (string, *config.Co
 	git("config", "user.name", "t")
 	git("config", "commit.gpgsign", "false")
 	write("go.mod", "module example.com/m\n\ngo 1.24\n")
-	write(".gitignore", "ui/coverage/\n")
+	write(".gitignore", "coverage/\n")
 	write("lib/a.go", "package lib\n\nfunc A() int {\n\treturn 1\n}\n")
 	write("ui/src/a.ts", "export const a = 1\n")
 	git("add", "-A")
@@ -46,7 +46,7 @@ func fixture(t *testing.T, cfg string, profile, lcov string) (string, *config.Co
 	git("add", "-A")
 	git("commit", "-q", "-m", "add B")
 	write(".git/ship/go.out", profile)
-	write("ui/coverage/lcov.info", lcov)
+	write("coverage/ui/lcov.info", lcov)
 	c, err := config.Parse([]byte(cfg))
 	if err != nil {
 		t.Fatal(err)

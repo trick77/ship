@@ -27,7 +27,7 @@ func TestParse_whenUIAndImages_thenTheirDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.UI.Dir != "ui" || c.UI.Floor != 75 || c.UI.Lcov != filepath.Join("ui", "coverage", "lcov.info") ||
+	if c.UI.Dir != "ui" || c.UI.Floor != 75 || c.UI.Lcov != filepath.Join("coverage", "ui", "lcov.info") ||
 		!strings.Contains(c.UI.Build, "npm ci") || c.UI.Lint != "npm run lint" || c.UI.Embed != "" || !strings.Contains(c.UI.Test, "--coverage") {
 		t.Fatalf("ui: %+v", c.UI)
 	}
@@ -55,7 +55,7 @@ func TestParse_whenExplicitZero_thenZeroNotDefault(t *testing.T) {
 	if c.Patch != 0 || c.Go.Floor != 0 || c.UI.Floor != 0 {
 		t.Fatalf("explicit 0 replaced: patch %v go %v ui %v", c.Patch, c.Go.Floor, c.UI.Floor)
 	}
-	if c.Go.Dir != "." || c.UI.Build == "" || c.UI.Lcov != filepath.Join("web", "coverage", "lcov.info") {
+	if c.Go.Dir != "." || c.UI.Build == "" || c.UI.Lcov != filepath.Join("coverage", "ui", "lcov.info") {
 		t.Fatalf("defaults beside the zeros lost: %+v %+v", c.Go, c.UI)
 	}
 }

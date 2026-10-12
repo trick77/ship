@@ -45,7 +45,7 @@ ui:                   # omit for no UI
   build: npm ci && npm run build      # tsc -b && vite build: the typecheck
   lint: npm run lint                  # the default: eslint / prettier --check; "" = none
   test: npm run test -- --coverage --coverage.reporter=lcov --coverage.reporter=text-summary  # must write lcov
-  lcov: ui/coverage/lcov.info         # repo-relative; SF: paths relative to ui.dir
+  lcov: coverage/ui/lcov.info         # repo-relative, vite reportsDirectory "../coverage/ui"; SF: paths relative to ui.dir
   embed: backend/web/dist             # go:embed dir, emptied but for .gitkeep before ui.build; omit for none
 steps:                # repo-specific checks, run after lint
   - { name: openapi lint, run: npx spectral lint api.yaml }

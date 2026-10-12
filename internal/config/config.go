@@ -158,7 +158,8 @@ func Parse(b []byte) (*Config, error) {
 // defaults fills what depends on other values or lives in lists.
 func (c *Config) defaults() {
 	if c.UI != nil && c.UI.Lcov == "" {
-		c.UI.Lcov = filepath.Join(c.UI.Dir, "coverage", "lcov.info")
+		// conform's vite reportsDirectory "../coverage/ui", seen from the repo root.
+		c.UI.Lcov = filepath.Join(filepath.Dir(c.UI.Dir), "coverage", "ui", "lcov.info")
 	}
 	for i := range c.Images {
 		im := &c.Images[i]
