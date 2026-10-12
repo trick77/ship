@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 // ErrBadCredentials is the one answer a failed password login gets: which half was wrong is what a guesser wants.
@@ -32,4 +34,33 @@ func StaticVerifier(user, pass string) Verifier {
 		passOK := subtle.ConstantTimeCompare(gotP[:], wantP[:])
 		return pass != "" && userOK&passOK == 1
 	}
+}
+
+// HashPassword is the bcrypt hash BcryptVerifier takes, for an app's hash-password command.
+func HashPassword(pass string) (string, error) {
+	if pass == "" {
+		return "", errors.New("empty password")
+	}
+	h, err := bcrypt.GenerateFromPassword([]byte(pass), bcrypt.DefaultCost)
+	return string(h), err
+}
+
+// BcryptVerifier accepts one user whose password hashes to hash. It fails at start on a hash that is not bcrypt, so a
+// plain password pasted into the env is caught at boot, not at the first login. bcrypt runs whatever the username,
+// so a wrong user costs the same time as a wrong password.
+func BcryptVerifier(user, hash string) (Verifier, error) {
+	if user == "" {
+		return nil, errors.New("empty username")
+	}
+	if _, err := bcrypt.Cost([]byte(hash)); err != nil {
+		return nil, errors.New("password hash is not bcrypt")
+	}
+	wantU := sha256.Sum256([]byte(user))
+	h := []byte(hash)
+	return func(u, p string) bool {
+		gotU := sha256.Sum256([]byte(u))
+		userOK := subtle.ConstantTimeCompare(gotU[:], wantU[:]) == 1
+		passOK := bcrypt.CompareHashAndPassword(h, []byte(p)) == nil
+		return userOK && passOK
+	}, nil
 }

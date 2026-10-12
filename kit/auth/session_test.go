@@ -211,6 +211,31 @@ func TestPassword(t *testing.T) {
 	if _, err := StaticVerifier("admin", "").Check("admin", ""); err == nil {
 		t.Error("empty configured password let the username alone in")
 	}
+	hash, err := HashPassword("hunter2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := HashPassword(""); err == nil {
+		t.Error("empty password hashed")
+	}
+	bv, err := BcryptVerifier("admin", hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bv.Check("admin", "hunter2"); err != nil {
+		t.Errorf("bcrypt good login: %v", err)
+	}
+	for _, tt := range [][2]string{{"admin", "wrong"}, {"root", "hunter2"}, {"admin", ""}} {
+		if _, err := bv.Check(tt[0], tt[1]); !errors.Is(err, ErrBadCredentials) {
+			t.Errorf("bcrypt Check(%q, %q) = %v", tt[0], tt[1], err)
+		}
+	}
+	if _, err := BcryptVerifier("admin", "hunter2"); err == nil {
+		t.Error("plain password accepted as a hash")
+	}
+	if _, err := BcryptVerifier("", hash); err == nil {
+		t.Error("empty username accepted")
+	}
 	var nilV Verifier
 	if _, err := nilV.Check("a", "b"); err == nil {
 		t.Error("nil verifier accepted")

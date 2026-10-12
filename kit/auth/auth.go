@@ -1,9 +1,9 @@
 // Package auth is browser sign-in for a service with no user table: OIDC (authorization code with PKCE, state and
 // nonce in transient cookies, an optional required group), an HMAC-signed session cookie that carries the identity
-// itself, and a password check for deployments without an identity provider.
+// itself, and a password check for deployments without an identity provider (a fixed account or a bcrypt hash).
 //
-// What is app-specific stays with the app: how a password is verified (Verifier: a constant-time compare, bcrypt,
-// the daemon's RPC credentials), bearer and agent tokens, and the pages and JSON a login answers with.
+// What is app-specific stays with the app: other credential sources (a Verifier over a daemon's RPC credentials),
+// bearer and agent tokens, and the pages and JSON a login answers with.
 //
 // A separate module from kit so kit stays dependency-free; it does not import kit.
 package auth
