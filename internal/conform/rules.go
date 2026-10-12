@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/trick77/ship/internal/compose"
+	"github.com/trick77/ship/internal/config"
 	"github.com/trick77/ship/internal/gitx"
 	"github.com/trick77/ship/internal/pins"
 	"github.com/trick77/ship/internal/scaffold"
@@ -510,4 +512,34 @@ func (e *env) agents() result {
 			" (…), gated by ship; …`)", file: "AGENTS.md"}}}
 	}
 	return result{}
+}
+
+// postgres: the test DB image is pinned once. compose:<service> must resolve; a literal image (or version) of a
+// repository a root compose service names too is a second pin Dependabot never bumps, drifting from the first.
+func (e *env) postgres() result {
+	if e.c.Postgres == "" {
+		return result{skip: "no postgres"}
+	}
+	if svc, ok := e.c.PostgresCompose(); ok {
+		img, err := compose.Image(e.root, svc)
+		if err != nil {
+			return result{findings: []finding{{what: err.Error(), file: config.File}}}
+		}
+		return result{note: img}
+	}
+	svcs, err := compose.Services(e.root, compose.Files(e.listed()))
+	if err != nil {
+		return result{findings: []finding{{what: err.Error(), file: config.File}}}
+	}
+	want := compose.Repository(e.c.PostgresImage())
+	var fs []finding
+	seen := map[string]bool{}
+	for _, s := range svcs {
+		if !seen[s.Name] && s.Image != "" && !strings.Contains(s.Image, "$") && compose.Repository(s.Image) == want {
+			seen[s.Name] = true
+			fs = append(fs, finding{what: fmt.Sprintf("duplicates compose service %s's image, use compose:%s",
+				s.Name, s.Name), file: config.File})
+		}
+	}
+	return result{findings: fs}
 }

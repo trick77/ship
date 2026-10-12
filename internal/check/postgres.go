@@ -11,6 +11,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/trick77/ship/internal/compose"
 )
 
 // TestDSN names the env var go test finds the Postgres DSN in. Set before check runs (CI's container, a server of
@@ -20,9 +22,10 @@ const TestDSN = "SHIP_TEST_DSN"
 // pgWait bounds the wait for a fresh container to accept connections (an image pull happens before, in docker run).
 var pgWait = 60 * time.Second
 
-// postgres starts ship.yaml postgres's image (config.PostgresImage) for go test unless SHIP_TEST_DSN is set, and
-// returns the env go test gets and a stop func (never nil, safe to call twice). The container is removed by stop, on SIGINT or
-// SIGTERM, and by docker itself (--rm) should ship die harder.
+// postgres starts ship.yaml postgres's image (config.PostgresImage; compose:<service>: that service's image in the
+// root compose files) for go test unless SHIP_TEST_DSN is set, and returns the env go test gets and a stop func
+// (never nil, safe to call twice). The container is removed by stop, on SIGINT or SIGTERM, and by docker itself
+// (--rm) should ship die harder.
 func (r runner) postgres() (env []string, stop func(), err error) {
 	stop = func() {}
 	v := r.c.Postgres
@@ -34,12 +37,18 @@ func (r runner) postgres() (env []string, stop func(), err error) {
 		fmt.Printf("ship: %s set, no container\n", TestDSN)
 		return nil, stop, nil
 	}
+	img := r.c.PostgresImage()
+	if svc, ok := r.c.PostgresCompose(); ok {
+		if img, err = compose.Image(r.root, svc); err != nil {
+			return nil, stop, err
+		}
+		v += " (" + img + ")"
+	}
 	if _, err := exec.LookPath("docker"); err != nil {
 		return nil, stop, fmt.Errorf("postgres %s needs docker on PATH (or %s pointing at a server)", v, TestDSN)
 	}
 	// Loopback only, a free port: never reachable from the network, never clashing with a local server.
-	id, err := docker("run", "-d", "--rm", "-p", "127.0.0.1::5432", "-e", "POSTGRES_PASSWORD=ship",
-		r.c.PostgresImage())
+	id, err := docker("run", "-d", "--rm", "-p", "127.0.0.1::5432", "-e", "POSTGRES_PASSWORD=ship", img)
 	if err != nil {
 		return nil, stop, err
 	}

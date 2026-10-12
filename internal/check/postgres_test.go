@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/trick77/ship/internal/config"
+	"github.com/trick77/ship/internal/gitx"
 )
 
 // fakeDocker answers run with a container id, port with a loopback port, exec (pg_isready) with $EXEC_RC.
@@ -51,6 +52,31 @@ func TestPostgres_whenStarted_thenDSNAndRemovedOnce(t *testing.T) {
 	if !strings.Contains(calls, "run -d --rm -p 127.0.0.1::5432 -e POSTGRES_PASSWORD=ship postgres:17-alpine\n") ||
 		!strings.Contains(calls, "exec cid1 pg_isready -q -h 127.0.0.1 -U postgres\n") ||
 		strings.Count(calls, "rm -f cid1\n") != 1 {
+		t.Fatalf("calls:\n%s", calls)
+	}
+}
+
+func TestPostgres_whenCompose_thenServiceImage(t *testing.T) {
+	t.Setenv(TestDSN, "")
+	log := fakeBin(t, "docker", fakeDocker)
+	dir := t.TempDir()
+	if _, err := gitx.Git(dir, "init", "-q"); err != nil {
+		t.Fatal(err)
+	}
+	r := runner{root: dir, c: &config.Config{Postgres: "compose:db"}}
+	if _, _, err := r.postgres(); err == nil || !strings.Contains(err.Error(), "compose:db: no compose file") {
+		t.Fatalf("no compose file: %v", err)
+	}
+	if calls := readLog(t, log); calls != "" {
+		t.Fatalf("docker ran: %s", calls)
+	}
+	writeFile(t, dir, "compose.yaml", "services:\n  db:\n    image: timescale/timescaledb:2.29.1-pg17\n")
+	_, stop, err := r.postgres()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop()
+	if calls := readLog(t, log); !strings.Contains(calls, "POSTGRES_PASSWORD=ship timescale/timescaledb:2.29.1-pg17\n") {
 		t.Fatalf("calls:\n%s", calls)
 	}
 }

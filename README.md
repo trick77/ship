@@ -28,7 +28,7 @@ ship check   # the gate by hand
 ```yaml
 base: master          # patch gate diffs against origin/<base>; release requires HEAD = origin/<base>
 lint: v2.14.0         # golangci-lint, built by go run; leave unset: ship's version, the same everywhere
-postgres: "17"        # go test gets postgres:17-alpine (or a tagged image: timescale/timescaledb:2.29.1-pg17), DSN in SHIP_TEST_DSN
+postgres: "17"        # go test gets postgres:17-alpine (or a tagged image: timescale/timescaledb:2.29.1-pg17, or compose:db: that root compose service's image), DSN in SHIP_TEST_DSN
 shell: [hooks/pre-commit]   # shellcheck these too (*.sh and sh/bash shebangs are found by themselves)
 patch: 75             # min coverage of changed lines, %
 tag_prefix: ""        # "v" for a Go module
@@ -91,6 +91,9 @@ Gates beyond the build and tests, all hard failures:
   have it).
 - `postgres:`: `SHIP_TEST_DSN` set already (a server of one's own) is used as is; else check starts the container
   (docker, loopback, free port), waits for it and removes it after go test, on failure and on Ctrl-C too.
+  `compose:<service>`: the image that service names in the root compose files (`compose*.yaml`,
+  `docker-compose*.yml`), the one pin Dependabot's docker-compose ecosystem bumps; a missing service, no `image:`,
+  `${VAR}`, no tag or two files disagreeing fail. A literal image a compose service names too fails conform.
 
 TypeScript/React: `ui.build` is the typecheck (`tsc -b && vite build`), `ui.lint` runs ESLint/Prettier, `ui.test`
 runs vitest with coverage; its lcov feeds the UI floor and the patch gate for changed `.ts`/`.tsx` lines.
@@ -181,6 +184,7 @@ builder, `ship init` moves CI after it.
 | `kit` | a repo with images requires kit | yes |
 | `handrolled` | no `internal/version` package, health route strings, `signal.Notify`/`NotifyContext`, `github.com/coreos/go-oidc` import outside tests: kit (kit/auth) has them | per `path` |
 | `agents` | AGENTS.md has the commit-subject line | yes |
+| `postgres` | `compose:<service>` resolves; a literal `postgres:` (a version too) names no repository a root compose service's `image:` names (`duplicates compose service <s>'s image, use compose:<s>`): two pins drift | yes |
 
 An exception lives in `ship.yaml`, its why required (an entry without one fails the parse):
 
