@@ -40,9 +40,6 @@ const (
 	Agents        = "agents"
 )
 
-// Prettier is the version every UI pins exactly: one formatter, so format:check agrees everywhere.
-const Prettier = "3.9.9"
-
 // Options are conform's outside world, injectable for tests. Zero values are the real one.
 type Options struct {
 	Out io.Writer

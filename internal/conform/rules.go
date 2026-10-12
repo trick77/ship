@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/trick77/ship/internal/gitx"
+	"github.com/trick77/ship/internal/pins"
 	"github.com/trick77/ship/internal/scaffold"
 )
 
@@ -110,8 +111,9 @@ func (e *env) ui() result {
 		fs = append(fs, finding{what: fmt.Sprintf("script build %q, want it to start with %q (the typecheck)", b,
 			buildPrefix), file: pj})
 	}
-	if v := p.DevDependencies["prettier"]; v != Prettier {
-		fs = append(fs, finding{what: fmt.Sprintf("devDependency prettier %q, want exactly %s", v, Prettier), file: pj})
+	if v := p.DevDependencies["prettier"]; v != pins.Prettier {
+		fs = append(fs, finding{what: fmt.Sprintf("devDependency prettier %q, want exactly %s", v, pins.Prettier),
+			file: pj})
 	}
 	if es := e.uiPath(scaffold.ESLint); !e.exists(es) {
 		fs = append(fs, finding{what: "missing (ship init)", file: es})

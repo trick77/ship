@@ -15,8 +15,5 @@ allow:
     why: ship's dependabot also bumps the testdata/ui fixture
   - rule: workflows
     why: ship calls its reusable workflows by path, at the commit under test; cleanup-images.yaml is the retention policy itself
-  - rule: golangci
-    path: .golangci.yaml
-    why: ship's own lint config, the family's default
   - rule: gomod
     why: go 1.24 is ship's floor for every consumer's go run, not a toolchain pin
