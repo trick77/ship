@@ -55,6 +55,7 @@ func Run(root string, c *config.Config) error {
 		{"secret scan", r.secrets},
 		{"ui embed", r.cleanEmbed},
 		{"ui build", r.uiBuild},
+		{"npm audit", r.npmAudit},
 		{"go modules", r.goModules},
 		{"gofmt", r.gofmt},
 		{"go mod verify", r.modVerify},
@@ -241,6 +242,16 @@ func (r runner) uiBuild() error {
 		return nil
 	}
 	return r.sh(filepath.Join(r.root, r.c.UI.Dir), r.c.UI.Build)
+}
+
+// npmAudit fails on a known high or critical vulnerability in what the UI ships (dev dependencies omitted: they
+// build, they never reach the browser), as govulncheck does for Go.
+func (r runner) npmAudit() error {
+	if r.c.UI == nil {
+		fmt.Println("(no ui)")
+		return nil
+	}
+	return r.run(filepath.Join(r.root, r.c.UI.Dir), nil, "npm", "audit", "--audit-level=high", "--omit=dev")
 }
 
 func (r runner) uiLint() error {

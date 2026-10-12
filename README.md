@@ -73,7 +73,7 @@ coverage output.
 
 | | |
 |---|---|
-| `ship check` | conform, fetch, commit subjects, secret scan, ui embed, ui build, go modules, gofmt, go mod verify, go mod tidy, build, govulncheck, golangci-lint (incl. govet), ui lint, shellcheck, steps, postgres, go test (-race, coverage), ui test, floors, patch gate |
+| `ship check` | conform, fetch, commit subjects, secret scan, ui embed, ui build, npm audit, go modules, gofmt, go mod verify, go mod tidy, build, govulncheck, golangci-lint (incl. govet), ui lint, shellcheck, steps, postgres, go test (-race, coverage), ui test, floors, patch gate |
 | `ship conform [-fix]` / `ship init [-diff]` | the repo against ship's canon / write the files ship owns (see Conform) |
 | `ship lint` | golangci-lint alone, at the version `ship check` runs: a Makefile's quick lint, no version of its own |
 | `ship hooks` | install the pre-push hook (respects core.hooksPath, never overwrites a foreign hook) |
@@ -84,6 +84,8 @@ Gates beyond the build and tests, all hard failures:
 - golangci-lint: the family config embedded in ship (`internal/check/golangci.yaml`), unless the repo keeps its own
   `.golangci.{yml,yaml,toml,json}` between `go.dir` and the root.
 - govulncheck (pinned, `go run`): a known vulnerability the module's code reaches.
+- npm audit (with `ui:`, in `ui.dir`, after ui build): `npm audit --audit-level=high --omit=dev`, a high or
+  critical advisory in what the UI ships; dev dependencies only build it.
 - `go mod tidy -diff`: go.mod/go.sum as tidy leaves them.
 - Secret scan: the tree and every line and message the commits not yet on origin/<base> add, for API key shapes
   (`sk-`, `tp-`, GitHub tokens, AWS key ids) and `.env` files. A fixture line carrying `ship:allow-secret` passes.

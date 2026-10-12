@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/trick77/ship/internal/config"
 	"github.com/trick77/ship/internal/pins"
 )
 
@@ -93,5 +94,30 @@ func TestVuln(t *testing.T) {
 func TestWithPathMode_whenNoRunSection_thenError(t *testing.T) {
 	if _, err := withPathMode("version: \"2\"\n"); err == nil {
 		t.Fatal("config without run: accepted")
+	}
+}
+
+func TestNpmAudit_whenUI_thenProdHighAuditInUIDir(t *testing.T) {
+	log := fakeBin(t, "npm", `pwd >> "$(dirname "$0")/npm.log"; exit "${AUDIT_RC:-0}"`)
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r := runner{root: dir, c: &config.Config{}}
+	if err := r.npmAudit(); err != nil || readLog(t, log) != "" {
+		t.Fatalf("no ui: %v, npm ran: %q", err, readLog(t, log))
+	}
+	r.c.UI = &config.UI{Dir: "web"}
+	if err := r.npmAudit(); err != nil {
+		t.Fatal(err)
+	}
+	got := readLog(t, log)
+	if !strings.HasPrefix(got, "audit --audit-level=high --omit=dev\n") ||
+		!strings.HasSuffix(strings.TrimSpace(got), string(filepath.Separator)+"web") {
+		t.Fatalf("calls: %q", got)
+	}
+	t.Setenv("AUDIT_RC", "1")
+	if err := r.npmAudit(); err == nil {
+		t.Fatal("audit failure ignored")
 	}
 }
