@@ -28,7 +28,7 @@ ship check   # the gate by hand
 ```yaml
 base: master          # patch gate diffs against origin/<base>; release requires HEAD = origin/<base>
 lint: v2.14.0         # golangci-lint, built by go run; leave unset: ship's version, the same everywhere
-postgres: "17"        # go test gets postgres:17-alpine, its DSN in SHIP_TEST_DSN; omit for none
+postgres: "17"        # go test gets postgres:17-alpine (or a tagged image: timescale/timescaledb:2.29.1-pg17), DSN in SHIP_TEST_DSN
 shell: [hooks/pre-commit]   # shellcheck these too (*.sh and sh/bash shebangs are found by themselves)
 patch: 75             # min coverage of changed lines, %
 tag_prefix: ""        # "v" for a Go module

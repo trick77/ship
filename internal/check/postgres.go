@@ -20,8 +20,8 @@ const TestDSN = "SHIP_TEST_DSN"
 // pgWait bounds the wait for a fresh container to accept connections (an image pull happens before, in docker run).
 var pgWait = 60 * time.Second
 
-// postgres starts postgres:<ship.yaml postgres>-alpine for go test unless SHIP_TEST_DSN is set, and returns the
-// env go test gets and a stop func (never nil, safe to call twice). The container is removed by stop, on SIGINT or
+// postgres starts ship.yaml postgres's image (config.PostgresImage) for go test unless SHIP_TEST_DSN is set, and
+// returns the env go test gets and a stop func (never nil, safe to call twice). The container is removed by stop, on SIGINT or
 // SIGTERM, and by docker itself (--rm) should ship die harder.
 func (r runner) postgres() (env []string, stop func(), err error) {
 	stop = func() {}
@@ -39,7 +39,7 @@ func (r runner) postgres() (env []string, stop func(), err error) {
 	}
 	// Loopback only, a free port: never reachable from the network, never clashing with a local server.
 	id, err := docker("run", "-d", "--rm", "-p", "127.0.0.1::5432", "-e", "POSTGRES_PASSWORD=ship",
-		"postgres:"+v+"-alpine")
+		r.c.PostgresImage())
 	if err != nil {
 		return nil, stop, err
 	}

@@ -36,8 +36,9 @@ type Config struct {
 	UI    *UI     `yaml:"ui"`
 	// Steps are repo-specific checks (openapi lint, shell tests, e2e), run after lint, before the tests.
 	Steps []Step `yaml:"steps"`
-	// Postgres is the major (or major.minor) of the postgres:<v>-alpine container check starts for go test, its
-	// DSN in SHIP_TEST_DSN; empty = none.
+	// Postgres is the container check starts for go test, its DSN in SHIP_TEST_DSN: a version ("17", "17.6") for
+	// postgres:<v>-alpine, or a whole image ref for a postgres with extensions (timescale/timescaledb:2.29.1-pg17);
+	// empty = none.
 	Postgres string `yaml:"postgres"`
 	// Shell lists repo-relative shell scripts for shellcheck beyond the ones found by name (*.sh) or shebang.
 	Shell  []string `yaml:"shell"`
@@ -192,8 +193,9 @@ func (c *Config) validate() error {
 			return fmt.Errorf("%s: steps[%d] needs name and run", File, i)
 		}
 	}
-	if c.Postgres != "" && !pgVersion.MatchString(c.Postgres) {
-		return fmt.Errorf("%s: postgres: %q, want a version like \"17\" or \"17.6\"", File, c.Postgres)
+	if c.Postgres != "" && !pgVersion.MatchString(c.Postgres) && !pgImage.MatchString(c.Postgres) {
+		return fmt.Errorf("%s: postgres: %q, want a version like \"17\" or an image like \"timescale/timescaledb:2.29.1-pg17\"",
+			File, c.Postgres)
 	}
 	seen := map[string]bool{path.Clean(filepath.ToSlash(c.Go.Dir)): true}
 	for _, m := range c.Go.Modules {
@@ -211,7 +213,19 @@ func (c *Config) validate() error {
 	return c.validateConform()
 }
 
-var pgVersion = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?$`)
+var (
+	pgVersion = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?$`)
+	// pgImage is a tagged or digest-pinned image ref: an untagged one would be :latest, a moving target.
+	pgImage = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]*(:[A-Za-z0-9._-]+(@sha256:[0-9a-f]{64})?|@sha256:[0-9a-f]{64})$`)
+)
+
+// PostgresImage is the image check starts for go test: postgres:<v>-alpine for a version, else the ref as written.
+func (c *Config) PostgresImage() string {
+	if pgVersion.MatchString(c.Postgres) {
+		return "postgres:" + c.Postgres + "-alpine"
+	}
+	return c.Postgres
+}
 
 // inRepo reports whether p is a repo-relative path below the root, lexically: no absolute path, no "..".
 func inRepo(p string) bool {
