@@ -129,27 +129,63 @@ func (s *Sessions) Read(r *http.Request) (Claims, bool) {
 	return p.Claims, true
 }
 
+// Authorize judges the request's session, the one place a gate asks so no two gates disagree: 200 with a valid
+// session in group ("" = any), 401 without a valid session, 403 with one that lacks the group (revoked since, or
+// issued under a laxer setting). The claims are set whenever the session is valid.
+func (s *Sessions) Authorize(r *http.Request, group string) (Claims, int) {
+	c, ok := s.Read(r)
+	switch {
+	case !ok:
+		return Claims{}, http.StatusUnauthorized
+	case !c.HasGroup(group):
+		return c, http.StatusForbidden
+	}
+	return c, http.StatusOK
+}
+
 // Require guards next: a request without a valid session, or whose session lacks group ("" = any), is answered by
-// deny (nil: a bare 401). The identity is on the request context for next (FromContext). Re-checking the group per
-// request, not only at login, means changing the configured group takes effect on live sessions.
+// deny (nil: a bare 401). Guard tells the two apart. The identity is on the request context for next (FromContext).
+// Re-checking the group per request, not only at login, means changing the configured group takes effect on live
+// sessions.
 func (s *Sessions) Require(group string, deny http.Handler) func(http.Handler) http.Handler {
 	if deny == nil {
-		deny = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-		})
+		deny = bare(http.StatusUnauthorized)
+	}
+	return s.Guard(group, deny, deny)
+}
+
+// Guard is Require with the two refusals apart (Authorize): no valid session is answered by unauthenticated (nil: a
+// bare 401, which a UI turns into a sign-in), a signed-in user outside group by forbidden (nil: a bare 403, which
+// signing in again would not fix).
+func (s *Sessions) Guard(group string, unauthenticated, forbidden http.Handler) func(http.Handler) http.Handler {
+	if unauthenticated == nil {
+		unauthenticated = bare(http.StatusUnauthorized)
+	}
+	if forbidden == nil {
+		forbidden = bare(http.StatusForbidden)
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			c, ok := s.Read(r)
-			if !ok || !c.HasGroup(group) {
+			c, status := s.Authorize(r, group)
+			if status != http.StatusOK {
 				// Never cached: the next request may carry a valid session.
 				w.Header().Set("Cache-Control", "no-store")
-				deny.ServeHTTP(w, r)
+				if status == http.StatusForbidden {
+					forbidden.ServeHTTP(w, r)
+				} else {
+					unauthenticated.ServeHTTP(w, r)
+				}
 				return
 			}
 			next.ServeHTTP(w, r.WithContext(NewContext(r.Context(), c)))
 		})
 	}
+}
+
+func bare(status int) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, strings.ToLower(http.StatusText(status)), status)
+	})
 }
 
 func (s *Sessions) sign(v string) string {

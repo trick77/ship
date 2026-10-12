@@ -173,6 +173,46 @@ func TestRequire(t *testing.T) {
 	}
 }
 
+func TestGuard(t *testing.T) {
+	s := newSessions(t, SessionConfig{})
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	member, _ := roundTrip(t, s, Claims{Subject: "u", Groups: []string{"ops"}})
+	outsider, _ := roundTrip(t, s, Claims{Subject: "v"})
+	anon := httptest.NewRequest(http.MethodGet, "/", nil)
+
+	for name, tt := range map[string]struct {
+		req     *http.Request
+		status  int
+		subject string
+	}{"member": {member, 200, "u"}, "outsider": {outsider, 403, "v"}, "anon": {anon, 401, ""}} {
+		if c, status := s.Authorize(tt.req, "ops"); status != tt.status || c.Subject != tt.subject {
+			t.Errorf("Authorize %s = %+v %d, want %d", name, c, status, tt.status)
+		}
+	}
+
+	for _, tt := range []struct {
+		name         string
+		unauth, forb http.Handler
+		want         map[*http.Request]int
+	}{
+		{"bare", nil, nil, map[*http.Request]int{member: 204, outsider: 403, anon: 401}},
+		{"custom", http.RedirectHandler("/login", http.StatusFound), http.NotFoundHandler(),
+			map[*http.Request]int{member: 204, outsider: 404, anon: 302}},
+	} {
+		h := s.Guard("ops", tt.unauth, tt.forb)(next)
+		for req, want := range tt.want {
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if rec.Code != want {
+				t.Errorf("%s: %d, want %d", tt.name, rec.Code, want)
+			}
+			if want != 204 && rec.Header().Get("Cache-Control") != "no-store" {
+				t.Errorf("%s: rejection %d cacheable", tt.name, want)
+			}
+		}
+	}
+}
+
 func TestDeriveKey(t *testing.T) {
 	a, b := DeriveKey("token", "netra-session"), DeriveKey("token", "other")
 	if len(a) != 32 || string(a) == string(b) || string(a) != string(DeriveKey("token", "netra-session")) {
