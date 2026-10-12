@@ -38,57 +38,78 @@ type Service struct {
 	Name, Image, File string
 }
 
-// Services reads the services of files (repo-relative), in file order, then by name. A file gone from disk (tracked
-// but deleted, git still lists it) is skipped.
-func Services(root string, files []string) ([]Service, error) {
+// Parse reads the services of compose file f (repo-relative), contents b, sorted by name.
+func Parse(f string, b []byte) ([]Service, error) {
+	var doc struct {
+		Services map[string]struct {
+			Image string `yaml:"image"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(b, &doc); err != nil {
+		return nil, fmt.Errorf("%s: %w", f, err)
+	}
+	names := make([]string, 0, len(doc.Services))
+	for n := range doc.Services {
+		names = append(names, n)
+	}
+	slices.Sort(names)
+	out := make([]Service, 0, len(names))
+	for _, n := range names {
+		out = append(out, Service{Name: n, Image: doc.Services[n].Image, File: f})
+	}
+	return out, nil
+}
+
+// Literal is the service's image when it names one ship can read: "" for none (build-only, or an override file
+// leaving it to another) and for a ${VAR} ship cannot resolve.
+func (s Service) Literal() string {
+	if strings.Contains(s.Image, "$") {
+		return ""
+	}
+	return s.Image
+}
+
+// Services reads the services of files (repo-relative) from disk, in file order, then by name, and returns the files
+// read. A file gone from disk (tracked but deleted, git still lists it) is skipped.
+func Services(root string, files []string) ([]Service, []string, error) {
 	var out []Service
+	var read []string
 	for _, f := range files {
 		b, err := os.ReadFile(filepath.Join(root, f)) //nolint:gosec // the repo's own compose files
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		var doc struct {
-			Services map[string]struct {
-				Image string `yaml:"image"`
-			} `yaml:"services"`
+		svcs, err := Parse(f, b)
+		if err != nil {
+			return nil, nil, err
 		}
-		if err := yaml.Unmarshal(b, &doc); err != nil {
-			return nil, fmt.Errorf("%s: %w", f, err)
-		}
-		names := make([]string, 0, len(doc.Services))
-		for n := range doc.Services {
-			names = append(names, n)
-		}
-		slices.Sort(names)
-		for _, n := range names {
-			out = append(out, Service{Name: n, Image: doc.Services[n].Image, File: f})
-		}
+		out = append(out, svcs...)
+		read = append(read, f)
 	}
-	return out, nil
+	return out, read, nil
 }
 
-// Image returns service's image from root's compose files. Missing, build-only, untagged, ${VAR} or named
-// differently in two files: an error, never a guess.
+// Image returns service's image from root's compose files (Resolve).
 func Image(root, service string) (string, error) {
 	listed, err := gitx.Files(root)
 	if err != nil {
 		return "", err
 	}
-	var files []string
-	for _, f := range Files(listed) {
-		if _, err := os.Stat(filepath.Join(root, f)); err == nil {
-			files = append(files, f)
-		}
-	}
-	if len(files) == 0 {
-		return "", fmt.Errorf("compose:%s: no compose file at the repo root", service)
-	}
-	all, err := Services(root, files)
+	all, files, err := Services(root, Files(listed))
 	if err != nil {
 		return "", fmt.Errorf("compose:%s: %w", service, err)
+	}
+	return Resolve(service, files, all)
+}
+
+// Resolve returns service's image from all, the services of the compose files files. Missing, build-only,
+// untagged, ${VAR} or named differently in two files: an error, never a guess.
+func Resolve(service string, files []string, all []Service) (string, error) {
+	if len(files) == 0 {
+		return "", fmt.Errorf("compose:%s: no compose file at the repo root", service)
 	}
 	var img, in string
 	var names, defined []string
@@ -98,17 +119,18 @@ func Image(root, service string) (string, error) {
 			continue
 		}
 		defined = append(defined, s.File)
+		lit := s.Literal()
 		switch {
 		case s.Image == "":
 			continue // an override file's ports or env: the image is another file's
-		case strings.Contains(s.Image, "$"):
+		case lit == "":
 			return "", fmt.Errorf("compose:%s: image %q uses a variable, ship cannot resolve it (%s)", service, s.Image, s.File)
-		case !Pinned(s.Image):
-			return "", fmt.Errorf("compose:%s: image %q has no tag or digest (%s)", service, s.Image, s.File)
-		case img != "" && img != s.Image:
-			return "", fmt.Errorf("compose:%s: image %q (%s) and %q (%s) differ", service, img, in, s.Image, s.File)
+		case !Pinned(lit):
+			return "", fmt.Errorf("compose:%s: image %q has no tag or digest (%s)", service, lit, s.File)
+		case img != "" && img != lit:
+			return "", fmt.Errorf("compose:%s: image %q (%s) and %q (%s) differ", service, img, in, lit, s.File)
 		}
-		img, in = s.Image, s.File
+		img, in = lit, s.File
 	}
 	if img == "" && len(defined) > 0 {
 		return "", fmt.Errorf("compose:%s: service has no image: (%s)", service, strings.Join(defined, ", "))

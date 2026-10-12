@@ -520,26 +520,49 @@ func (e *env) postgres() result {
 	if e.c.Postgres == "" {
 		return result{skip: "no postgres"}
 	}
+	files, svcs, err := e.composeServices()
+	if err != nil {
+		return result{findings: []finding{{what: err.Error(), file: config.File}}}
+	}
 	if svc, ok := e.c.PostgresCompose(); ok {
-		img, err := compose.Image(e.root, svc)
+		img, err := compose.Resolve(svc, files, svcs)
 		if err != nil {
 			return result{findings: []finding{{what: err.Error(), file: config.File}}}
 		}
 		return result{note: img}
 	}
-	svcs, err := compose.Services(e.root, compose.Files(e.listed()))
-	if err != nil {
-		return result{findings: []finding{{what: err.Error(), file: config.File}}}
-	}
 	want := compose.Repository(e.c.PostgresImage())
 	var fs []finding
 	seen := map[string]bool{}
 	for _, s := range svcs {
-		if !seen[s.Name] && s.Image != "" && !strings.Contains(s.Image, "$") && compose.Repository(s.Image) == want {
+		if lit := s.Literal(); !seen[s.Name] && lit != "" && compose.Repository(lit) == want {
 			seen[s.Name] = true
 			fs = append(fs, finding{what: fmt.Sprintf("duplicates compose service %s's image, use compose:%s",
 				s.Name, s.Name), file: config.File})
 		}
 	}
 	return result{findings: fs}
+}
+
+// composeServices: the root compose files present on disk (e.listed, a tracked file deleted skipped) and their
+// services.
+func (e *env) composeServices() ([]string, []compose.Service, error) {
+	var files []string
+	var all []compose.Service
+	for _, f := range compose.Files(e.listed()) {
+		b, err := e.read(f)
+		if err != nil {
+			return nil, nil, err
+		}
+		if b == nil {
+			continue
+		}
+		svcs, err := compose.Parse(f, b)
+		if err != nil {
+			return nil, nil, err
+		}
+		files = append(files, f)
+		all = append(all, svcs...)
+	}
+	return files, all, nil
 }
