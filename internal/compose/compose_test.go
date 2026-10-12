@@ -103,6 +103,11 @@ func TestRepositoryAndPinned(t *testing.T) {
 		"docker.io/library/postgres@sha256:abc":        "postgres",
 		"timescale/timescaledb:2.29.1-pg17@sha256:abc": "timescale/timescaledb",
 		"localhost:5000/pg":                            "localhost:5000/pg",
+		"index.docker.io/library/postgres:17":          "postgres",
+		"registry-1.docker.io/postgres:17":             "postgres",
+		"library/postgres":                             "postgres",
+		"docker.io/bitnami/postgresql:17":              "bitnami/postgresql",
+		"ghcr.io/library/postgres:17":                  "ghcr.io/library/postgres",
 	} {
 		if got := Repository(ref); got != want {
 			t.Errorf("%s: %s, want %s", ref, got, want)

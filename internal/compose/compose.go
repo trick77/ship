@@ -126,12 +126,18 @@ func Pinned(ref string) bool {
 	return strings.Contains(ref, "@") || strings.LastIndexByte(ref, ':') > strings.LastIndexByte(ref, '/')
 }
 
-// Repository is ref without tag and digest, Docker Hub's docker.io/ and library/ dropped: postgres:17-alpine,
-// docker.io/library/postgres@sha256:… and postgres are one repository.
+// Repository is ref without tag and digest, Docker Hub's host (docker.io/, index.docker.io/, registry-1.docker.io/)
+// and library/ dropped: postgres:17-alpine, docker.io/library/postgres@sha256:… and postgres are one repository.
 func Repository(ref string) string {
 	ref, _, _ = strings.Cut(ref, "@")
 	if i := strings.LastIndexByte(ref, ':'); i > strings.LastIndexByte(ref, '/') {
 		ref = ref[:i]
 	}
-	return strings.TrimPrefix(strings.TrimPrefix(ref, "docker.io/"), "library/")
+	for _, host := range []string{"docker.io/", "index.docker.io/", "registry-1.docker.io/"} {
+		if r, ok := strings.CutPrefix(ref, host); ok {
+			ref = r
+			break
+		}
+	}
+	return strings.TrimPrefix(ref, "library/")
 }
