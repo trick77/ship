@@ -353,6 +353,7 @@ export default tseslint.config(
 const tsconfigNode = `{
   "compilerOptions": {
     "composite": true,
+    "strict": true,
     "skipLibCheck": true,
     "module": "ESNext",
     "moduleResolution": "bundler",
