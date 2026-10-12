@@ -2,6 +2,7 @@ package check
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -98,7 +99,8 @@ func TestWithPathMode_whenNoRunSection_thenError(t *testing.T) {
 }
 
 func TestNpmAudit_whenUI_thenProdHighAuditInUIDir(t *testing.T) {
-	log := fakeBin(t, "npm", `pwd >> "$(dirname "$0")/npm.log"; exit "${AUDIT_RC:-0}"`)
+	log := fakeBin(t, "npm", `pwd >> "$(dirname "$0")/npm.log"; printf '%s' "$AUDIT_OUT"; exit "${AUDIT_RC:-0}"`)
+	t.Setenv("AUDIT_OUT", "{}")
 	dir := t.TempDir()
 	if err := os.Mkdir(filepath.Join(dir, "web"), 0o755); err != nil {
 		t.Fatal(err)
@@ -112,12 +114,52 @@ func TestNpmAudit_whenUI_thenProdHighAuditInUIDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := readLog(t, log)
-	if !strings.HasPrefix(got, "audit --audit-level=high --omit=dev\n") ||
+	if !strings.HasPrefix(got, "audit --json --audit-level=high --omit=dev\n") ||
 		!strings.HasSuffix(strings.TrimSpace(got), string(filepath.Separator)+"web") {
 		t.Fatalf("calls: %q", got)
 	}
 	t.Setenv("AUDIT_RC", "1")
-	if err := r.npmAudit(); err == nil {
-		t.Fatal("audit failure ignored")
+	t.Setenv("AUDIT_OUT", `{"vulnerabilities":{"x":{"severity":"high","via":[{"title":"T","url":"U","severity":"high"}]}}}`)
+	if err := r.npmAudit(); err == nil || !strings.Contains(err.Error(), "x: high T (U)") {
+		t.Fatalf("finding: %v", err)
+	}
+}
+
+// npm audit --json: advisories at high or above fail listed; npm's own failure fails as npm's, not as a finding.
+func TestAuditResult(t *testing.T) {
+	report := `{"auditReportVersion":2,"vulnerabilities":{
+	  "lodash":{"severity":"high","via":[
+	    {"title":"Command Injection in lodash","url":"https://github.com/advisories/GHSA-35jh-r3h4-6jhm","severity":"high"},
+	    {"title":"ReDoS in lodash","url":"https://github.com/advisories/GHSA-29mw-wpgm-hmr9","severity":"moderate"}]},
+	  "minimist":{"severity":"critical","via":[{"title":"Prototype Pollution in minimist","url":"https://x/1","severity":"critical"}]},
+	  "app-dep":{"severity":"high","via":["lodash"]},
+	  "low":{"severity":"moderate","via":[{"title":"meh","url":"https://x/2","severity":"moderate"}]}}}`
+	exit1 := &exec.ExitError{}
+	err := auditResult([]byte(report), "", exit1)
+	want := "app-dep: high, via lodash\n" +
+		"lodash: high Command Injection in lodash (https://github.com/advisories/GHSA-35jh-r3h4-6jhm)\n" +
+		"minimist: critical Prototype Pollution in minimist (https://x/1)"
+	if err == nil || !strings.HasSuffix(err.Error(), want) || strings.Contains(err.Error(), "ReDoS") ||
+		strings.Contains(err.Error(), "meh") || strings.Contains(err.Error(), "not a vulnerability") {
+		t.Fatalf("findings: %v", err)
+	}
+	if err := auditResult([]byte(`{"vulnerabilities":{"low":{"severity":"moderate","via":[]}}}`), "", nil); err != nil {
+		t.Fatalf("moderate only: %v", err)
+	}
+	for _, tt := range []struct {
+		out, stderr string
+		runErr      error
+		want        string
+	}{
+		{`{"error":{"code":"ENOLOCK","summary":"This command requires an existing lockfile."}}`, "", exit1,
+			"ENOLOCK: This command requires an existing lockfile."},
+		{"", "npm error code EAI_AGAIN\n", exit1, "EAI_AGAIN"},
+		{"garbage", "", nil, "unreadable --json output"},
+		{`{}`, "npm error weird", exit1, "no high or critical advisory reported: npm error weird"},
+	} {
+		err := auditResult([]byte(tt.out), tt.stderr, tt.runErr)
+		if err == nil || !strings.Contains(err.Error(), "not a vulnerability") || !strings.Contains(err.Error(), tt.want) {
+			t.Errorf("%q: %v, want npm's failure with %q", tt.out, err, tt.want)
+		}
 	}
 }

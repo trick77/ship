@@ -3,7 +3,9 @@ package check
 
 import (
 	"bufio"
+	"bytes"
 	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -245,13 +247,80 @@ func (r runner) uiBuild() error {
 }
 
 // npmAudit fails on a known high or critical vulnerability in what the UI ships (dev dependencies omitted: they
-// build, they never reach the browser), as govulncheck does for Go.
+// build, they never reach the browser), as govulncheck does for Go. An audit npm cannot run (no lockfile, the
+// registry down) fails too, worded as npm's failure, never as a vulnerability.
 func (r runner) npmAudit() error {
 	if r.c.UI == nil {
 		fmt.Println("(no ui)")
 		return nil
 	}
-	return r.run(filepath.Join(r.root, r.c.UI.Dir), nil, "npm", "audit", "--audit-level=high", "--omit=dev")
+	cmd := exec.Command("npm", "audit", "--json", "--audit-level=high", "--omit=dev")
+	cmd.Dir = filepath.Join(r.root, r.c.UI.Dir)
+	cmd.Env = gitx.CleanEnv()
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	return auditResult(out, stderr.String(), err)
+}
+
+// auditReport is npm audit --json's report (v2, npm 7+), the parts read; or its error object.
+type auditReport struct {
+	Error *struct {
+		Code, Summary string
+	} `json:"error"`
+	Vulnerabilities map[string]struct {
+		Severity string            `json:"severity"`
+		Via      []json.RawMessage `json:"via"`
+	} `json:"vulnerabilities"`
+}
+
+// auditResult reads npm audit --json's output: the advisories at high or above, or npm's own failure.
+func auditResult(out []byte, stderr string, runErr error) error {
+	var rep auditReport
+	npmFailed := func(why string) error {
+		return fmt.Errorf("npm audit could not run (npm or the registry, not a vulnerability): %s", why)
+	}
+	if err := json.Unmarshal(out, &rep); err != nil {
+		why := strings.TrimSpace(stderr)
+		if why == "" {
+			why = fmt.Sprintf("unreadable --json output: %v", err)
+		}
+		return npmFailed(why)
+	}
+	if rep.Error != nil {
+		return npmFailed(rep.Error.Code + ": " + rep.Error.Summary)
+	}
+	high := func(sev string) bool { return sev == "high" || sev == "critical" }
+	var found []string
+	for name, v := range rep.Vulnerabilities {
+		if !high(v.Severity) {
+			continue
+		}
+		var through []string
+		for _, raw := range v.Via {
+			var adv struct{ Title, URL, Severity string }
+			var dep string
+			switch {
+			case json.Unmarshal(raw, &dep) == nil:
+				through = append(through, dep) // a dependency of name's carries the advisory
+			case json.Unmarshal(raw, &adv) == nil && high(adv.Severity):
+				found = append(found, fmt.Sprintf("%s: %s %s (%s)", name, adv.Severity, adv.Title, adv.URL))
+			}
+		}
+		if len(through) > 0 {
+			found = append(found, fmt.Sprintf("%s: %s, via %s", name, v.Severity, strings.Join(through, ", ")))
+		}
+	}
+	if len(found) > 0 {
+		slices.Sort(found)
+		return fmt.Errorf("npm audit: high or critical advisories in what the UI ships, update them:\n%s",
+			strings.Join(found, "\n"))
+	}
+	if runErr != nil {
+		return npmFailed(fmt.Sprintf("%v, no high or critical advisory reported: %s", runErr, strings.TrimSpace(stderr)))
+	}
+	fmt.Println("ship: npm audit: no high or critical advisory")
+	return nil
 }
 
 func (r runner) uiLint() error {
