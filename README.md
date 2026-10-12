@@ -28,6 +28,8 @@ ship check   # the gate by hand
 ```yaml
 base: master          # patch gate diffs against origin/<base>; release requires HEAD = origin/<base>
 lint: v2.14.0         # golangci-lint, built by go run; leave unset: ship's version, the same everywhere
+postgres: "17"        # go test gets postgres:17-alpine, its DSN in SHIP_TEST_DSN; omit for none
+shell: [hooks/pre-commit]   # shellcheck these too (*.sh and sh/bash shebangs are found by themselves)
 patch: 75             # min coverage of changed lines, %
 tag_prefix: ""        # "v" for a Go module
 go:
@@ -40,9 +42,10 @@ ui:                   # omit for no UI
   dir: ui
   floor: 75
   build: npm ci && npm run build      # tsc -b && vite build: the typecheck
-  lint: npm run lint                  # eslint / prettier --check; empty = none
+  lint: npm run lint                  # the default: eslint / prettier --check; "" = none
   test: npm run test -- --coverage --coverage.reporter=lcov --coverage.reporter=text-summary  # must write lcov
   lcov: ui/coverage/lcov.info         # repo-relative; SF: paths relative to ui.dir
+  embed: backend/web/dist             # go:embed dir, emptied but for .gitkeep before ui.build; omit for none
 steps:                # repo-specific checks, run after lint
   - { name: openapi lint, run: npx spectral lint api.yaml }
 images:               # release builds these; none = tag + GitHub release only
@@ -60,10 +63,24 @@ coverage output.
 
 | | |
 |---|---|
-| `ship check` | fetch, commit subjects, ui build, gofmt, go mod verify, build, golangci-lint (incl. govet), ui lint, steps, go test (-race, coverage), ui test, floors, patch gate |
+| `ship check` | fetch, commit subjects, secret scan, prettier pin, ui embed, ui build, gofmt, go mod verify, go mod tidy, build, govulncheck, golangci-lint (incl. govet), ui lint, shellcheck, steps, postgres, go test (-race, coverage), ui test, floors, patch gate |
 | `ship lint` | golangci-lint alone, at the version `ship check` runs: a Makefile's quick lint, no version of its own |
 | `ship hooks` | install the pre-push hook (respects core.hooksPath, never overwrites a foreign hook) |
 | `ship release [patch\|minor\|major\|auto] [-cache gha] [-dry-run]` | next version from tags, notes from the subjects since the last tag (grouped by area), images pushed (version + sha), tag (API), GitHub release, then :MAJOR.MINOR, :MAJOR, :latest. No `images:` and no `ui:`: `go build ./...` before the tag (in `-dry-run` too). With `images:` only on a GitHub-hosted runner (the Release workflow); elsewhere `-dry-run` only. The Release workflow inherits the caller's permissions: `packages: write` only with `images:` |
+
+Gates beyond the build and tests, all hard failures:
+
+- golangci-lint: the family config embedded in ship (`internal/check/golangci.yaml`), unless the repo keeps its own
+  `.golangci.{yml,yaml,toml,json}` between `go.dir` and the root.
+- govulncheck (pinned, `go run`): a known vulnerability the module's code reaches.
+- `go mod tidy -diff`: go.mod/go.sum as tidy leaves them.
+- Secret scan: the tree and every line and message the commits not yet on origin/<base> add, for API key shapes
+  (`sk-`, `tp-`, GitHub tokens, AWS key ids) and `.env` files. A fixture line carrying `ship:allow-secret` passes.
+- shellcheck -x on `*.sh`, sh/bash shebang files and `shell:`; needs `shellcheck` on PATH (GitHub's ubuntu runners
+  have it).
+- Prettier pin: with a UI, `devDependencies.prettier` in `<ui.dir>/package.json` is exactly ship's pin (3.9.9).
+- `postgres:`: `SHIP_TEST_DSN` set already (a server of one's own) is used as is; else check starts the container
+  (docker, loopback, free port), waits for it and removes it after go test, on failure and on Ctrl-C too.
 
 TypeScript/React: `ui.build` is the typecheck (`tsc -b && vite build`), `ui.lint` runs ESLint/Prettier, `ui.test`
 runs vitest with coverage; its lcov feeds the UI floor and the patch gate for changed `.ts`/`.tsx` lines.
@@ -101,7 +118,7 @@ Reusable, for running the same commands on GitHub:
 ```yaml
 jobs:
   check:
-    uses: trick77/ship/.github/workflows/check.yaml@master      # inputs: go-dir, node-version, ui-dir
+    uses: trick77/ship/.github/workflows/check.yaml@master      # inputs: go-dir, node-version, ui-dir, postgres
   release:
     uses: trick77/ship/.github/workflows/release.yaml@master    # inputs: bump, go-dir
   cleanup:
