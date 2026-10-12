@@ -100,9 +100,13 @@ type AccessLogOptions struct {
 	Skip func(r *http.Request, status int) bool
 	// Attrs appends fields to the line.
 	Attrs func(r *http.Request, status int) []slog.Attr
-	// OnRecord runs after every line written, with the ip the line logged (ClientIP resolves it once per request), the
-	// final status and the duration: a visitor list, a metric.
+	// OnRecord runs after every request's line, even one the logger's level drops, with the ip the line logged
+	// (ClientIP resolves it once per request), the final status and the duration: a visitor list, a metric.
 	OnRecord func(r *http.Request, ip string, status int, dur time.Duration)
+	// RoutineLevel is the level of a routine line (status < 400, 401, 404); nil means slog.LevelDebug, so the
+	// family's default LOG_LEVEL=info hides them and LOG_LEVEL=debug shows them. A service that wants every request
+	// at info sets slog.LevelInfo. A Leveler, not a Level, because the zero Level is info.
+	RoutineLevel slog.Leveler
 }
 
 // AccessLog writes one "http_request" line per request: request_id, ip, method, path (never the query, which carries
@@ -110,7 +114,9 @@ type AccessLogOptions struct {
 // the request context (logging.With), so every line the handler logs with that context carries it too; see
 // AccessLogOptions for where it comes from.
 //
-// Level follows the status: 5xx error, 4xx warn, else info; 401 stays info, a signed-out browser is not a problem.
+// Level follows the status: 5xx error, other 4xx warn; routine lines (status < 400, 401 for a signed-out browser,
+// 404 for bots and scanners) log at RoutineLevel, debug by default, so the access log is not noise at info. A service
+// that does not wire AccessLog has no access log at all.
 func AccessLog(log *slog.Logger, opts AccessLogOptions) func(http.Handler) http.Handler {
 	if log == nil {
 		log = slog.Default()
@@ -122,6 +128,10 @@ func AccessLog(log *slog.Logger, opts AccessLogOptions) func(http.Handler) http.
 	clientIP := opts.ClientIP
 	if clientIP == nil {
 		clientIP = func(r *http.Request) string { return ClientIP(r, 0) }
+	}
+	var routine slog.Leveler = slog.LevelDebug
+	if opts.RoutineLevel != nil {
+		routine = opts.RoutineLevel
 	}
 	quiet := make(map[string]bool, len(opts.Quiet))
 	for _, p := range opts.Quiet {
@@ -154,7 +164,7 @@ func AccessLog(log *slog.Logger, opts AccessLogOptions) func(http.Handler) http.
 				if (quiet[r.URL.Path] && status < 400) || (opts.Skip != nil && opts.Skip(r, status)) {
 					return
 				}
-				lvl := slog.LevelInfo
+				lvl := routine.Level() // per request: a *slog.LevelVar may change at runtime
 				switch {
 				case status >= 500:
 					lvl = slog.LevelError
