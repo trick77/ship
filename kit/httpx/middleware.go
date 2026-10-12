@@ -1,12 +1,14 @@
 package httpx
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"log/slog"
 	"math"
+	"net"
 	"net/http"
 	"regexp"
 	"runtime/debug"
@@ -323,7 +325,9 @@ func active(contentType string) bool {
 }
 
 // headerHook runs hook once, just before the header is sent, with the first write's bytes when a write sends it.
-// Unwrap keeps http.ResponseController working.
+// Flush sends the header too, so it fires the hook first: http.ResponseController and an http.Flusher assertion
+// (server-sent events) both land there. Hijack passes through: the connection leaves HTTP, no header is sent.
+// Unwrap keeps the rest of http.ResponseController (deadlines) working.
 type headerHook struct {
 	http.ResponseWriter
 	hook func(h http.Header, body []byte)
@@ -348,6 +352,19 @@ func (w *headerHook) Write(b []byte) (int, error) {
 	}
 	w.fire(b)
 	return w.ResponseWriter.Write(b)
+}
+
+// FlushError is what http.ResponseController.Flush calls.
+func (w *headerHook) FlushError() error {
+	w.fire(nil)
+	return http.NewResponseController(w.ResponseWriter).Flush()
+}
+
+// Flush serves the http.Flusher assertion.
+func (w *headerHook) Flush() { _ = w.FlushError() }
+
+func (w *headerHook) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return http.NewResponseController(w.ResponseWriter).Hijack()
 }
 
 func (w *headerHook) Unwrap() http.ResponseWriter { return w.ResponseWriter }

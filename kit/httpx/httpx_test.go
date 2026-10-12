@@ -1,10 +1,12 @@
 package httpx
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -479,6 +481,68 @@ func TestSecurityHeadersWith(t *testing.T) {
 	if rec.Header().Get("Content-Security-Policy") != DefaultCSP || rec.Header().Get("Strict-Transport-Security") != "" ||
 		rec.Header().Get("X-Robots-Tag") != "" {
 		t.Errorf("zero = %v", rec.Header())
+	}
+}
+
+func TestSecurityHeadersWith_flushAndHijack(t *testing.T) {
+	release := make(chan struct{})
+	mw := SecurityHeadersWith(SecurityOptions{HTMLOnly: true})
+	srv := httptest.NewServer(mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/events":
+			// Server-sent events: the client must see the event while the handler still runs.
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: one\n\n"))
+			w.(http.Flusher).Flush()
+			<-release
+		case "/page":
+			// A flush before any write sends the header: the hook must have run by then.
+			w.Header().Set("Content-Type", "text/html")
+			if err := http.NewResponseController(w).Flush(); err != nil {
+				t.Error(err)
+			}
+			<-release
+		case "/raw":
+			conn, buf, err := http.NewResponseController(w).Hijack()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			defer func() { _ = conn.Close() }()
+			_, _ = buf.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nhi")
+			_ = buf.Flush()
+		}
+	})))
+	defer srv.Close()
+	defer close(release)
+
+	res, err := http.Get(srv.URL + "/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	line, err := bufio.NewReader(res.Body).ReadString('\n')
+	if err != nil || line != "data: one\n" || res.Header.Get("Content-Security-Policy") != "" {
+		t.Errorf("events = %q %v %v", line, err, res.Header)
+	}
+	_ = res.Body.Close()
+
+	res, err = http.Get(srv.URL + "/page")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Header.Get("Content-Security-Policy") != DefaultCSP {
+		t.Errorf("flushed page headers = %v", res.Header)
+	}
+	_ = res.Body.Close()
+
+	res, err = http.Get(srv.URL + "/raw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	_ = res.Body.Close()
+	if string(body) != "hi" {
+		t.Errorf("hijacked body = %q", body)
 	}
 }
 
