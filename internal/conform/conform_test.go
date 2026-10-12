@@ -269,6 +269,9 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 			r.edit(scaffold.Dependabot, "package-ecosystem: docker", "package-ecosystem: dockerx")
 		}, []string{`FAIL dependabot: gomod /backend: commit-message prefix "chore", want deps`,
 			"FAIL dependabot: no docker entry for /"}},
+		{"dependabot nested module", strings.Replace(appShip, "dir: backend\n", "dir: backend\n  modules: [lib]\n", 1),
+			func(r *repo) { r.write("lib/go.mod", "module example.com/lib\n\ngo 1.27.1\n") },
+			[]string{"FAIL dependabot: no gomod entry for /lib"}},
 		{"dependabot yml", appShip, func(r *repo) { r.write(".github/dependabot.yml", "") },
 			[]string{"FAIL dependabot: rename to dependabot.yaml"}},
 		{"dependabot missing", appShip, func(r *repo) { r.remove(scaffold.Dependabot) },
@@ -374,7 +377,8 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 		{"go.modules", strings.Replace(appShip, "dir: backend\n", "dir: backend\n  modules: [backend/tools, lib]\n", 1), func(r *repo) {
 			r.write("backend/tools/go.mod", "module tools\n\ngo 1.26.0\n")
 		}, []string{"FAIL gomod: go 1.26.0: want at least go 1.27.0 (pins.GoMin) (backend/tools/go.mod)",
-			"FAIL gomod: missing (ship.yaml go.modules) (lib/go.mod)"}},
+			"FAIL gomod: missing (ship.yaml go.modules) (lib/go.mod)",
+			"FAIL dependabot: no gomod entry for /backend/tools", "FAIL dependabot: no gomod entry for /lib"}},
 		{"node below floor", appShip, func(r *repo) { r.edit("Containerfile", "node:26-alpine", "node:24-alpine") },
 			[]string{`FAIL containerfile: image "": builder node:24, want at least 26 (pins.NodeMin)`,
 				`FAIL containerfile: image "-ui": builder node:24, want at least 26 (pins.NodeMin)`}},

@@ -80,7 +80,7 @@ type data struct {
 	Private, UI, Images, GoDirSet, UIDirSet    bool
 	Branches, GoDir, GoDirAbs, UIDir, UIDirAbs string
 	DependabotOnly, NodeVersion, Packages      string
-	DockerDirs                                 []string
+	DockerDirs, GoModules                      []string
 }
 
 // Files renders every file ship owns in root. A file whose facts are missing (no origin, no visibility) carries
@@ -90,6 +90,9 @@ func Files(root string, c *config.Config, f Facts) ([]File, error) {
 		Private: f.Visibility == "private", Images: len(c.Images) > 0, UI: c.UI != nil,
 		Branches: "[" + c.Base + "]", GoDir: c.Go.Dir, GoDirSet: path.Clean(c.Go.Dir) != ".",
 		GoDirAbs: abs(c.Go.Dir), DependabotOnly: DependabotOnly, NodeVersion: f.NodeVersion, DockerDirs: f.DockerDirs,
+	}
+	for _, m := range c.Go.Modules {
+		d.GoModules = append(d.GoModules, abs(m))
 	}
 	if d.NodeVersion == "" {
 		d.NodeVersion = pins.NodeMin

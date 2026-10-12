@@ -271,6 +271,9 @@ func (e *env) dependabot() result {
 		}
 	}
 	want := []struct{ eco, dir string }{{"gomod", abs(e.c.Go.Dir)}, {"github-actions", "/"}}
+	for _, m := range e.c.Go.Modules {
+		want = append(want, struct{ eco, dir string }{"gomod", abs(m)})
+	}
 	if e.c.UI != nil {
 		want = append(want, struct{ eco, dir string }{"npm", abs(e.c.UI.Dir)})
 	}

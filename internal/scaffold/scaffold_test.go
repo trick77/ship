@@ -165,6 +165,19 @@ func TestFiles_whenPublicLibrary_thenCallersOnly(t *testing.T) {
 	}
 }
 
+func TestFiles_whenGoModules_thenGomodEntryEach(t *testing.T) {
+	files, err := Files(t.TempDir(), parse(t, "go:\n  modules: [kit, ./kit/auth]\n"), Facts{Visibility: "public"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dep := string(byPath(t, files, Dependabot).Want)
+	for _, s := range []string{"gomod\n    directory: /\n", "gomod\n    directory: /kit\n", "gomod\n    directory: /kit/auth\n"} {
+		if !strings.Contains(dep, s) {
+			t.Errorf("dependabot lacks %q:\n%s", s, dep)
+		}
+	}
+}
+
 func TestFiles_whenUIElsewhere_thenInputsAndOwnedFilesThere(t *testing.T) {
 	dir := t.TempDir()
 	c := parse(t, "ui:\n  dir: web\n")

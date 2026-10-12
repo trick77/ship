@@ -27,6 +27,15 @@ updates:
 [[- template "head" ]]
     groups:
 [[- template "split" "gomod" ]]
+[[- range .GoModules ]]
+
+  # Nested Go module (ship.yaml go.modules), its own go.mod.
+  - package-ecosystem: gomod
+    directory: [[ . ]]
+[[- template "head" ]]
+    groups:
+[[- template "split" "gomod" ]]
+[[- end ]]
 [[- if .UI ]]
 
   - package-ecosystem: npm
