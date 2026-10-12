@@ -289,8 +289,13 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 			`FAIL containerfile: image "-ui": go build without -trimpath`,
 			`FAIL containerfile: image "-ui": builder golang:1.26`}},
 		{"containerfile no build", appShip, func(r *repo) { r.write("Containerfile", "FROM gcr.io/distroless/static:nonroot\n") },
-			[]string{`FAIL containerfile: image "": no RUN go build`, `FAIL containerfile: image "": no ARG VERSION`,
-				`FAIL containerfile: image "-ui": no stage "core-ui"`}},
+			[]string{`FAIL containerfile: image "": no RUN go build`, `FAIL containerfile: image "-ui": no stage "core-ui"`}},
+		// A global ARG reaches no stage that does not redeclare it: ${VERSION} would build empty.
+		{"containerfile global arg", appShip, func(r *repo) {
+			r.edit("Containerfile", "ARG VERSION=dev\n", "")
+			r.edit("Containerfile", "# Two images from one file.\n", "ARG VERSION=dev\n")
+		}, []string{`FAIL containerfile: image "": ARG VERSION before the first FROM reaches no stage: redeclare it in the stage running go build`,
+			`FAIL containerfile: image "-ui": ARG VERSION before the first FROM reaches no stage`}},
 		{"containerfile missing", appShip, func(r *repo) { r.remove("Containerfile") }, []string{
 			`FAIL containerfile: image "": missing (Containerfile)`, `FAIL containerfile: image "-ui": missing (Containerfile)`}},
 		{"bad target", strings.Replace(appShip, "target: core-ui", "target: nope", 1), func(*repo) {},

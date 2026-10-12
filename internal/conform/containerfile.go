@@ -223,7 +223,10 @@ func (e *env) containerfile() result {
 			continue
 		}
 		var runs []string
-		arg := slices.ContainsFunc(x.global, isVersionArg)
+		// An ARG before the first FROM reaches no stage that does not redeclare it: the stage running go build
+		// declares its own.
+		global := slices.ContainsFunc(x.global, isVersionArg)
+		argless := false
 		var golang []string
 		for _, i := range closure(x.stages, x.final) {
 			s := x.stages[i]
@@ -234,15 +237,20 @@ func (e *env) containerfile() result {
 					add(fmt.Sprintf("builder %s names no %s version", s.base, t[1]))
 				}
 			}
+			arg := false
 			for _, in := range s.instrs {
 				arg = arg || isVersionArg(in)
 				if in.cmd == "RUN" && strings.Contains(in.args, "go build") {
 					runs = append(runs, in.args)
+					argless = argless || !arg
 				}
 			}
 		}
-		if !arg {
-			add("no ARG VERSION (ship release passes the version as a build arg)")
+		switch {
+		case argless && global:
+			add("ARG VERSION before the first FROM reaches no stage: redeclare it in the stage running go build")
+		case argless:
+			add("no ARG VERSION in the stage running go build (ship release passes the version as a build arg)")
 		}
 		switch {
 		case len(runs) == 0:
