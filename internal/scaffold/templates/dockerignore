@@ -1,0 +1,24 @@
+# ship:begin (owned by ship init; repo-specific lines go below the end marker)
+[[- if .GoDirSet ]]
+# Allowlist: the images build from the dirs below only. A new root-level file stays out of the context without anyone
+# having to remember this list. BuildKit reads the -f Containerfile outside these rules.
+*
+![[ .GoDir ]]
+[[- if .UI ]]
+![[ .UIDir ]]
+[[- end ]]
+[[- else ]]
+# The module is the repo root: git and editor state and coverage stay out of the context.
+.git
+.github
+.claude
+coverage
+[[- end ]]
+[[- if .UI ]]
+# The host's node_modules (darwin native binaries) would land on top of the image's own install; the image builds
+# dist itself.
+[[ .UIDir ]]/node_modules
+[[ .UIDir ]]/dist
+[[ .UIDir ]]/coverage
+[[- end ]]
+# ship:end

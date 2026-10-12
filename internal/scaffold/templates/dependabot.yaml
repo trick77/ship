@@ -1,0 +1,73 @@
+[[- define "head" ]]
+    commit-message: { prefix: deps }   # Go style: "deps: bump …"
+    schedule:
+      interval: weekly
+      day: sunday
+      time: "07:00"
+      timezone: Europe/Zurich
+    open-pull-requests-limit: 5
+[[- end ]]
+[[- define "split" ]]
+      [[ . ]]-non-major:
+        patterns:
+          - "*"
+        update-types:
+          - patch
+          - minor
+      [[ . ]]-major:
+        patterns:
+          - "*"
+        update-types:
+          - major
+[[- end -]]
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: [[ .GoDirAbs ]]
+[[- template "head" ]]
+    groups:
+[[- template "split" "gomod" ]]
+[[- if .UI ]]
+
+  - package-ecosystem: npm
+    directory: [[ .UIDirAbs ]]
+[[- template "head" ]]
+    groups:
+      # First matching group wins, so the specific groups come first and the catch-alls stay last. vite, its react
+      # plugin, vitest and its coverage provider are one dependency family: vitest pins a vite major range and
+      # @vitest/coverage-v8 pins vitest's exact version, so bumping any one alone fails npm ci on ERESOLVE (or nests
+      # a second vite). They always travel together. @tailwindcss/vite peer-depends on vite's major too.
+      vite-and-vitest:
+        patterns: ["vite", "@vitejs/*", "vitest", "@vitest/*", "@tailwindcss/vite"]
+      # Pinned exact (ship checks the version); a release may format differently and fail the gate's format:check,
+      # so it never blocks the other bumps: its own PR, reformatted there.
+      prettier:
+        patterns: ["prettier"]
+      # eslint, its configs and typescript-eslint peer-depend on each other's majors.
+      eslint:
+        patterns: ["eslint", "@eslint/*", "eslint-*", "typescript-eslint", "@typescript-eslint/*"]
+      # The typecheck: a release may report new errors, its own PR.
+      typescript:
+        patterns: ["typescript"]
+[[- template "split" "npm" ]]
+    ignore:
+      # typescript-eslint has no release supporting TypeScript 7 yet (peer dependency caps below it); lift once it
+      # does.
+      - dependency-name: typescript
+        versions: [">=7"]
+[[- end ]]
+[[- range .DockerDirs ]]
+
+  # Base images in the Containerfile.
+  - package-ecosystem: docker
+    directory: [[ . ]]
+[[- template "head" ]]
+    groups:
+[[- template "split" "docker" ]]
+[[- end ]]
+
+  - package-ecosystem: github-actions
+    directory: /
+[[- template "head" ]]
+    groups:
+[[- template "split" "actions" ]]

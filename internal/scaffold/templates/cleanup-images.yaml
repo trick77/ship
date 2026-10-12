@@ -1,0 +1,25 @@
+name: Cleanup images
+
+# By hand only (Actions minutes): keep the 10 newest tagged versions of each image, delete the rest.
+on:
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: "Preview deletions without removing anything"
+        type: boolean
+        default: false
+
+# Two runs must not delete the same versions at once: the second waits.
+concurrency:
+  group: cleanup-images
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    uses: trick77/ship/.github/workflows/cleanup-images.yaml@master
+    with:
+      packages: '[[ .Packages ]]'
+      dry-run: ${{ inputs.dry-run }}
+    permissions:
+      contents: read
+      packages: write

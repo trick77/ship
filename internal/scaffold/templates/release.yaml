@@ -1,0 +1,33 @@
+name: Release
+
+# By hand only (Actions minutes): gh workflow run Release -f bump=patch. auto: patch, or what the commits since the
+[[ if .Images -]]
+# last tag ask for (Release: minor|major). The only way to release: images are built and signed on GitHub-hosted
+# runners, never from a laptop.
+[[ else -]]
+# last tag ask for (Release: minor|major).
+[[ end -]]
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump"
+        type: choice
+        options: [patch, minor, major, auto]
+        default: patch
+
+jobs:
+  release:
+    uses: trick77/ship/.github/workflows/release.yaml@master
+    with:
+      bump: ${{ inputs.bump }}
+[[- if .GoDirSet ]]
+      go-dir: [[ .GoDir ]]
+[[- end ]]
+    permissions:
+      contents: write
+[[- if .Images ]]
+      packages: write
+      # cosign keyless signing: the job's OIDC token is the signing identity.
+      id-token: write
+[[- end ]]
