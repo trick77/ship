@@ -3,6 +3,7 @@
 package compose
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -37,11 +38,15 @@ type Service struct {
 	Name, Image, File string
 }
 
-// Services reads the services of files (repo-relative), in file order, then by name.
+// Services reads the services of files (repo-relative), in file order, then by name. A file gone from disk (tracked
+// but deleted, git still lists it) is skipped.
 func Services(root string, files []string) ([]Service, error) {
 	var out []Service
 	for _, f := range files {
 		b, err := os.ReadFile(filepath.Join(root, f)) //nolint:gosec // the repo's own compose files
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -72,7 +77,12 @@ func Image(root, service string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	files := Files(listed)
+	var files []string
+	for _, f := range Files(listed) {
+		if _, err := os.Stat(filepath.Join(root, f)); err == nil {
+			files = append(files, f)
+		}
+	}
 	if len(files) == 0 {
 		return "", fmt.Errorf("compose:%s: no compose file at the repo root", service)
 	}

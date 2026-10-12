@@ -74,6 +74,24 @@ func TestImage_whenUnresolvable_thenError(t *testing.T) {
 			t.Errorf("%v: %v, want %q", tt.files, err, tt.want)
 		}
 	}
+	// Tracked, then deleted: git still lists it, the image comes from what is on disk.
+	dir := repo(t, map[string]string{"compose.yaml": "services:\n  db:\n    image: postgres:17\n",
+		"compose.dev.yaml": "services:\n  db:\n    image: postgres:16\n"})
+	if _, err := gitx.Git(dir, "add", "."); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, "compose.dev.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if img, err := Image(dir, "db"); err != nil || img != "postgres:17" {
+		t.Errorf("deleted compose file: %q %v", img, err)
+	}
+	if err := os.Remove(filepath.Join(dir, "compose.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Image(dir, "db"); err == nil || !strings.Contains(err.Error(), "no compose file") {
+		t.Errorf("all compose files deleted: %v", err)
+	}
 	if _, err := Image(t.TempDir(), "db"); err == nil {
 		t.Error("no git repo: no error")
 	}
