@@ -1,7 +1,8 @@
 name: Cleanup images
 
 # Reusable: keep the newest tagged versions of each ghcr package, delete the rest (orphaned untagged included;
-# multi-arch and attestation children of kept images are protected). A caller's cleanup-images.yaml:
+# multi-arch and attestation children of kept images are protected; cosign signatures are never touched). A
+# caller's cleanup-images.yaml:
 #
 #   on: workflow_dispatch
 #   jobs:
@@ -63,6 +64,14 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           image-names: ${{ matrix.package }}
           tag-selection: both
+          # cosign's signatures live under tags sha256-<digest> (the OCI referrers fallback index, ghcr has no
+          # referrers API) or sha256-<digest>.sig (cosign's legacy layout). A negative tag match drops a version from
+          # the selection before keep-n-most-recent counts, so a signature neither goes nor takes a keep slot; still
+          # a kept tagged version, its index's children (the signature bundles) are protected as multi-arch children
+          # are. Tag filters work with GITHUB_TOKEN, only image-names filters do not. (v3.1.0 src/core/
+          # select_package_versions.rs filter_by_matchers, kept_tagged_digests; filter_out_multi_arch_children.rs.)
+          # A deleted image's signature stays behind: a few KB, never a broken one.
+          image-tags: "!sha256-*"
           keep-n-most-recent: ${{ inputs.keep }}
           # Never catch a release pushed in the last hour.
           cut-off: 1h
