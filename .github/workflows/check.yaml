@@ -69,6 +69,7 @@ jobs:
           node-version: ${{ inputs.node-version }}
           cache: npm
           cache-dependency-path: ${{ inputs.ui-dir }}/package-lock.json
+      # shellcheck (ship check's step for a repo's shell scripts): preinstalled on GitHub's ubuntu runner images.
       - working-directory: ${{ inputs.go-dir }}
         env:
           SHIP: ${{ inputs.ship }}

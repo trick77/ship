@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"go.yaml.in/yaml/v3"
 
@@ -32,8 +33,10 @@ type Config struct {
 	Go    Go      `yaml:"go"`
 	UI    *UI     `yaml:"ui"`
 	// Steps are repo-specific checks (openapi lint, shell tests, e2e), run after lint, before the tests.
-	Steps  []Step  `yaml:"steps"`
-	Images []Image `yaml:"images"`
+	Steps []Step `yaml:"steps"`
+	// Shell lists repo-relative shell scripts for shellcheck beyond the ones found by name (*.sh) or shebang.
+	Shell  []string `yaml:"shell"`
+	Images []Image  `yaml:"images"`
 	// TagPrefix goes before release versions: empty for the family's plain 1.2.3, "v" for a Go module.
 	TagPrefix string `yaml:"tag_prefix"`
 }
@@ -168,5 +171,16 @@ func (c *Config) validate() error {
 			return fmt.Errorf("%s: steps[%d] needs name and run", File, i)
 		}
 	}
+	for _, s := range c.Shell {
+		if !inRepo(s) {
+			return fmt.Errorf("%s: shell: %q is not a path inside the repo", File, s)
+		}
+	}
 	return nil
+}
+
+// inRepo reports whether p is a repo-relative path below the root, lexically: no absolute path, no "..".
+func inRepo(p string) bool {
+	c := filepath.ToSlash(filepath.Clean(p))
+	return p != "" && !filepath.IsAbs(p) && c != "." && c != ".." && !strings.HasPrefix(c, "../")
 }

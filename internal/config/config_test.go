@@ -79,6 +79,9 @@ func TestParse_whenUnknownKeyOrBadValue_thenError(t *testing.T) {
 		"go: [1, 2]\n",          // wrong type
 		"ui:\n  flor: 80\n",     // typo inside the ui block
 		"ui: [\n",               // malformed
+		"shell: [/etc/x.sh]\n",  // outside the repo
+		"shell: [../x.sh]\n",    // outside the repo
+		"shell: [\".\"]\n",      // the root itself
 	} {
 		if _, err := Parse([]byte(in)); err == nil {
 			t.Errorf("%q: no error", in)

@@ -54,6 +54,7 @@ func Run(root string, c *config.Config) error {
 		{"govulncheck " + pins.Govulncheck, r.vuln},
 		{"golangci-lint " + c.Lint, r.lint},
 		{"ui lint", r.uiLint},
+		{"shellcheck", r.shellcheck},
 		{"repo steps", r.extra},
 		{"go test", r.goTest},
 		{"ui test", r.uiTest},
