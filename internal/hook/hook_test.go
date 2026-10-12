@@ -208,6 +208,42 @@ func TestRefresh(t *testing.T) {
 	}
 }
 
+// A symlinked hook, even to ship's own script, is left alone: replacing it would cut the link.
+func TestRefresh_whenHookSymlinked_thenLeft(t *testing.T) {
+	t.Setenv("SHIP_CMD", "")
+	dir := repo(t)
+	p, err := Install(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(p); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "pre-push")
+	old := "#!/bin/sh\n# " + marker + "\ngo run github.com/trick77/ship@latest pre-push\n"
+	if err := os.WriteFile(target, []byte(old), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, p); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := Refresh(dir); ok || err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("symlinked stale hook: %v %v", ok, err)
+	}
+	if _, err := Install(dir); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("Install over a symlink: %v", err)
+	}
+	if fi, err := os.Lstat(p); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("link replaced: %v %v", fi, err)
+	}
+	if b, _ := os.ReadFile(target); string(b) != old {
+		t.Fatalf("target changed: %q", b)
+	}
+	if _, err := os.Stat(p + Backup); err == nil {
+		t.Fatal("backup written for a hook left alone")
+	}
+}
+
 func TestInstall_whenHooksPathInsideRepo_thenThere(t *testing.T) {
 	dir := repo(t)
 	if _, err := gitx.Git(dir, "config", "core.hooksPath", ".git/myhooks"); err != nil {

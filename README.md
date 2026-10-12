@@ -76,7 +76,7 @@ coverage output.
 | `ship check` | conform, fetch, commit subjects, secret scan, ui embed, ui build, npm audit, go modules, gofmt, go mod verify, go mod tidy, build, govulncheck, golangci-lint (incl. govet), ui lint, shellcheck, steps, postgres, go test (-race, coverage), ui test, floors, patch gate |
 | `ship conform [-fix]` / `ship init [-diff]` | the repo against ship's canon / write the files ship owns (see Conform) |
 | `ship lint` | golangci-lint alone, at the version `ship check` runs: a Makefile's quick lint, no version of its own |
-| `ship hooks` | install the pre-push hook (respects core.hooksPath, never overwrites a foreign hook) |
+| `ship hooks` | install the pre-push hook (respects core.hooksPath, never overwrites a foreign or symlinked hook) |
 | `ship release [patch\|minor\|major\|auto] [-cache gha] [-dry-run] [-dir <module>]` | next version from tags, notes from the subjects since the last tag (grouped by area), tag (API), images pushed (version + sha), scanned and signed, GitHub release, then :MAJOR.MINOR, :MAJOR, :latest. No `images:` and no `ui:`: `go build ./...` before the tag (in `-dry-run` too). With `images:` only on a GitHub-hosted runner (the Release workflow); elsewhere `-dry-run` only. The Release workflow inherits the caller's permissions: `packages: write` and `id-token: write` only with `images:`. `-dir`: a nested Go module, below |
 
 Gates beyond the build and tests, all hard failures:
@@ -141,7 +141,7 @@ gate does not run rather than pass over the other side alone. Scope is the repor
 Pre-push: deletes and tags pass; anything else must be HEAD with a clean tree (check tests the tree), then
 `ship check`. A tree with no `ship.yaml` in the index (a branch cut before ship) is refused: rebase it. A hook
 ship installed that is not this ship's script is rewritten with it (renamed over, so the running hook is
-unharmed; the old one kept as `pre-push.ship-old`), one line says so; a foreign hook is never touched. Under
+unharmed; the old one kept as `pre-push.ship-old`), one line says so; a foreign or symlinked hook is never touched. Under
 `SHIP_CMD` (not master's ship) a stale hook only gets a warning.
 
 ## Workflows

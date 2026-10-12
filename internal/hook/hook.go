@@ -71,6 +71,9 @@ func Install(root string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if err := symlink(p); err != nil {
+		return "", err
+	}
 	// A core.hooksPath outside this repo (a global or shared hooks dir) would gate every repo using it, and refuse
 	// every push of a repo without ship.
 	common, err := gitx.Git(root, "rev-parse", "--path-format=absolute", "--git-common-dir")
@@ -115,7 +118,7 @@ func Install(root string) (string, error) {
 const Backup = ".ship-old"
 
 // Refresh reinstalls a stale hook (Stale) with this ship's script, as Install does, keeping the old one at its path +
-// Backup, and reports whether it did. A hook ship did not install is never touched; nor is any hook
+// Backup, and reports whether it did. A hook ship did not install, or a symlink, is never touched; nor is any hook
 // while SHIP_CMD is set: that ship (a local build, a pin) is not master's, whose script the hook must carry, so a
 // stale hook is an error to warn about.
 func Refresh(root string) (string, bool, error) {
@@ -128,6 +131,9 @@ func Refresh(root string) (string, bool, error) {
 	}
 	p, err := path(root)
 	if err != nil {
+		return "", false, err
+	}
+	if err := symlink(p); err != nil {
 		return "", false, err
 	}
 	old, err := os.ReadFile(p) //nolint:gosec // the hook path git reports
@@ -143,6 +149,15 @@ func Refresh(root string) (string, bool, error) {
 	}
 	p, err = Install(root)
 	return p, err == nil, err
+}
+
+// symlink refuses a symlinked hook (a dotfiles or shared hook): someone's arrangement, renaming over it would cut
+// the link.
+func symlink(p string) error {
+	if fi, err := os.Lstat(p); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s is a symlink: ship never replaces it; update its target by hand", p)
+	}
+	return nil
 }
 
 func ours(s string) bool { return strings.Contains(s, marker) }
