@@ -144,7 +144,7 @@ func Refresh(root string) (string, bool, error) {
 	if err := os.Remove(p + Backup); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return "", false, err
 	}
-	if err := os.WriteFile(p+Backup, old, 0o600); err != nil {
+	if err := os.WriteFile(p+Backup, old, 0o600); err != nil { //nolint:gosec // next to the hook path git reports
 		return "", false, err
 	}
 	p, err = Install(root)
