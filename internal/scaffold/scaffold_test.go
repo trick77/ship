@@ -105,7 +105,7 @@ func TestFiles_whenApp_thenEveryOwnedFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{CI, Release, Cleanup, Dependabot, Ignore, "ui/" + ESLint, Makefile}
+	want := []string{CI, Release, Cleanup, Dependabot, Ignore, "ui/" + ESLint, "ui/" + TSConfigNode, "ui/" + NPMRC, Makefile}
 	if got := paths(files); strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Fatalf("files %v", got)
 	}
@@ -122,8 +122,8 @@ func TestFiles_whenApp_thenEveryOwnedFile(t *testing.T) {
 		t.Errorf("cleanup:\n%s", cl)
 	}
 	dep := string(byPath(t, files, Dependabot).Want)
-	for _, s := range []string{"directory: /backend", "directory: /ui", "package-ecosystem: docker", "prettier:",
-		"eslint:", "typescript:", `versions: [">=7"]`, "npm-major:", "actions-non-major:", "timezone: Europe/Zurich"} {
+	for _, s := range []string{"directory: /backend", "directory: /ui", "package-ecosystem: docker",
+		"actions-non-major:", "timezone: Europe/Zurich"} {
 		if !strings.Contains(dep, s) {
 			t.Errorf("dependabot lacks %q:\n%s", s, dep)
 		}
@@ -132,8 +132,14 @@ func TestFiles_whenApp_thenEveryOwnedFile(t *testing.T) {
 		!strings.Contains(ig, "ui/node_modules\nui/dist\n") {
 		t.Errorf(".dockerignore:\n%s", ig)
 	}
-	if es := string(byPath(t, files, "ui/"+ESLint).Want); strings.Contains(es, "react-hooks") {
-		t.Errorf("hooks without the plugin:\n%s", es)
+	if i, j := strings.Index(dep, "    groups:\n      # First"), strings.Index(dep, "\n\n  # Base images"); i < 0 || j < i ||
+		dep[i:j+1] != npmGroups {
+		t.Errorf("dependabot npm groups:\n%s", dep)
+	}
+	for p, want := range map[string]string{ESLint: eslintConfig, TSConfigNode: tsconfigNode, NPMRC: "save-exact=true\n"} {
+		if got := string(byPath(t, files, "ui/"+p).Want); got != want {
+			t.Errorf("ui/%s:\n%s", p, got)
+		}
 	}
 }
 
@@ -159,10 +165,10 @@ func TestFiles_whenPublicLibrary_thenCallersOnly(t *testing.T) {
 	}
 }
 
-func TestFiles_whenUIElsewhereWithHooks_thenInputsAndPlugin(t *testing.T) {
+func TestFiles_whenUIElsewhere_thenInputsAndOwnedFilesThere(t *testing.T) {
 	dir := t.TempDir()
 	c := parse(t, "ui:\n  dir: web\n")
-	files, err := Files(dir, c, Facts{Visibility: "public", ReactHooks: true})
+	files, err := Files(dir, c, Facts{Visibility: "public"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,8 +176,8 @@ func TestFiles_whenUIElsewhereWithHooks_thenInputsAndPlugin(t *testing.T) {
 	if !strings.Contains(ci, "node-version: \"26\"\n      ui-dir: web\n") || strings.Contains(ci, "go-dir") {
 		t.Errorf("ci.yaml:\n%s", ci)
 	}
-	if es := string(byPath(t, files, "web/"+ESLint).Want); !strings.Contains(es, "reactHooks.configs.flat.recommended") {
-		t.Errorf("eslint:\n%s", es)
+	for _, p := range []string{ESLint, TSConfigNode, NPMRC} {
+		byPath(t, files, "web/"+p)
 	}
 	if mk := byPath(t, files, Makefile); !strings.HasPrefix(string(mk.Want), Begin) {
 		t.Errorf("Makefile:\n%s", mk.Want)
@@ -268,3 +274,80 @@ func TestPrintDiff(t *testing.T) {
 		t.Error("same file reported")
 	}
 }
+
+// The canon the UI repos were harmonized to, copied here: a template edit changes these too.
+const npmGroups = `    groups:
+      # First matching group wins, so the specific groups come first and the
+      # catch-alls stay last. vite, its react plugin, vitest and its coverage
+      # provider are one dependency family: vitest pins a vite major range and
+      # @vitest/coverage-v8 pins vitest's exact version, so bumping any one
+      # alone fails npm ci on ERESOLVE (or nests a second vite). They always
+      # travel together. @tailwindcss/vite peer-depends on vite's major too.
+      vite-and-vitest:
+        patterns: ["vite", "@vitejs/*", "vitest", "@vitest/*", "@tailwindcss/vite"]
+      # Pinned exact; a release may format differently and fail the gate's
+      # format:check, so it never blocks the other bumps: its own PR,
+      # reformatted there.
+      prettier:
+        patterns: ["prettier"]
+      # A new rule or recommended-set change can fail the gate's lint: its own
+      # PR, findings fixed there. typescript-eslint, @eslint/js and the
+      # eslint-config-*/eslint-plugin-* packages track eslint's major.
+      eslint:
+        patterns: ["eslint", "eslint-*", "typescript-eslint", "@eslint/*"]
+      npm-non-major:
+        patterns:
+          - "*"
+        update-types:
+          - patch
+          - minor
+      npm-major:
+        patterns:
+          - "*"
+        update-types:
+          - major
+    ignore:
+      # typescript-eslint has no release supporting TypeScript 7.x yet
+      # (peer dependency caps at <6.1.0); re-enable once it does.
+      - dependency-name: "typescript"
+        update-types:
+          - "version-update:semver-major"
+`
+
+const eslintConfig = `import js from "@eslint/js";
+import tseslint from "typescript-eslint";
+import reactHooks from "eslint-plugin-react-hooks";
+import eslintConfigPrettier from "eslint-config-prettier";
+
+export default tseslint.config(
+  js.configs.recommended,
+  ...tseslint.configs.recommended,
+  reactHooks.configs.flat.recommended,
+  eslintConfigPrettier,
+  {
+    rules: {
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
+      ],
+      "@typescript-eslint/no-explicit-any": "warn",
+    },
+  },
+  { ignores: ["dist/"] },
+);
+`
+
+const tsconfigNode = `{
+  "compilerOptions": {
+    "composite": true,
+    "skipLibCheck": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowSyntheticDefaultImports": true,
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo",
+    "emitDeclarationOnly": true,
+    "outDir": "./node_modules/.tmp/node"
+  },
+  "include": ["vite.config.ts"]
+}
+`

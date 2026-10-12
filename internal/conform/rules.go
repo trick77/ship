@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/trick77/ship/internal/gitx"
-	"github.com/trick77/ship/internal/pins"
 	"github.com/trick77/ship/internal/scaffold"
 )
 
@@ -78,14 +77,52 @@ func (e *env) dockerignore() result {
 	return result{findings: fs}
 }
 
-// The UI's scripts, as ship.yaml's ui.lint and ui.build run them.
-const (
-	lintScript   = "eslint . --max-warnings 0 && npm run format:check"
-	formatScript = "prettier --check 'src/**/*.{ts,tsx,css}' '*.ts'"
-	buildPrefix  = "tsc -b && vite build"
-)
+// uiScripts are the UI's package.json scripts, exactly: ship.yaml's ui.lint runs lint, the build is the typecheck.
+var uiScripts = []struct{ name, want string }{
+	{"build", "tsc -b && vite build"},
+	{"lint", "eslint . --max-warnings 0 && npm run format:check"},
+	{"format", "prettier --write 'src/**/*.{ts,tsx,css}' '*.ts'"},
+	{"format:check", "prettier --check 'src/**/*.{ts,tsx,css}' '*.ts'"},
+	{"test", "vitest run"},
+}
 
-// ui: one lint (ESLint, then Prettier at one pinned version), and the build is the typecheck.
+// uiDevDependencies are the lint, format and typecheck tools every UI declares. Their versions are the repo's
+// (Dependabot moves them per repo), only exact: .npmrc's save-exact, one version per clone.
+var uiDevDependencies = []string{"typescript", "prettier", "eslint", "typescript-eslint", "eslint-config-prettier",
+	"@eslint/js", "eslint-plugin-react-hooks"}
+
+// exactVersion is an npm version with no range: x.y.z, a pre-release allowed.
+var exactVersion = regexp.MustCompile(`^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$`)
+
+// typescriptCap: typescript-eslint has no release supporting TypeScript 7 yet (its peer dependency caps below it);
+// dependabot's typescript ignore holds the major back, this catches a hand bump. Lift both once it does.
+const typescriptCap = 7
+
+// major is an exact version's major, -1 when it has none.
+func major(v string) int {
+	m, err := strconv.Atoi(v[:max(strings.IndexByte(v, '.'), 0)])
+	if err != nil {
+		return -1
+	}
+	return m
+}
+
+// SetupImport is the first statement of the UI's src/test/setup.ts: jest-dom's matchers on vitest's expect, before
+// anything a repo adds there.
+const SetupImport = `import "@testing-library/jest-dom/vitest";`
+
+// viteWants are literals vite.config.ts must contain. Plain string checks, not a parser: it is TypeScript, nothing
+// in the standard library parses it and ship's dependencies stay stdlib + yaml. The format script covers '*.ts', so
+// Prettier fixes quotes and spacing: the literals are stable, and a miss names the line to write.
+var viteWants = []struct{ lit, why string }{
+	{`from "vitest/config"`, "defineConfig from vitest/config (types the test key)"},
+	{"globals: true", "test.globals: true (Testing Library's cleanup)"},
+	{`setupFiles: ["./src/test/setup.ts"]`, `test.setupFiles: ["./src/test/setup.ts"]`},
+	{`reportsDirectory: "../coverage/ui"`, `coverage.reportsDirectory: "../coverage/ui" (ship.yaml ui.lcov: coverage/ui/lcov.info)`},
+}
+
+// ui: one lint (ESLint, then Prettier, every tool at one pinned version), the build is the typecheck, vitest runs
+// the tests with one setup.
 func (e *env) ui() result {
 	if e.c.UI == nil {
 		return result{skip: "no ui"}
@@ -102,23 +139,94 @@ func (e *env) ui() result {
 	case p == nil:
 		return result{findings: append(fs, finding{what: "missing", file: pj})}
 	}
-	for _, s := range []struct{ name, want string }{{"lint", lintScript}, {"format:check", formatScript}} {
+	for _, s := range uiScripts {
 		if got := p.Scripts[s.name]; got != s.want {
 			fs = append(fs, finding{what: fmt.Sprintf("script %s %q, want %q", s.name, got, s.want), file: pj})
 		}
 	}
-	if b := p.Scripts["build"]; !strings.HasPrefix(b, buildPrefix) {
-		fs = append(fs, finding{what: fmt.Sprintf("script build %q, want it to start with %q (the typecheck)", b,
-			buildPrefix), file: pj})
-	}
-	if v := p.DevDependencies["prettier"]; v != pins.Prettier {
-		fs = append(fs, finding{what: fmt.Sprintf("devDependency prettier %q, want exactly %s", v, pins.Prettier),
-			file: pj})
+	for _, d := range uiDevDependencies {
+		v, ok := p.DevDependencies[d]
+		switch {
+		case !ok:
+			fs = append(fs, finding{what: "devDependency " + d + " missing", file: pj})
+		case !exactVersion.MatchString(v):
+			fs = append(fs, finding{what: fmt.Sprintf("devDependency %s %q: want an exact version (.npmrc save-exact)",
+				d, v), file: pj})
+		case d == "typescript" && major(v) >= typescriptCap:
+			fs = append(fs, finding{what: fmt.Sprintf("devDependency typescript %s: want below %d, typescript-eslint "+
+				"does not support it", v, typescriptCap), file: pj})
+		}
 	}
 	if es := e.uiPath(scaffold.ESLint); !e.exists(es) {
 		fs = append(fs, finding{what: "missing (ship init)", file: es})
 	}
+	fs = append(fs, e.tsconfigRef()...)
+	fs = append(fs, e.viteConfig()...)
+	fs = append(fs, e.testSetup()...)
 	return result{findings: fs}
+}
+
+// tsconfigNodeRef is tsconfig.json's project reference to the owned tsconfig.node.json. A pattern, not encoding/json:
+// tsconfig is JSONC (transmission-ui's carries comments), and Prettier does not format it, so spacing varies.
+var tsconfigNodeRef = regexp.MustCompile(`"path"\s*:\s*"\./` + regexp.QuoteMeta(scaffold.TSConfigNode) + `"`)
+
+// tsconfigRef: tsc -b builds vite.config.ts through the project reference to the owned tsconfig.node.json.
+func (e *env) tsconfigRef() []finding {
+	f := e.uiPath("tsconfig.json")
+	b, err := e.read(f)
+	switch {
+	case err != nil:
+		return []finding{{what: err.Error(), file: f}}
+	case b == nil:
+		return []finding{{what: "missing", file: f}}
+	case !tsconfigNodeRef.Match(b):
+		return []finding{{what: fmt.Sprintf(`no reference to ./%s ("references": [{ "path": "./%[1]s" }])`,
+			scaffold.TSConfigNode), file: f}}
+	}
+	return nil
+}
+
+// viteConfig: vitest typed, globals, the one setup file, one coverage directory (viteWants).
+func (e *env) viteConfig() []finding {
+	f := e.uiPath("vite.config.ts")
+	b, err := e.read(f)
+	switch {
+	case err != nil:
+		return []finding{{what: err.Error(), file: f}}
+	case b == nil:
+		return []finding{{what: "missing", file: f}}
+	}
+	var fs []finding
+	for _, w := range viteWants {
+		if !bytes.Contains(b, []byte(w.lit)) {
+			fs = append(fs, finding{what: fmt.Sprintf("no %s: want %s", w.lit, w.why), file: f})
+		}
+	}
+	return fs
+}
+
+// testSetup: setup.ts is the repo's (stubs jsdom lacks go there), its first statement is ship's. A leading comment
+// is no statement.
+func (e *env) testSetup() []finding {
+	f := e.uiPath("src/test/setup.ts")
+	b, err := e.read(f)
+	switch {
+	case err != nil:
+		return []finding{{what: err.Error(), file: f}}
+	case b == nil:
+		return []finding{{what: "missing (first statement " + SetupImport + ")", file: f}}
+	}
+	for _, l := range strings.Split(string(b), "\n") {
+		l = strings.TrimSpace(l)
+		if l == "" || strings.HasPrefix(l, "//") {
+			continue
+		}
+		if l == SetupImport {
+			return nil
+		}
+		break
+	}
+	return []finding{{what: "first statement is not " + SetupImport, file: f}}
 }
 
 // golangci: one lint config, ship's, everywhere.

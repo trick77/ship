@@ -33,28 +33,31 @@ updates:
     directory: [[ .UIDirAbs ]]
 [[- template "head" ]]
     groups:
-      # First matching group wins, so the specific groups come first and the catch-alls stay last. vite, its react
-      # plugin, vitest and its coverage provider are one dependency family: vitest pins a vite major range and
-      # @vitest/coverage-v8 pins vitest's exact version, so bumping any one alone fails npm ci on ERESOLVE (or nests
-      # a second vite). They always travel together. @tailwindcss/vite peer-depends on vite's major too.
+      # First matching group wins, so the specific groups come first and the
+      # catch-alls stay last. vite, its react plugin, vitest and its coverage
+      # provider are one dependency family: vitest pins a vite major range and
+      # @vitest/coverage-v8 pins vitest's exact version, so bumping any one
+      # alone fails npm ci on ERESOLVE (or nests a second vite). They always
+      # travel together. @tailwindcss/vite peer-depends on vite's major too.
       vite-and-vitest:
         patterns: ["vite", "@vitejs/*", "vitest", "@vitest/*", "@tailwindcss/vite"]
-      # Pinned exact (ship checks the version); a release may format differently and fail the gate's format:check,
-      # so it never blocks the other bumps: its own PR, reformatted there.
+      # Pinned exact; a release may format differently and fail the gate's
+      # format:check, so it never blocks the other bumps: its own PR,
+      # reformatted there.
       prettier:
         patterns: ["prettier"]
-      # eslint, its configs and typescript-eslint peer-depend on each other's majors.
+      # A new rule or recommended-set change can fail the gate's lint: its own
+      # PR, findings fixed there. typescript-eslint, @eslint/js and the
+      # eslint-config-*/eslint-plugin-* packages track eslint's major.
       eslint:
-        patterns: ["eslint", "@eslint/*", "eslint-*", "typescript-eslint", "@typescript-eslint/*"]
-      # The typecheck: a release may report new errors, its own PR.
-      typescript:
-        patterns: ["typescript"]
+        patterns: ["eslint", "eslint-*", "typescript-eslint", "@eslint/*"]
 [[- template "split" "npm" ]]
     ignore:
-      # typescript-eslint has no release supporting TypeScript 7 yet (peer dependency caps below it); lift once it
-      # does.
-      - dependency-name: typescript
-        versions: [">=7"]
+      # typescript-eslint has no release supporting TypeScript 7.x yet
+      # (peer dependency caps at <6.1.0); re-enable once it does.
+      - dependency-name: "typescript"
+        update-types:
+          - "version-update:semver-major"
 [[- end ]]
 [[- range .DockerDirs ]]
 

@@ -161,7 +161,7 @@ what is left is by hand.
 
 `ship init` writes the files ship owns, rendered from `ship.yaml` and the repo (origin, visibility, package.json):
 `.github/workflows/ci.yaml`, `release.yaml`, `cleanup-images.yaml` (images), `.github/dependabot.yaml`,
-`<ui.dir>/eslint.config.js` (UI), and in `.dockerignore` (images) and `Makefile` (apps, or one that exists) only the
+`<ui.dir>/eslint.config.js`, `tsconfig.node.json` and `.npmrc` (UI), and in `.dockerignore` (images) and `Makefile` (apps, or one that exists) only the
 block between `# ship:begin` and `# ship:end`; the rest of those two is the repo's. Owned means byte-equal.
 `ship init -diff` prints the difference, writes nothing, exits 1 when anything differs.
 
@@ -174,7 +174,7 @@ block between `# ship:begin` and `# ship:end`; the rest of those two is the repo
 | `containerfile` | per image: `ARG VERSION` into `-X github.com/trick77/ship/kit/version.Version=${VERSION}`, `-trimpath`, non-root final stage, builder `golang:X.Y` = go.mod's | per `image` |
 | `distroless` | final stage on `gcr.io/distroless/` | per `image` |
 | `dockerignore` | exists with images; excludes `<ui.dir>/node_modules` and `<ui.dir>/dist` | yes |
-| `ui` | `ui.lint: npm run lint`; scripts `lint` = `eslint . --max-warnings 0 && npm run format:check`, `format:check` = `prettier --check 'src/**/*.{ts,tsx,css}' '*.ts'`, `build` starts `tsc -b && vite build`; `prettier` pinned at ship's version; eslint.config.js | yes |
+| `ui` | `ui.lint: npm run lint`; scripts exactly `build` = `tsc -b && vite build`, `lint` = `eslint . --max-warnings 0 && npm run format:check`, `format` = `prettier --write 'src/**/*.{ts,tsx,css}' '*.ts'`, `format:check` = `prettier --check …` (same globs), `test` = `vitest run`; devDependencies `typescript`, `prettier`, `eslint`, `typescript-eslint`, `eslint-config-prettier`, `@eslint/js`, `eslint-plugin-react-hooks` present at an exact version (no range; the version is the repo's), typescript below 7 (typescript-eslint); eslint.config.js; tsconfig.json references `./tsconfig.node.json`; vite.config.ts: `defineConfig` from `vitest/config`, `globals: true`, `setupFiles: ["./src/test/setup.ts"]`, `reportsDirectory: "../coverage/ui"`; `src/test/setup.ts`'s first statement `import "@testing-library/jest-dom/vitest";` | yes |
 | `golangci` | no `.golangci.yaml`/`.yml` in the repo: ship's config is the family's | per `path` |
 | `gomod` | `go x.y.z`; a required `github.com/trick77/ship/kit` is the newest `kit/v*` tag | yes |
 | `kit` | a repo with images requires kit | yes |
@@ -195,10 +195,10 @@ allow:
 A repo moving to ship, in one PR (its own subject already Go style: the new gate checks it):
 
 1. `ship.yaml` at the root: only the keys that differ from the defaults above.
-2. `ship init`: the workflow callers, dependabot, `.dockerignore` and `Makefile` blocks, the ESLint config. Drop the
-   repo's own gate scripts and hooks.
-3. `ship conform`: what init cannot write (Containerfile, package.json scripts, kit, AGENTS.md) by hand, or an
-   `allow` entry with its why. AGENTS.md, verbatim with the repo's own areas:
+2. `ship init`: the workflow callers, dependabot, `.dockerignore` and `Makefile` blocks, the UI's ESLint config,
+   tsconfig.node.json and .npmrc. Drop the repo's own gate scripts and hooks.
+3. `ship conform`: what init cannot write (Containerfile, package.json scripts and pins, vite config, kit, AGENTS.md)
+   by hand, or an `allow` entry with its why. AGENTS.md, verbatim with the repo's own areas:
    ``- Commit subjects + PR titles: Go style `area: what` (`<area>: …`, `<area>: …`), gated by ship; release notes list them by area.``
 4. `ship hooks` in every clone.
 5. `ship check` green locally, then push: the hook runs it.

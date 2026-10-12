@@ -1,17 +1,12 @@
-// Owned by ship init: the family's ESLint config. ship.yaml's ui.lint runs it with --max-warnings 0.
 import js from "@eslint/js";
 import tseslint from "typescript-eslint";
-import eslintConfigPrettier from "eslint-config-prettier";
-[[- if .ReactHooks ]]
 import reactHooks from "eslint-plugin-react-hooks";
-[[- end ]]
+import eslintConfigPrettier from "eslint-config-prettier";
 
 export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
-[[- if .ReactHooks ]]
   reactHooks.configs.flat.recommended,
-[[- end ]]
   eslintConfigPrettier,
   {
     rules: {
@@ -22,5 +17,5 @@ export default tseslint.config(
       "@typescript-eslint/no-explicit-any": "warn",
     },
   },
-  { ignores: ["dist/", "coverage/"] },
+  { ignores: ["dist/"] },
 );

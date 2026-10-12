@@ -1,5 +1,5 @@
 // Package scaffold renders the files ship owns in a consumer repo (workflow callers, dependabot, .dockerignore,
-// the ESLint config, the Makefile's ship block) from ship.yaml and the repo's facts. Owned means byte-equal to the
+// the UI's ESLint config, tsconfig.node.json and .npmrc, the Makefile's ship block) from ship.yaml and the repo's facts. Owned means byte-equal to the
 // rendered template: a copied file that drifts is caught on the next push, never in an audit.
 package scaffold
 
@@ -42,7 +42,10 @@ const (
 	Dependabot = ".github/dependabot.yaml"
 	Ignore     = ".dockerignore"
 	Makefile   = "Makefile"
-	ESLint     = "eslint.config.js"
+	// In the UI's directory.
+	ESLint       = "eslint.config.js"
+	TSConfigNode = "tsconfig.node.json"
+	NPMRC        = ".npmrc"
 )
 
 //go:embed templates
@@ -54,8 +57,6 @@ type Facts struct {
 	Repo string
 	// Visibility is public or private.
 	Visibility string
-	// ReactHooks: the UI uses eslint-plugin-react-hooks, so the ESLint config enables it.
-	ReactHooks bool
 	// DockerDirs are the repo-absolute directories of the images' Containerfiles that exist.
 	DockerDirs []string
 }
@@ -75,17 +76,17 @@ type File struct {
 func (f File) Differs() bool { return f.Manual != "" || !bytes.Equal(f.Have, f.Want) }
 
 type data struct {
-	Private, UI, Images, GoDirSet, UIDirSet, ReactHooks bool
-	Branches, GoDir, GoDirAbs, UIDir, UIDirAbs          string
-	DependabotOnly, NodeVersion, Packages               string
-	DockerDirs                                          []string
+	Private, UI, Images, GoDirSet, UIDirSet    bool
+	Branches, GoDir, GoDirAbs, UIDir, UIDirAbs string
+	DependabotOnly, NodeVersion, Packages      string
+	DockerDirs                                 []string
 }
 
 // Files renders every file ship owns in root. A file whose facts are missing (no origin, no visibility) carries
 // Manual instead of Want.
 func Files(root string, c *config.Config, f Facts) ([]File, error) {
 	d := data{
-		Private: f.Visibility == "private", Images: len(c.Images) > 0, UI: c.UI != nil, ReactHooks: f.ReactHooks,
+		Private: f.Visibility == "private", Images: len(c.Images) > 0, UI: c.UI != nil,
 		Branches: "[" + c.Base + "]", GoDir: c.Go.Dir, GoDirSet: path.Clean(c.Go.Dir) != ".",
 		GoDirAbs: abs(c.Go.Dir), DependabotOnly: DependabotOnly, NodeVersion: NodeVersion, DockerDirs: f.DockerDirs,
 	}
@@ -148,8 +149,11 @@ func Files(root string, c *config.Config, f Facts) ([]File, error) {
 		}
 	}
 	if d.UI {
-		if err := add(path.Join(d.UIDir, ESLint), "eslint.config.js", "", nil); err != nil {
-			return nil, err
+		for _, t := range []struct{ name, tmpl string }{{ESLint, "eslint.config.js"},
+			{TSConfigNode, "tsconfig.node.json"}, {NPMRC, "npmrc"}} {
+			if err := add(path.Join(d.UIDir, t.name), t.tmpl, "", nil); err != nil {
+				return nil, err
+			}
 		}
 	}
 	// A library without a Makefile needs none; an app (images or a UI) gets the gate's targets.

@@ -45,12 +45,58 @@ ENTRYPOINT ["/app"]
 
 const appPackageJSON = `{
   "scripts": {
+    "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint . --max-warnings 0 && npm run format:check",
-    "format:check": "prettier --check 'src/**/*.{ts,tsx,css}' '*.ts'"
+    "format": "prettier --write 'src/**/*.{ts,tsx,css}' '*.ts'",
+    "format:check": "prettier --check 'src/**/*.{ts,tsx,css}' '*.ts'",
+    "test": "vitest run"
   },
-  "devDependencies": { "prettier": "3.9.9", "eslint-plugin-react-hooks": "7.1.1" }
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "eslint": "10.12.0",
+    "eslint-config-prettier": "10.1.8",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "prettier": "3.9.9",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.71.1",
+    "vite": "^8.3.4"
+  }
 }
+`
+
+// JSONC, as transmission-ui's: a comment, own spacing.
+const appTSConfig = `{
+  // vite.config.ts is typechecked through the reference.
+  "compilerOptions": { "strict": true },
+  "include": ["src"],
+  "references": [{"path":"./tsconfig.node.json"}]
+}
+`
+
+// lens's, trimmed.
+const appViteConfig = `import { defineConfig } from "vitest/config";
+import react from "@vitejs/plugin-react";
+
+export default defineConfig({
+  plugins: [react()],
+  test: {
+    environment: "jsdom",
+    globals: true,
+    setupFiles: ["./src/test/setup.ts"],
+    coverage: {
+      provider: "v8",
+      reportsDirectory: "../coverage/ui",
+    },
+  },
+});
+`
+
+// transmission-ui's shape: a leading comment, the import, the repo's stubs.
+const appSetup = `// jest-dom matchers on vitest's expect.
+import "@testing-library/jest-dom/vitest";
+
+globalThis.ResizeObserver = class {} as never;
 `
 
 const agentsMD = "# AGENTS.md\n\n- Commit subjects + PR titles: Go style `area: what` (`api: …`), gated by ship; release notes list them " +
@@ -150,6 +196,9 @@ func app(t *testing.T) *repo {
 	r := newRepo(t, map[string]string{
 		"Containerfile":        appContainerfile,
 		"ui/package.json":      appPackageJSON,
+		"ui/tsconfig.json":     appTSConfig,
+		"ui/vite.config.ts":    appViteConfig,
+		"ui/src/test/setup.ts": appSetup,
 		"backend/go.mod":       "module example.com/app\n\ngo 1.27.1\n\nrequire (\n\tgithub.com/trick77/ship/kit v0.2.0 // indirect\n)\n",
 		"backend/cmd/app/x.go": "package main\n\nfunc main() {}\n",
 		"AGENTS.md":            agentsMD,
@@ -172,9 +221,10 @@ func TestRun_whenAppConforms_thenEveryRuleOK(t *testing.T) {
 			t.Errorf("no ok %s:\n%s", rl.name, out)
 		}
 	}
-	es, _ := os.ReadFile(filepath.Join(r.dir, "ui", scaffold.ESLint))
-	if !strings.Contains(string(es), "reactHooks") {
-		t.Errorf("hooks plugin not detected:\n%s", es)
+	for _, p := range []string{scaffold.ESLint, scaffold.TSConfigNode, scaffold.NPMRC} {
+		if _, err := os.Stat(filepath.Join(r.dir, "ui", p)); err != nil {
+			t.Errorf("init did not write ui/%s: %v", p, err)
+		}
 	}
 }
 
@@ -259,8 +309,43 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 			r.remove("ui/" + scaffold.ESLint)
 		}, []string{`FAIL ui: ui.lint "npm run format:check", want npm run lint (ship.yaml)`,
 			`FAIL ui: script lint "eslint .", want`, `FAIL ui: script format:check "", want`,
-			`FAIL ui: script build "tsc --noEmit && vite build"`, `FAIL ui: devDependency prettier "^3.9.9", want exactly 3.9.9`,
+			`FAIL ui: script build "tsc --noEmit && vite build", want "tsc -b && vite build"`,
+			`FAIL ui: script format "", want`, `FAIL ui: script test "", want "vitest run"`,
+			`FAIL ui: devDependency prettier "^3.9.9": want an exact version (.npmrc save-exact) (ui/package.json)`,
+			"FAIL ui: devDependency typescript missing", "FAIL ui: devDependency eslint missing",
+			"FAIL ui: devDependency typescript-eslint missing", "FAIL ui: devDependency eslint-config-prettier missing",
+			"FAIL ui: devDependency @eslint/js missing", "FAIL ui: devDependency eslint-plugin-react-hooks missing",
 			"FAIL ui: missing (ship init) (ui/eslint.config.js)"}},
+		// Dependabot moves a version per repo: any exact one passes, a range or TypeScript 7 does not.
+		{"ui devDependency versions", appShip, func(r *repo) {
+			r.edit("ui/package.json", `"eslint": "10.12.0"`, `"eslint": "~10.13.0"`)
+			r.edit("ui/package.json", `"typescript": "6.0.3"`, `"typescript": "7.0.2"`)
+			r.edit("ui/package.json", `"prettier": "3.9.9"`, `"prettier": "3.10.0"`)
+		}, []string{`FAIL ui: devDependency eslint "~10.13.0": want an exact version`,
+			"FAIL ui: devDependency typescript 7.0.2: want below 7, typescript-eslint does not support it"}},
+		{"ui script extra flag", appShip, func(r *repo) { r.edit("ui/package.json", `"vitest run"`, `"vitest run --passWithNoTests"`) },
+			[]string{`FAIL ui: script test "vitest run --passWithNoTests", want "vitest run"`}},
+		{"ui tsconfig without reference", appShip, func(r *repo) {
+			r.edit("ui/tsconfig.json", `"./tsconfig.node.json"`, `"./tsconfig.app.json"`)
+		}, []string{`FAIL ui: no reference to ./tsconfig.node.json`}},
+		{"ui tsconfig missing", appShip, func(r *repo) { r.remove("ui/tsconfig.json") },
+			[]string{"FAIL ui: missing (ui/tsconfig.json)"}},
+		{"ui vite config", appShip, func(r *repo) {
+			r.edit("ui/vite.config.ts", `from "vitest/config"`, `from "vite"`)
+			r.edit("ui/vite.config.ts", "globals: true", "globals: false")
+			r.edit("ui/vite.config.ts", "./src/test/setup.ts", "./src/setupTests.ts")
+			r.edit("ui/vite.config.ts", "../coverage/ui", "coverage")
+		}, []string{`FAIL ui: no from "vitest/config"`, "FAIL ui: no globals: true",
+			`FAIL ui: no setupFiles: ["./src/test/setup.ts"]`, `FAIL ui: no reportsDirectory: "../coverage/ui"`}},
+		{"ui vite config missing", appShip, func(r *repo) { r.remove("ui/vite.config.ts") },
+			[]string{"FAIL ui: missing (ui/vite.config.ts)"}},
+		{"ui setup import late", appShip, func(r *repo) {
+			r.write("ui/src/test/setup.ts", "import { vi } from \"vitest\";\n"+appSetup)
+		}, []string{`FAIL ui: first statement is not import "@testing-library/jest-dom/vitest"; (ui/src/test/setup.ts)`}},
+		{"ui setup missing", appShip, func(r *repo) { r.remove("ui/src/test/setup.ts") },
+			[]string{"FAIL ui: missing (first statement import"}},
+		{"ui npmrc", appShip, func(r *repo) { r.write("ui/.npmrc", "save-exact=false\n") },
+			[]string{"FAIL scaffold: differs from ship's template (ship init -diff) (ui/.npmrc)"}},
 		{"ui no package.json", appShip, func(r *repo) { r.remove("ui/package.json") },
 			[]string{"FAIL ui: missing (ui/package.json)"}},
 		{"ui bad package.json", appShip, func(r *repo) { r.write("ui/package.json", "{") },

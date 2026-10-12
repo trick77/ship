@@ -140,7 +140,7 @@ func newEnv(root string, c *config.Config, o Options) *env {
 
 // render renders the owned files with the visibility ship.yaml names, else GitHub's.
 func (e *env) render() {
-	f := scaffold.Facts{Repo: e.repo, Visibility: e.c.Visibility, ReactHooks: e.reactHooks(), DockerDirs: e.dockerDirs()}
+	f := scaffold.Facts{Repo: e.repo, Visibility: e.c.Visibility, DockerDirs: e.dockerDirs()}
 	if f.Visibility == "" {
 		f.Visibility = e.vis
 	}
@@ -280,7 +280,6 @@ func (e *env) uiPath(p string) string { return path.Join(filepath.ToSlash(e.c.UI
 // packageJSON is the UI's package.json, the parts conform reads.
 type packageJSON struct {
 	Scripts         map[string]string `json:"scripts"`
-	Dependencies    map[string]string `json:"dependencies"`
 	DevDependencies map[string]string `json:"devDependencies"`
 }
 
@@ -297,16 +296,6 @@ func (e *env) packageJSON() (*packageJSON, error) {
 		return nil, fmt.Errorf("%s: %w", e.uiPath("package.json"), err)
 	}
 	return &p, nil
-}
-
-func (e *env) reactHooks() bool {
-	p, err := e.packageJSON()
-	if err != nil || p == nil {
-		return false
-	}
-	_, dev := p.DevDependencies["eslint-plugin-react-hooks"]
-	_, dep := p.Dependencies["eslint-plugin-react-hooks"]
-	return dev || dep
 }
 
 // dockerDirs are the dependabot directories of the images' Containerfiles that exist.
