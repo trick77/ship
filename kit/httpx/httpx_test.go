@@ -212,14 +212,20 @@ func TestAccessLog(t *testing.T) {
 	mux.HandleFunc("/teapot", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(418); w.WriteHeader(500) })
 	mux.HandleFunc("/boom", func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "x", 500) })
 	mux.HandleFunc("/401", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(401) })
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	failable := func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("fail") != "" {
 			w.WriteHeader(503)
 			return
 		}
 		_, _ = w.Write([]byte("ok"))
-	})
-	h := AccessLog(log, AccessLogOptions{TrustRequestID: true, Quiet: []string{"/healthz"}})(mux)
+	}
+	mux.HandleFunc("/status", failable)
+	mux.HandleFunc("/readyz", failable)
+	mux.HandleFunc("/probe", failable)
+	var records []string
+	opts := AccessLogOptions{TrustRequestID: true, Quiet: []string{"/status"},
+		OnRecord: func(r *http.Request, _ string, _ int, _ time.Duration) { records = append(records, r.URL.Path) }}
+	h := AccessLog(log, opts)(mux)
 
 	type line struct {
 		Level, Msg, Method, Path, RequestID string
@@ -280,12 +286,30 @@ func TestAccessLog(t *testing.T) {
 	if l, _ = do("/no-such-page", ""); l.Level != "DEBUG" || l.Status != 404 {
 		t.Errorf("404 line = %+v", l)
 	}
-	if l, _ = do("/healthz", ""); l.Msg != "" {
+	records = nil
+	if l, _ = do("/status", ""); l.Msg != "" {
 		t.Errorf("quiet path logged: %+v", l)
 	}
-	// A failing probe is Health's to report, on the transition: the access log stays silent.
-	if l, _ = do("/healthz?fail=1", ""); l.Msg != "" {
-		t.Errorf("failing quiet path logged: %+v", l)
+	if l, _ = do("/status?fail=1", ""); l.Status != 503 {
+		t.Errorf("failing quiet path not logged: %+v", l)
+	}
+	// A probe is Health's to report, on the transition: never logged, not even failing.
+	for _, p := range []string{"/readyz", "/readyz?fail=1"} {
+		if l, _ = do(p, ""); l.Msg != "" {
+			t.Errorf("probe %s logged: %+v", p, l)
+		}
+	}
+	if !slices.Equal(records, []string{"/status"}) {
+		t.Errorf("OnRecord ran for %q, want the failing quiet path only", records)
+	}
+	// ProbePaths replaces the default: a probe mounted elsewhere is silent, /readyz is an ordinary path again.
+	opts.ProbePaths = []string{"/probe"}
+	h = AccessLog(log, opts)(mux)
+	if l, _ = do("/probe?fail=1", ""); l.Msg != "" {
+		t.Errorf("custom probe logged: %+v", l)
+	}
+	if l, _ = do("/readyz?fail=1", ""); l.Status != 503 {
+		t.Errorf("/readyz outside ProbePaths not logged: %+v", l)
 	}
 	_ = AccessLog(nil, AccessLogOptions{})
 }

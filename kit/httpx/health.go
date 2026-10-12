@@ -32,6 +32,7 @@ const CheckTimeout = 5 * time.Second
 // The log reports transitions, not probes: an orchestrator probes every few seconds, so a line per failing probe
 // buries the log for as long as a dependency is down. One warn when a check starts failing (its name and error),
 // one info when the probe passes again; the same check failing again stays silent, a different one warns anew.
+// AccessLog leaves both paths out (AccessLogOptions.ProbePaths): this log is their record.
 func Health(mux *http.ServeMux, log *slog.Logger, checks ...Check) {
 	if log == nil {
 		log = slog.Default()
