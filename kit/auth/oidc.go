@@ -15,6 +15,9 @@ import (
 )
 
 // Errors of a callback. No error tells the browser which check failed; the app logs it and shows one message.
+// ErrNotInGroup is the exception to "one message": the identity is proven, only access is refused, so Callback
+// returns the claims with it and the app can log who was turned away and say "no access" rather than "sign-in
+// failed".
 var (
 	ErrInvalidState   = errors.New("invalid oidc state")
 	ErrInvalidNonce   = errors.New("invalid oidc nonce")
@@ -105,6 +108,9 @@ func (o *OIDC) Start(w http.ResponseWriter, r *http.Request) {
 
 // Callback checks the provider's answer, state, code exchange, token, nonce and group, and returns the identity. The
 // transient cookies are cleared whatever the outcome: single-use, or a captured callback URL replays while they live.
+//
+// On ErrNotInGroup the claims come back too: verified, every check but the group passed, for the log and the
+// "no access" page, never for a session. Every other error returns zero Claims.
 func (o *OIDC) Callback(w http.ResponseWriter, r *http.Request) (Claims, error) {
 	for _, n := range []string{"state", "nonce", "pkce"} {
 		http.SetCookie(w, o.transient(n, "", time.Unix(0, 0)))
@@ -141,7 +147,7 @@ func (o *OIDC) Callback(w http.ResponseWriter, r *http.Request) (Claims, error) 
 		return Claims{}, ErrInvalidNonce
 	}
 	if !claims.HasGroup(o.cfg.Group) {
-		return Claims{}, ErrNotInGroup
+		return claims, ErrNotInGroup
 	}
 	return claims, nil
 }
