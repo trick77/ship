@@ -178,7 +178,8 @@ func Chain(h http.Handler, mws ...func(http.Handler) http.Handler) http.Handler 
 	return h
 }
 
-// Recover turns a handler panic into a logged stack and a 500, so one bad request never takes the process down.
+// Recover turns a handler panic into a logged stack and a 500 (only the log once the handler has written), so one
+// bad request never takes the process down.
 // http.ErrAbortHandler is re-raised: it is net/http's own signal to drop the connection, not a bug.
 // Wrap it inside AccessLog, so the panic's line and the 500 carry the request id.
 func Recover(log *slog.Logger) func(http.Handler) http.Handler {
@@ -187,6 +188,7 @@ func Recover(log *slog.Logger) func(http.Handler) http.Handler {
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			sw := &statusWriter{ResponseWriter: w}
 			defer func() {
 				rec := recover()
 				if rec == nil {
@@ -197,9 +199,13 @@ func Recover(log *slog.Logger) func(http.Handler) http.Handler {
 				}
 				log.ErrorContext(r.Context(), "Panic recovered", "panic", rec, "path", r.URL.Path,
 					"stack", string(debug.Stack()))
-				WriteError(w, http.StatusInternalServerError, "internal server error")
+				// Headers already sent: a 500 now would be a superfluous WriteHeader and an error body glued to the
+				// handler's output. The log line is all there is.
+				if sw.status == 0 {
+					WriteError(w, http.StatusInternalServerError, "internal server error")
+				}
 			}()
-			next.ServeHTTP(w, r)
+			next.ServeHTTP(sw, r)
 		})
 	}
 }

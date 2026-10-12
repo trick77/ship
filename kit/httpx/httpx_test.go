@@ -339,6 +339,22 @@ func TestRecover(t *testing.T) {
 		t.Errorf("log = %s", logs.String())
 	}
 
+	// The handler wrote first: its status and body stand, nothing is appended, the panic is logged.
+	logs.Reset()
+	wrote := Recover(slog.New(slog.NewTextHandler(&logs, nil)))(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte("partial"))
+		panic("late")
+	}))
+	rec = httptest.NewRecorder()
+	wrote.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/x", nil))
+	if rec.Code != http.StatusAccepted || rec.Body.String() != "partial" {
+		t.Errorf("after write = %d %q", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(logs.String(), "late") {
+		t.Errorf("log = %s", logs.String())
+	}
+
 	abort := Recover(nil)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic(http.ErrAbortHandler) }))
 	defer func() {
 		if r := recover(); r != http.ErrAbortHandler { //nolint:errorlint // the exact sentinel re-raised
