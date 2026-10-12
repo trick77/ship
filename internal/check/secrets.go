@@ -21,7 +21,7 @@ var secretRe = regexp.MustCompile(`\b(?:sk|tp)-[A-Za-z0-9_-]{16,}|\bgh[pousr]_[A
 	`\bgithub_pat_[A-Za-z0-9_]{22,}|\bAKIA[0-9A-Z]{16}\b`)
 
 // AllowSecret on a line exempts it from the secret scan: a fixture or a documented example, never a real key.
-const AllowSecret = "ship:allow-secret"
+const AllowSecret = "ship:allow-secret" //nolint:gosec // a marker, not a credential
 
 // secrets refuses API keys and .env files on their way to origin: the whole tree (tracked and untracked, as check
 // tests it), and every line and message the commits not yet on origin/<base> add, since a key added in one commit
