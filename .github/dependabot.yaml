@@ -2,6 +2,7 @@ version: 2
 updates:
   - package-ecosystem: gomod
     directory: /
+    commit-message: { prefix: deps }   # Go style: "deps: bump …"
     schedule:
       interval: weekly
     groups:
@@ -11,6 +12,7 @@ updates:
 
   - package-ecosystem: github-actions
     directory: /
+    commit-message: { prefix: deps }   # Go style: "deps: bump …"
     schedule:
       interval: weekly
     groups:
@@ -20,6 +22,7 @@ updates:
   # The UI end-to-end fixture: kept on current React/vite/vitest so the test proves today's toolchain.
   - package-ecosystem: npm
     directory: /testdata/ui
+    commit-message: { prefix: deps }   # Go style: "deps: bump …"
     schedule:
       interval: weekly
     groups:

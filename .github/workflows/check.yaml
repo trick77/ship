@@ -52,6 +52,9 @@ jobs:
       - working-directory: ${{ inputs.go-dir }}
         env:
           SHIP: ${{ inputs.ship }}
+          # A squash merge makes the PR title master's subject: the gate checks it with the branch's. Through env,
+          # never ${{ }} in the script: a title is untrusted input. Empty off a pull_request event.
+          SHIP_PR_TITLE: ${{ github.event.pull_request.title }}
         # Default: master's sha on GitHub, as the pre-push hook runs it, so hook and CI gate alike. Not @master: the
         # module proxy can still serve an older master. Not github.job_workflow_sha: empty for a caller (2026-10-11).
         run: |

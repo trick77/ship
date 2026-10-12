@@ -90,6 +90,7 @@ func TestRun_whenDryRun_thenTagImagesReleaseMovingTags(t *testing.T) {
 		"--build-arg VERSION=1.5.0",
 		"gh api repos/Owner/Repo/git/refs -f ref=refs/tags/1.5.0",
 		"gh release create 1.5.0 --repo Owner/Repo",
+		"--notes **other**\n- two\n\nContainer images: `ghcr.io/owner/repo:1.5.0`",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
@@ -138,7 +139,8 @@ func TestRun_whenTagPrefixNoImages_thenPrefixedTagOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(out, "docker") || !strings.Contains(out, "ref=refs/tags/v0.0.1") || !strings.Contains(out, "released v0.0.1") {
+	if strings.Contains(out, "docker") || !strings.Contains(out, "ref=refs/tags/v0.0.1") || !strings.Contains(out, "released v0.0.1") ||
+		!strings.Contains(out, "--notes Release 0.0.1") {
 		t.Fatalf("plain 1.4.2 must not count for prefix v:\n%s", out)
 	}
 	if build, tag := strings.Index(out, "+ go build -o "+os.DevNull+" ./..."), strings.Index(out, "+ gh api"); build < 0 || build > tag {

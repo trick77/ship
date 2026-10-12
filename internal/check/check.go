@@ -14,7 +14,12 @@ import (
 	"github.com/trick77/ship/internal/config"
 	"github.com/trick77/ship/internal/cover"
 	"github.com/trick77/ship/internal/gitx"
+	"github.com/trick77/ship/internal/subject"
 )
+
+// PRTitle names the env var the Check workflow puts a pull request's title in: a squash merge makes the title
+// master's commit subject, so it is checked with the branch's own.
+const PRTitle = "SHIP_PR_TITLE"
 
 // SkipPatch in a commit message on the branch skips the patch gate (a mass reformat or rename adds no logic, but
 // every touched line would count). The floor still applies.
@@ -31,6 +36,7 @@ func Run(root string, c *config.Config) error {
 		// ship's own git calls keep git's repo variables (a --git-dir/--work-tree repo needs them); only the
 		// tests and steps check runs lose them.
 		{"fetch origin/" + c.Base, func() error { return r.runGit(root, "fetch", "-q", "origin", c.Base) }},
+		{"commit subjects", r.subjects},
 		{"ui build", r.uiBuild},
 		{"gofmt", r.gofmt},
 		{"go build", func() error { return r.goCmd("build", "./...") }},
@@ -54,6 +60,35 @@ func Run(root string, c *config.Config) error {
 type runner struct {
 	root string
 	c    *config.Config
+}
+
+// subjects checks that every commit the branch adds to origin/<base> has a Go-style subject (`area: what`). Merges
+// and bots (Dependabot) are skipped: neither is written by hand.
+func (r runner) subjects() error {
+	cs, err := gitx.Commits(r.root, "origin/"+r.c.Base+"..HEAD")
+	if err != nil {
+		return err
+	}
+	if t := os.Getenv(PRTitle); t != "" {
+		cs = append(cs, gitx.Commit{Hash: "PR title", Subject: t})
+	}
+	var bad []string
+	n := 0
+	for _, c := range cs {
+		if strings.HasSuffix(c.Author, "[bot]") {
+			continue
+		}
+		n++
+		if err := subject.Check(c.Subject); err != nil {
+			bad = append(bad, fmt.Sprintf("  %s %s: %v", c.Hash, c.Subject, err))
+		}
+	}
+	if len(bad) > 0 {
+		return fmt.Errorf("%d of %d not Go style `area: what` (reword: git rebase -i origin/%s):\n%s",
+			len(bad), n, r.c.Base, strings.Join(bad, "\n"))
+	}
+	fmt.Printf("ship: subjects ok: %d commits\n", n)
+	return nil
 }
 
 func (r runner) goDir() string { return filepath.Join(r.root, r.c.Go.Dir) }
