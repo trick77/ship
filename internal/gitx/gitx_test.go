@@ -126,6 +126,25 @@ func TestRepoQueries(t *testing.T) {
 		cs[1].Subject != "x [skip patch-coverage]" {
 		t.Fatalf("commits %+v err %v", cs, err)
 	}
+	// Path-limited: kit/ only, its nested kit/auth/ excluded.
+	for _, f := range []string{"kit/a", "kit/auth/a"} {
+		if err := os.MkdirAll(filepath.Join(dir, filepath.Dir(f)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, f), []byte(f), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		mustGit(t, dir, "add", f)
+		mustGit(t, dir, "commit", "-q", "-m", "add "+f)
+	}
+	kit := []string{"kit", ":(exclude)kit/auth"}
+	if cs, err := Commits(dir, head+"..HEAD", kit...); err != nil || len(cs) != 1 || cs[0].Subject != "add kit/a" {
+		t.Fatalf("path-limited commits %+v err %v", cs, err)
+	}
+	// Each message ends in log's newline after the NUL: a trailing "\n" entry, which subject.Release skips.
+	if ms, err := Messages(dir, head+"..HEAD", kit...); err != nil || len(ms) != 2 || ms[0] != "add kit/a\n" {
+		t.Fatalf("path-limited messages %q err %v", ms, err)
+	}
 	if _, err := Git(dir, "no-such-command"); err == nil {
 		t.Fatal("git error swallowed")
 	}
