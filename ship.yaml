@@ -2,6 +2,8 @@
 # tool of itself).
 tag_prefix: v
 visibility: public
+go:
+  modules: [kit, kit/auth]
 # ship is where the canon lives, not a consumer of it.
 allow:
   - rule: scaffold
