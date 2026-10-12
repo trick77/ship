@@ -131,6 +131,8 @@ type env struct {
 	kitErr  error
 	// renderErr: the owned files could not be rendered at all.
 	renderErr error
+	// compose: composePins, read once for the render and the dependabot rule alike.
+	compose bool
 }
 
 func newEnv(root string, c *config.Config, o Options) *env {
@@ -142,6 +144,7 @@ func newEnv(root string, c *config.Config, o Options) *env {
 		e.visNote = fmt.Sprintf("GitHub lookup failed (%v); ship.yaml's visibility: %s used", e.visErr, c.Visibility)
 		e.vis, e.visErr = c.Visibility, nil
 	}
+	e.compose = e.composePins()
 	e.render()
 	return e
 }
@@ -149,7 +152,7 @@ func newEnv(root string, c *config.Config, o Options) *env {
 // render renders the owned files with the visibility ship.yaml names, else GitHub's.
 func (e *env) render() {
 	f := scaffold.Facts{Repo: e.repo, Visibility: e.c.Visibility, DockerDirs: e.dockerDirs(),
-		Compose: e.composePins(), NodeVersion: e.nodeVersion()}
+		Compose: e.compose, NodeVersion: e.nodeVersion()}
 	if f.Visibility == "" {
 		f.Visibility = e.vis
 	}

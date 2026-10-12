@@ -288,7 +288,7 @@ func (e *env) dependabot() result {
 	for _, dir := range e.dockerDirs() {
 		want = append(want, struct{ eco, dir string }{"docker", dir})
 	}
-	if e.composePins() {
+	if e.compose {
 		want = append(want, struct{ eco, dir string }{"docker-compose", "/"})
 	}
 	for _, w := range want {
