@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/trick77/ship/kit/logging"
@@ -143,19 +144,38 @@ func (rd *readiness) result(ctx context.Context) (readyResult, bool) {
 func (rd *readiness) run(ctx context.Context, done chan struct{}) {
 	ctx, cancel := context.WithTimeout(ctx, CheckTimeout)
 	defer cancel()
-	var (
-		res readyResult
-		err error
-	)
-	for _, c := range rd.checks {
-		if err = runCheck(ctx, c); err != nil {
-			res = readyResult{failed: true, check: c.Name}
-			break
+	type outcome struct {
+		check string
+		err   error
+	}
+	out := make(chan outcome, 1) // buffered: a check that outlives the run must not block on sending
+	var current atomic.Int32     // index of the check running
+	go func() {
+		for i, c := range rd.checks {
+			current.Store(int32(i))
+			if err := runCheck(ctx, c); err != nil {
+				out <- outcome{c.Name, err}
+				return
+			}
+		}
+		out <- outcome{}
+	}()
+	var o outcome
+	select {
+	case o = <-out:
+	case <-ctx.Done():
+		// A check that ignores its context fails at the deadline all the same and is left behind: the flight must
+		// end, or one hung call would hold every later probe for good.
+		select {
+		case o = <-out:
+		default:
+			o = outcome{rd.checks[current.Load()].Name, ctx.Err()}
 		}
 	}
+	res := readyResult{failed: o.err != nil, check: o.check}
 	rd.mu.Lock()
 	defer rd.mu.Unlock()
-	rd.transition(ctx, res.check, err)
+	rd.transition(ctx, o.check, o.err)
 	rd.last, rd.at, rd.flight = res, time.Now(), nil
 	close(done)
 }

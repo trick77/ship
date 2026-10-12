@@ -349,3 +349,30 @@ func TestHealthCheckHangsOrPanics(t *testing.T) {
 		}
 	})
 }
+
+// A check that ignores its context fails at CheckTimeout and is left behind; it must not hold later probes.
+func TestHealthCheckIgnoresContext(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		stuck := make(chan struct{})
+		defer close(stuck) // the abandoned call ends with the test
+		var calls atomic.Int32
+		mux := http.NewServeMux()
+		Health(mux, slog.New(slog.DiscardHandler),
+			Check{Name: "ok", Run: func(context.Context) error { return nil }},
+			Check{Name: "deaf", Run: func(context.Context) error {
+				if calls.Add(1) == 1 {
+					<-stuck
+				}
+				return nil
+			}})
+		start := time.Now()
+		rec := probeReady(t.Context(), mux)
+		if rec.Code != 503 || !strings.Contains(rec.Body.String(), "deaf") || time.Since(start) != CheckTimeout {
+			t.Errorf("hung check: readyz = %d %s after %v", rec.Code, rec.Body.String(), time.Since(start))
+		}
+		time.Sleep(DefaultReadyInterval)
+		if rec := probeReady(t.Context(), mux); rec.Code != 200 {
+			t.Errorf("next run after the hung one: readyz = %d", rec.Code)
+		}
+	})
+}
