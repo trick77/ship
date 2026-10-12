@@ -234,9 +234,9 @@ func TestAccessLogFieldsAndHooks(t *testing.T) {
 	var logs bytes.Buffer
 	log := slog.New(slog.NewJSONHandler(&logs, nil))
 	type record struct {
-		path   string
-		status int
-		dur    time.Duration
+		path, ip string
+		status   int
+		dur      time.Duration
 	}
 	var records []record
 	h := AccessLog(log, AccessLogOptions{
@@ -245,8 +245,8 @@ func TestAccessLogFieldsAndHooks(t *testing.T) {
 		ClientIP:        func(r *http.Request) string { return ClientIP(r, 1) },
 		Skip:            func(r *http.Request, status int) bool { return r.URL.Path == "/metrics" && status == 200 },
 		Attrs:           func(_ *http.Request, status int) []slog.Attr { return []slog.Attr{slog.Bool("odd", status%2 == 1)} },
-		OnRecord: func(r *http.Request, status int, dur time.Duration) {
-			records = append(records, record{r.URL.Path, status, dur})
+		OnRecord: func(r *http.Request, ip string, status int, dur time.Duration) {
+			records = append(records, record{r.URL.Path, ip, status, dur})
 		},
 	})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/missing" {
@@ -282,7 +282,7 @@ func TestAccessLogFieldsAndHooks(t *testing.T) {
 	if m, _ = accessLine(t, h, &logs, httptest.NewRequest(http.MethodGet, "/missing", nil)); m["status"] != float64(404) {
 		t.Errorf("404 line = %v", m)
 	}
-	if len(records) != 2 || records[0].path != "/api" || records[1].status != 404 || records[0].dur <= 0 {
+	if len(records) != 2 || records[0].path != "/api" || records[0].ip != "203.0.113.9" || records[1].status != 404 || records[0].dur <= 0 {
 		t.Errorf("OnRecord = %+v, want /api and the 404, not the skipped /metrics", records)
 	}
 	// Default ClientIP is the TCP peer, never X-Forwarded-For.

@@ -80,8 +80,9 @@ type AccessLogOptions struct {
 	Skip func(r *http.Request, status int) bool
 	// Attrs appends fields to the line.
 	Attrs func(r *http.Request, status int) []slog.Attr
-	// OnRecord runs after every line written, with the final status and duration: a visitor list, a metric.
-	OnRecord func(r *http.Request, status int, dur time.Duration)
+	// OnRecord runs after every line written, with the ip the line logged (ClientIP resolves it once per request), the
+	// final status and the duration: a visitor list, a metric.
+	OnRecord func(r *http.Request, ip string, status int, dur time.Duration)
 }
 
 // AccessLog writes one "http_request" line per request: request_id, ip, method, path (never the query, which carries
@@ -141,13 +142,14 @@ func AccessLog(log *slog.Logger, opts AccessLogOptions) func(http.Handler) http.
 					lvl = slog.LevelWarn
 				}
 				ms := float64(dur.Microseconds()) / 1000
+				ip := clientIP(r)
 				attrs := make([]slog.Attr, 0, 8)
 				// The id goes in explicitly, on the unbound context: any handler shows it, none shows it twice.
 				if id != "" {
 					attrs = append(attrs, slog.String("request_id", id))
 				}
 				attrs = append(attrs,
-					slog.String("ip", clientIP(r)),
+					slog.String("ip", ip),
 					slog.String("method", r.Method),
 					slog.String("path", r.URL.Path),
 					slog.String("proto", r.Proto),
@@ -160,7 +162,7 @@ func AccessLog(log *slog.Logger, opts AccessLogOptions) func(http.Handler) http.
 				}
 				log.LogAttrs(r.Context(), lvl, "http_request", attrs...)
 				if opts.OnRecord != nil {
-					opts.OnRecord(r, status, dur)
+					opts.OnRecord(r, ip, status, dur)
 				}
 			}()
 			next.ServeHTTP(sw, r.WithContext(ctx))
