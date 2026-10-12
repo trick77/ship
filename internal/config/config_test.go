@@ -83,11 +83,12 @@ func TestParse_whenUnknownKeyOrBadValue_thenError(t *testing.T) {
 		"shell: [../x.sh]\n",    // outside the repo
 		"postgres: latest\n",
 		"postgres: 17-alpine\n",
+		"postgres: timescale/timescaledb\n", // untagged: :latest, a moving target
 		"ui:\n  embed: .\n",
 		"ui:\n  embed: ../x\n",
 		"shell: [\".\"]\n", // the root itself
 		"go:\n  modules: [../x]\n",
-		"go:\n  modules: [.]\n", // go.dir itself
+		"go:\n  modules: [.]\n",                        // go.dir itself
 		"go:\n  dir: backend\n  modules: [backend/]\n", // go.dir itself
 		"go:\n  modules: [kit, ./kit]\n",               // twice
 	} {
@@ -128,6 +129,19 @@ func TestParse_whenModules_thenListed(t *testing.T) {
 	c, err := Parse([]byte("go:\n  modules: [kit, kit/auth]\n"))
 	if err != nil || len(c.Go.Modules) != 2 || c.Go.Modules[1] != "kit/auth" {
 		t.Fatalf("%+v %v", c, err)
+	}
+}
+
+func TestPostgresImage_whenVersionOrRef_thenImage(t *testing.T) {
+	for in, want := range map[string]string{
+		"postgres: 17\n": "postgres:17-alpine",
+		"postgres: timescale/timescaledb:2.29.1-pg17\n":                   "timescale/timescaledb:2.29.1-pg17",
+		"postgres: \"postgres@sha256:" + strings.Repeat("a", 64) + "\"\n": "postgres@sha256:" + strings.Repeat("a", 64),
+	} {
+		c, err := Parse([]byte(in))
+		if err != nil || c.PostgresImage() != want {
+			t.Errorf("%q: %q %v", in, c.PostgresImage(), err)
+		}
 	}
 }
 
