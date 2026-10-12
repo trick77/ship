@@ -43,6 +43,10 @@ type Config struct {
 	Images []Image  `yaml:"images"`
 	// TagPrefix goes before release versions: empty for the family's plain 1.2.3, "v" for a Go module.
 	TagPrefix string `yaml:"tag_prefix"`
+	// Visibility, public or private, is checked against GitHub's by conform; empty = GitHub's.
+	Visibility string `yaml:"visibility"`
+	// Allow excuses conform rules, each with its why.
+	Allow []Allow `yaml:"allow"`
 }
 
 // Go configures the Go side of the gate.
@@ -190,7 +194,7 @@ func (c *Config) validate() error {
 			return fmt.Errorf("%s: shell: %q is not a path inside the repo", File, s)
 		}
 	}
-	return nil
+	return c.validateConform()
 }
 
 var pgVersion = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?$`)
