@@ -51,14 +51,20 @@ coverage output.
 
 | | |
 |---|---|
-| `ship check` | fetch, ui build, gofmt, build, golangci-lint (incl. govet), ui lint, steps, go test (-race, coverage), ui test, floors, patch gate |
+| `ship check` | fetch, commit subjects, ui build, gofmt, build, golangci-lint (incl. govet), ui lint, steps, go test (-race, coverage), ui test, floors, patch gate |
 | `ship hooks` | install the pre-push hook (respects core.hooksPath, never overwrites a foreign hook) |
-| `ship release [patch\|minor\|major] [-cache gha] [-dry-run]` | next version from tags, images pushed (version + sha), tag (API), GitHub release, then :MAJOR.MINOR, :MAJOR, :latest. No `images:` and no `ui:`: `go build ./...` before the tag (in `-dry-run` too). With `images:` only on a GitHub-hosted runner (the Release workflow); elsewhere `-dry-run` only. The Release workflow inherits the caller's permissions: `packages: write` only with `images:` |
+| `ship release [patch\|minor\|major] [-cache gha] [-dry-run]` | next version from tags, notes from the subjects since the last tag (grouped by area), images pushed (version + sha), tag (API), GitHub release, then :MAJOR.MINOR, :MAJOR, :latest. No `images:` and no `ui:`: `go build ./...` before the tag (in `-dry-run` too). With `images:` only on a GitHub-hosted runner (the Release workflow); elsewhere `-dry-run` only. The Release workflow inherits the caller's permissions: `packages: write` only with `images:` |
 
 TypeScript/React: `ui.build` is the typecheck (`tsc -b && vite build`), `ui.lint` runs ESLint/Prettier, `ui.test`
 runs vitest with coverage; its lcov feeds the UI floor and the patch gate for changed `.ts`/`.tsx` lines.
 Playwright e2e goes in `steps`. ship's CI proves this on `testdata/ui`, a real React + TypeScript + vite +
 vitest project (npm ci, typecheck, build, coverage, an untested `.tsx` change failing the patch gate).
+
+Commit subjects: Go style (go.dev/doc/contribute), `area: what`, e.g. `hook: pin GIT_DIR before cd` or
+`net/http, net/url: fix parsing`. No trailing period, at most 76 characters (a squash merge's ` (#N)` not
+counted). Every non-merge commit on origin/<base>..HEAD is checked, `[bot]` authors (Dependabot) skipped,
+`Revert "…"` and `fixup!` commits judged by what they wrap. The Check workflow adds a pull request's title
+(`SHIP_PR_TITLE`): a squash merge makes it master's subject. Release notes group by the first area.
 
 Patch gate: changed lines (committed, staged, unstaged, untracked) against the merge-base with origin/<base>,
 intersected with the coverage reports; comment and blank lines never count. `[skip patch-coverage]` in a commit

@@ -118,6 +118,25 @@ func SkipMarker(root, base, marker string) (bool, error) {
 	return strings.Contains(log, marker), nil
 }
 
+// Commit is one commit's short hash, author name and subject.
+type Commit struct{ Hash, Author, Subject string }
+
+// Commits lists the non-merge commits of rev (a range like base..HEAD), newest first.
+func Commits(root, rev string) ([]Commit, error) {
+	out, err := Git(root, "log", "--no-merges", "--format=%h%x1f%an%x1f%s", rev)
+	if err != nil || out == "" {
+		return nil, err
+	}
+	var cs []Commit
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.SplitN(line, "\x1f", 3)
+		if len(f) == 3 {
+			cs = append(cs, Commit{Hash: f[0], Author: f[1], Subject: f[2]})
+		}
+	}
+	return cs, nil
+}
+
 // Changed returns the lines the working tree adds or changes against base, per repo-relative path: committed,
 // staged and unstaged edits plus every line of untracked, non-ignored files. Deleted lines are not lines.
 func Changed(root, base string) (map[string][]int, error) {

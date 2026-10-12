@@ -112,6 +112,20 @@ func TestRepoQueries(t *testing.T) {
 	if mb, err := MergeBase(dir, head); err != nil || mb != head {
 		t.Fatalf("merge-base %s err %v", mb, err)
 	}
+	if cs, err := Commits(dir, "HEAD..HEAD"); err != nil || cs != nil {
+		t.Fatalf("empty range: %v err %v", cs, err)
+	}
+	mustGit(t, dir, "checkout", "-q", "-b", "side", head)
+	mustGit(t, dir, "commit", "-q", "--allow-empty", "-m", "side: one")
+	mustGit(t, dir, "checkout", "-q", "master")
+	mustGit(t, dir, "merge", "-q", "--no-ff", "-m", "Merge side", "side")
+	cs, err := Commits(dir, head+"..HEAD")
+	// Both commits share a timestamp: log's order between them is not fixed.
+	slices.SortFunc(cs, func(a, b Commit) int { return strings.Compare(a.Subject, b.Subject) })
+	if err != nil || len(cs) != 2 || cs[0].Subject != "side: one" || cs[0].Author != "t" || len(cs[0].Hash) < 7 ||
+		cs[1].Subject != "x [skip patch-coverage]" {
+		t.Fatalf("commits %+v err %v", cs, err)
+	}
 	if _, err := Git(dir, "no-such-command"); err == nil {
 		t.Fatal("git error swallowed")
 	}

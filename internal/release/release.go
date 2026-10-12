@@ -9,15 +9,18 @@ package release
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/trick77/ship/internal/config"
 	"github.com/trick77/ship/internal/gitx"
+	"github.com/trick77/ship/internal/subject"
 )
 
 // Options are the release flags.
@@ -124,7 +127,7 @@ func Run(root string, c *config.Config, o Options) error {
 		return fmt.Errorf("uncommitted changes:\n%s", dirty)
 	}
 	// Tags as origin has them: a local-only or since-deleted tag must neither burn a number nor block a release.
-	tags, atHead, err := remoteTags(root, head)
+	tags, atHead, tagCommit, err := remoteTags(root, head)
 	if err != nil {
 		return err
 	}
@@ -200,9 +203,12 @@ func Run(root string, c *config.Config, o Options) error {
 		names = append(names, name)
 	}
 
-	notes := "Release " + next.String()
+	notes := changes(root, tagCommit[c.TagPrefix+prev.String()])
+	if notes == "" {
+		notes = "Release " + next.String()
+	}
 	if len(images) > 0 {
-		notes = "Container images: " + strings.Join(images, ", ")
+		notes += "\n\nContainer images: " + strings.Join(images, ", ")
 	}
 	relArgs := []string{"release", "create", tag, "--repo", repo, "--title", tag, "--notes", notes}
 	if err := run(root, o.DryRun, "gh", relArgs...); err != nil {
@@ -224,12 +230,14 @@ func Run(root string, c *config.Config, o Options) error {
 	return nil
 }
 
-// remoteTags lists origin's tag names, and those pointing at head (an annotated tag via its peeled ^{} line).
-func remoteTags(root, head string) (all, atHead []string, err error) {
+// remoteTags lists origin's tag names, those pointing at head and each tag's commit (an annotated tag via its
+// peeled ^{} line).
+func remoteTags(root, head string) (all, atHead []string, commit map[string]string, err error) {
 	out, err := gitx.Git(root, "ls-remote", "--tags", "origin")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
+	commit = map[string]string{}
 	for _, line := range strings.Split(out, "\n") {
 		sha, ref, ok := strings.Cut(line, "\t")
 		if !ok {
@@ -241,11 +249,69 @@ func remoteTags(root, head string) (all, atHead []string, err error) {
 		if !peeled {
 			all = append(all, name)
 		}
+		if _, seen := commit[name]; peeled || !seen {
+			commit[name] = sha
+		}
 		if sha == head {
 			atHead = append(atHead, name)
 		}
 	}
-	return all, atHead, nil
+	return all, atHead, commit, nil
+}
+
+// changes is Notes of the commits since prev, the previous release's commit. Empty without one (a first release)
+// or when its commit is not here (a shallow clone): the notes then fall back to the version alone.
+func changes(root, prev string) string {
+	if prev == "" {
+		return ""
+	}
+	cs, err := gitx.Commits(root, prev+"..HEAD")
+	if err != nil {
+		fmt.Printf("ship: no notes, commits since %s unreadable: %v\n", prev[:min(12, len(prev))], err)
+		return ""
+	}
+	return Notes(cs)
+}
+
+// MaxNotes caps the release notes' entries: a first release after years lists its newest only.
+const MaxNotes = 50
+
+// Notes lists the subjects of cs grouped by their first area, areas sorted, newest first in each; subjects that
+// are not Go style (bots, old history) go last under "other". Empty when cs is.
+func Notes(cs []gitx.Commit) string {
+	more := 0
+	if len(cs) > MaxNotes {
+		cs, more = cs[:MaxNotes], len(cs)-MaxNotes
+	}
+	groups := map[string][]string{}
+	for _, c := range cs {
+		key, line := "other", c.Subject
+		if areas, text, ok := subject.Parse(c.Subject); ok {
+			key = areas[0]
+			if len(areas) > 1 {
+				line = strings.Join(areas, ", ") + ": " + text
+			} else {
+				line = text
+			}
+		}
+		groups[key] = append(groups[key], line)
+	}
+	keys := slices.Sorted(maps.Keys(groups))
+	if i := slices.Index(keys, "other"); i >= 0 {
+		keys = append(slices.Delete(keys, i, i+1), "other")
+	}
+	var b strings.Builder
+	for _, k := range keys {
+		fmt.Fprintf(&b, "**%s**\n", k)
+		for _, l := range groups[k] {
+			fmt.Fprintf(&b, "- %s\n", l)
+		}
+		b.WriteString("\n")
+	}
+	if more > 0 {
+		fmt.Fprintf(&b, "… and %d more\n", more)
+	}
+	return strings.TrimSpace(b.String())
 }
 
 // repoSlug is owner/name: GITHUB_REPOSITORY in Actions, else from gh.

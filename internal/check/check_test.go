@@ -241,3 +241,34 @@ func TestExtra_whenHookSetsGitDir_thenStepsDoNotSeeIt(t *testing.T) {
 		t.Fatalf("GIT_WORK_TREE reached a command: %v", err)
 	}
 }
+
+func TestSubjects(t *testing.T) {
+	dir, c := fixture(t, "", "mode: set\n", "")
+	r := runner{root: dir, c: c}
+	git := func(args ...string) {
+		t.Helper()
+		if _, err := gitx.Git(dir, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv(PRTitle, "")
+	// The fixture's branch commit "add B" has no area.
+	err := r.subjects()
+	if err == nil || !strings.Contains(err.Error(), "1 of 1") || !strings.Contains(err.Error(), "add B: want") {
+		t.Fatalf("got %v", err)
+	}
+	git("commit", "-q", "--amend", "-m", "lib: add B")
+	git("commit", "-q", "--allow-empty", "--author", "dependabot[bot] <bot@example.com>", "-m", "build(deps): bump x")
+	git("commit", "-q", "--allow-empty", "-m", "fixup! lib: add B")
+	if err := r.subjects(); err != nil {
+		t.Fatalf("Go-style, bot and fixup subjects failed: %v", err)
+	}
+	t.Setenv(PRTitle, "Add B to lib")
+	if err := r.subjects(); err == nil || !strings.Contains(err.Error(), "PR title Add B to lib") {
+		t.Fatalf("PR title not checked: %v", err)
+	}
+	t.Setenv(PRTitle, "lib: add B")
+	if err := r.subjects(); err != nil {
+		t.Fatal(err)
+	}
+}
