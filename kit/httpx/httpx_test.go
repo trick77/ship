@@ -137,6 +137,49 @@ func TestHealthLogsTransitions(t *testing.T) {
 	quiet("still ready")
 }
 
+// An unnamed check fails like any other; a probe whose caller hung up changes nothing.
+func TestHealthTransitionEdges(t *testing.T) {
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	dbDown, cacheDown := true, false
+	mux := http.NewServeMux()
+	Health(mux, log,
+		Check{Name: "db", Run: func(context.Context) error {
+			if dbDown {
+				return errors.New("db refused")
+			}
+			return nil
+		}},
+		Check{Run: func(context.Context) error {
+			if cacheDown {
+				return errors.New("cache refused")
+			}
+			return nil
+		}})
+	probe := func(ctx context.Context) string {
+		logs.Reset()
+		mux.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(ctx, http.MethodGet, "/readyz", nil))
+		return logs.String()
+	}
+	if got := probe(t.Context()); !strings.Contains(got, "check=db") {
+		t.Fatalf("db failure not logged: %s", got)
+	}
+	dbDown, cacheDown = false, true
+	if got := probe(t.Context()); !strings.Contains(got, "cache refused") || strings.Contains(got, "restored") {
+		t.Errorf("unnamed check's failure taken for ready: %s", got)
+	}
+	dbDown, cacheDown = true, false
+	gone, cancel := context.WithCancel(t.Context())
+	cancel()
+	if got := probe(gone); got != "" {
+		t.Errorf("hung-up probe logged: %s", got)
+	}
+	dbDown = false
+	if got := probe(t.Context()); !strings.Contains(got, "Readiness restored") {
+		t.Errorf("restore not logged: %s", got)
+	}
+}
+
 // Concurrent failing probes log the transition once (go test -race checks the state).
 func TestHealthTransitionsConcurrent(t *testing.T) {
 	var logs bytes.Buffer // slog's handlers serialize their writes

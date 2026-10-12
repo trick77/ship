@@ -38,20 +38,20 @@ func Health(mux *http.ServeMux, log *slog.Logger, checks ...Check) {
 	}
 	var (
 		mu      sync.Mutex
-		failing string // the check the last logged transition named failing, "" while ready
+		down    bool   // the last logged transition was a failure
+		failing string // the check it named
 	)
-	// transition logs under mu, so concurrent probes neither log one transition twice nor out of order.
+	// transition logs under mu, so concurrent probes never log one transition twice. A nil err is ready.
 	transition := func(ctx context.Context, check string, err error) {
 		mu.Lock()
 		defer mu.Unlock()
 		switch {
-		case check == failing:
-		case check != "":
+		case err != nil && (!down || check != failing):
 			log.WarnContext(ctx, "Readiness check failed", "check", check, logging.Err(err))
-		default:
+		case err == nil && down:
 			log.InfoContext(ctx, "Readiness restored", "check", failing)
 		}
-		failing = check
+		down, failing = err != nil, check
 	}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -63,7 +63,10 @@ func Health(mux *http.ServeMux, log *slog.Logger, checks ...Check) {
 		defer cancel()
 		for _, c := range checks {
 			if err := c.Run(ctx); err != nil {
-				transition(r.Context(), c.Name, err)
+				// The prober hung up (its own timeout): the result says nothing about the dependency.
+				if r.Context().Err() == nil {
+					transition(r.Context(), c.Name, err)
+				}
 				WriteJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable", "check": c.Name})
 				return
 			}
