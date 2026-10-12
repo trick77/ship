@@ -15,6 +15,7 @@ import (
 	"github.com/trick77/ship/internal/config"
 	"github.com/trick77/ship/internal/cover"
 	"github.com/trick77/ship/internal/gitx"
+	"github.com/trick77/ship/internal/pins"
 	"github.com/trick77/ship/internal/subject"
 )
 
@@ -47,6 +48,9 @@ func Run(root string, c *config.Config) error {
 		{"go mod verify", r.modVerify},
 		{"go mod tidy", r.modTidy},
 		{"go build", func() error { return r.goCmd("build", "./...") }},
+		// After the build, so a compile error reads as go's, not govulncheck's; before lint and tests, so a
+		// known-vulnerable dependency fails in seconds, not after the test minutes.
+		{"govulncheck " + pins.Govulncheck, r.vuln},
 		{"golangci-lint " + c.Lint, r.lint},
 		{"ui lint", r.uiLint},
 		{"repo steps", r.extra},
@@ -238,6 +242,12 @@ func (r runner) modTidy() error {
 		return fmt.Errorf("%w: go.mod/go.sum not tidy, run go mod tidy in %s", err, r.c.Go.Dir)
 	}
 	return nil
+}
+
+// vuln fails on a known vulnerability the module's code reaches (govulncheck's call-graph mode: an unreached one in
+// a dependency is reported, never fatal).
+func (r runner) vuln() error {
+	return r.goCmd("run", "golang.org/x/vuln/cmd/govulncheck@"+pins.Govulncheck, "./...")
 }
 
 // golangciConfig is the family's golangci-lint config, byte for byte the copy the repos kept before ship owned it:

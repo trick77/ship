@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/trick77/ship/internal/pins"
 )
 
 // fakeBin puts an executable sh script named name first on PATH and returns the file its arguments are logged to,
@@ -69,6 +71,22 @@ func TestLint_whenRepoConfigAboveGoDir_thenItsOwn(t *testing.T) {
 	fakeBin(t, "go", "exit 2")
 	if err := Lint(dir, c); err == nil {
 		t.Fatal("lint failure ignored")
+	}
+}
+
+func TestVuln(t *testing.T) {
+	dir, c := fixture(t, "", "mode: set\n", "")
+	log := fakeBin(t, "go", "exit 0")
+	r := runner{root: dir, c: c}
+	if err := r.vuln(); err != nil {
+		t.Fatal(err)
+	}
+	if args := readLog(t, log); args != "run golang.org/x/vuln/cmd/govulncheck@"+pins.Govulncheck+" ./...\n" {
+		t.Fatalf("args: %q", args)
+	}
+	fakeBin(t, "go", "exit 3")
+	if err := r.vuln(); err == nil {
+		t.Fatal("a reported vulnerability passed")
 	}
 }
 
