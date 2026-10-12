@@ -87,7 +87,7 @@ gate does not run rather than pass over the other side alone. Scope is the repor
 `go.coverpkg` and UI files outside vitest's `coverage.include` are not measured.
 
 Pre-push: deletes and tags pass; anything else must be HEAD with a clean tree (check tests the tree), then
-`ship check`. A branch without a `ship.yaml` (cut before ship) is refused: rebase it.
+`ship check`. A tree with no `ship.yaml` in the index (a branch cut before ship) is refused: rebase it.
 
 ## Workflows
 

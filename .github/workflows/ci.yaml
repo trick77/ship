@@ -1,7 +1,7 @@
 name: CI
 
-# Automatic, unlike the consumers' (manual-only) CI: ship is public, Actions minutes are free, and a bug here
-# breaks every repo's push. The full gate on Linux (as consumers' CI runs it), the tests on macOS (as their
+# Every pull request and every master push, unlike the consumers' CI (pull requests only, private repos Dependabot
+# alone): a bug here breaks every repo's push, and master's run releases. The full gate on Linux (as consumers' CI runs it), the tests on macOS (as their
 # pre-push hooks run it).
 on:
   pull_request:

@@ -6,10 +6,12 @@ name: Check
 #   # Dependabot PRs only (Actions minutes): own pushes are gated by the pre-push hook, a bot PR has none.
 #   # By hand: gh workflow run CI --ref <branch>
 #
-# Public repo, this head comment instead and no `if:` (nor its comment) below:
+# Public repo, this head comment instead and no `if:` below:
 #
-#   # Every pull request, fork PRs included (read-only token, no secrets): Dependabot and outside contributors have
-#   # no pre-push hook. Own pushes are gated by the hook already. By hand: gh workflow run CI --ref <branch>
+#   # Every pull request, fork PRs included (read-only token, no secrets): Dependabot and outside contributors have no
+#   # pre-push hook. Own pushes are gated by the hook already. By hand: gh workflow run CI --ref <branch>
+#
+# Then:
 #
 #   on:
 #     pull_request:
@@ -17,10 +19,12 @@ name: Check
 #     workflow_dispatch:
 #   permissions:
 #     contents: read
+#   concurrency:
+#     group: ci-${{ github.ref }}
+#     cancel-in-progress: true
 #   jobs:
 #     check:
-#       # Private repo only (Actions minutes): Dependabot PRs alone, own pushes are gated by the hook.
-#       if: github.event_name != 'pull_request' || github.event.pull_request.user.login == 'dependabot[bot]'
+#       if: github.event_name != 'pull_request' || github.event.pull_request.user.login == 'dependabot[bot]'   # private only
 #       uses: trick77/ship/.github/workflows/check.yaml@master
 #       with: { node-version: "22" }   # only with a UI
 on:
