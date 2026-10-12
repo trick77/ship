@@ -3,6 +3,7 @@
 // ship.yaml.
 //
 //	ship check                     everything CI checks, locally
+//	ship lint                      golangci-lint alone, at the version check runs
 //	ship hooks                     install the pre-push hook
 //	ship pre-push                  the hook's gate (git runs it)
 //	ship release [patch|minor|major|auto] [-cache gha] [-dry-run]
@@ -23,6 +24,7 @@ import (
 const usage = `usage: ship <command>
 
   check                                       run the gate: everything CI checks, locally
+  lint                                        golangci-lint alone, at the version check runs
   hooks                                       install the pre-push hook running the gate
   pre-push                                    the hook's gate (git runs it)
   release [patch|minor|major|auto] [flags]    tag, build and push images, GitHub release; auto: patch, or what
@@ -65,6 +67,12 @@ func run(args []string) error {
 			return err
 		}
 		return check.Run(root, c)
+	case "lint":
+		c, err := config.Load(root)
+		if err != nil {
+			return err
+		}
+		return check.Lint(root, c)
 	case "hooks":
 		p, err := hook.Install(root)
 		if err != nil {

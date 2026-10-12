@@ -22,7 +22,7 @@ ship check   # the gate by hand
 
 ```yaml
 base: master          # patch gate diffs against origin/<base>; release requires HEAD = origin/<base>
-lint: v2.14.0         # golangci-lint, built by go run: same version everywhere
+lint: v2.14.0         # golangci-lint, built by go run; leave unset: ship's version, the same everywhere
 patch: 75             # min coverage of changed lines, %
 tag_prefix: ""        # "v" for a Go module
 go:
@@ -56,6 +56,7 @@ coverage output.
 | | |
 |---|---|
 | `ship check` | fetch, commit subjects, ui build, gofmt, build, golangci-lint (incl. govet), ui lint, steps, go test (-race, coverage), ui test, floors, patch gate |
+| `ship lint` | golangci-lint alone, at the version `ship check` runs: a Makefile's quick lint, no version of its own |
 | `ship hooks` | install the pre-push hook (respects core.hooksPath, never overwrites a foreign hook) |
 | `ship release [patch\|minor\|major\|auto] [-cache gha] [-dry-run]` | next version from tags, notes from the subjects since the last tag (grouped by area), images pushed (version + sha), tag (API), GitHub release, then :MAJOR.MINOR, :MAJOR, :latest. No `images:` and no `ui:`: `go build ./...` before the tag (in `-dry-run` too). With `images:` only on a GitHub-hosted runner (the Release workflow); elsewhere `-dry-run` only. The Release workflow inherits the caller's permissions: `packages: write` only with `images:` |
 
