@@ -19,10 +19,8 @@ import (
 	"text/template"
 
 	"github.com/trick77/ship/internal/config"
+	"github.com/trick77/ship/internal/pins"
 )
-
-// NodeVersion is the Node major the CI caller sets up for a UI.
-const NodeVersion = "26"
 
 // DependabotOnly is the private repo's CI condition: Dependabot PRs only (Actions minutes are billed, own pushes are
 // gated by the hook).
@@ -59,6 +57,9 @@ type Facts struct {
 	Visibility string
 	// DockerDirs are the repo-absolute directories of the images' Containerfiles that exist.
 	DockerDirs []string
+	// NodeVersion is the Node major the CI caller sets up for a UI: the Containerfile's node builder's, so CI and
+	// the image build alike; pins.NodeMin when there is none.
+	NodeVersion string
 }
 
 // File is one owned file: what is on disk, what ship wants there, or why it cannot be rendered.
@@ -88,7 +89,10 @@ func Files(root string, c *config.Config, f Facts) ([]File, error) {
 	d := data{
 		Private: f.Visibility == "private", Images: len(c.Images) > 0, UI: c.UI != nil,
 		Branches: "[" + c.Base + "]", GoDir: c.Go.Dir, GoDirSet: path.Clean(c.Go.Dir) != ".",
-		GoDirAbs: abs(c.Go.Dir), DependabotOnly: DependabotOnly, NodeVersion: NodeVersion, DockerDirs: f.DockerDirs,
+		GoDirAbs: abs(c.Go.Dir), DependabotOnly: DependabotOnly, NodeVersion: f.NodeVersion, DockerDirs: f.DockerDirs,
+	}
+	if d.NodeVersion == "" {
+		d.NodeVersion = pins.NodeMin
 	}
 	if c.UI != nil {
 		d.UIDir, d.UIDirAbs, d.UIDirSet = path.Clean(c.UI.Dir), abs(c.UI.Dir), path.Clean(c.UI.Dir) != "ui"

@@ -21,4 +21,5 @@ allow:
     path: internal/check/postgres.go
     why: check removes its test container on ctrl-c, a CLI's cleanup, not a service's shutdown
   - rule: gomod
+    path: go.mod
     why: go 1.24 is ship's floor for every consumer's go run, not a toolchain pin

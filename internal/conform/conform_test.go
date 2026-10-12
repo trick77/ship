@@ -283,6 +283,7 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 			`FAIL containerfile: image "": go build without -trimpath`,
 			`FAIL containerfile: image "-ui": final stage runs as root`,
 			`FAIL containerfile: image "": builder golang:1.26, go.mod says go 1.27`,
+			`FAIL containerfile: image "": builder golang:1.26, want at least 1.27 (pins.GoMin)`,
 			// The -ui image is built from the same build stage.
 			`FAIL containerfile: image "-ui": no ARG VERSION`, `FAIL containerfile: image "-ui": go build ldflags lack -X`,
 			`FAIL containerfile: image "-ui": go build without -trimpath`,
@@ -358,6 +359,23 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 			[]string{"FAIL gomod: github.com/trick77/ship/kit v0.1.0, newest is v0.2.0"}},
 		{"kit missing", appShip, func(r *repo) { r.edit("backend/go.mod", "github.com/trick77/ship/kit", "example.com/other") },
 			[]string{"FAIL kit: a service (images) requires github.com/trick77/ship/kit (backend/go.mod)"}},
+		// Below the floor, go.mod and builder agreeing: both fail.
+		{"go below floor", appShip, func(r *repo) {
+			r.edit("backend/go.mod", "go 1.27.1", "go 1.26.4")
+			r.edit("Containerfile", "golang:1.27", "golang:1.26")
+		}, []string{"FAIL gomod: go 1.26.4: want at least go 1.27.0 (pins.GoMin) (backend/go.mod)",
+			`FAIL containerfile: image "": builder golang:1.26, want at least 1.27`,
+			`FAIL containerfile: image "-ui": builder golang:1.26, want at least 1.27`}},
+		{"go.modules", strings.Replace(appShip, "dir: backend\n", "dir: backend\n  modules: [backend/tools, lib]\n", 1), func(r *repo) {
+			r.write("backend/tools/go.mod", "module tools\n\ngo 1.26.0\n")
+		}, []string{"FAIL gomod: go 1.26.0: want at least go 1.27.0 (pins.GoMin) (backend/tools/go.mod)",
+			"FAIL gomod: missing (ship.yaml go.modules) (lib/go.mod)"}},
+		{"node below floor", appShip, func(r *repo) { r.edit("Containerfile", "node:26-alpine", "node:24-alpine") },
+			[]string{`FAIL containerfile: image "": builder node:24, want at least 26 (pins.NodeMin)`,
+				`FAIL containerfile: image "-ui": builder node:24, want at least 26 (pins.NodeMin)`}},
+		// Dependabot moved the node builder up: the CI caller follows it (ship init), never a hand edit.
+		{"node bumped", appShip, func(r *repo) { r.edit("Containerfile", "node:26-alpine", "node:27-alpine") },
+			[]string{"FAIL scaffold: differs from ship's template (ship init -diff) (.github/workflows/ci.yaml)"}},
 		{"go.mod missing", appShip, func(r *repo) { r.remove("backend/go.mod") },
 			[]string{"FAIL gomod: missing (backend/go.mod)"}},
 		{"handrolled", appShip, func(r *repo) {
@@ -587,6 +605,18 @@ func TestParseOrigin(t *testing.T) {
 	} {
 		if o, r := parseOrigin(u); o+"/"+r != want {
 			t.Errorf("%q: %s/%s", u, o, r)
+		}
+	}
+}
+
+func TestAtLeast(t *testing.T) {
+	for _, tc := range []struct {
+		v, floor string
+		want     bool
+	}{{"1.27.0", "1.27", true}, {"1.27.9", "1.27", true}, {"1.28.0", "1.27", true}, {"2.0.0", "1.27", true},
+		{"1.26.9", "1.27", false}, {"26", "26", true}, {"27", "26", true}, {"24", "26", false}} {
+		if got := atLeast(tc.v, tc.floor); got != tc.want {
+			t.Errorf("atLeast(%s, %s) = %v", tc.v, tc.floor, got)
 		}
 	}
 }

@@ -168,12 +168,12 @@ func TestFiles_whenPublicLibrary_thenCallersOnly(t *testing.T) {
 func TestFiles_whenUIElsewhere_thenInputsAndOwnedFilesThere(t *testing.T) {
 	dir := t.TempDir()
 	c := parse(t, "ui:\n  dir: web\n")
-	files, err := Files(dir, c, Facts{Visibility: "public"})
+	files, err := Files(dir, c, Facts{Visibility: "public", NodeVersion: "27"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	ci := string(byPath(t, files, CI).Want)
-	if !strings.Contains(ci, "node-version: \"26\"\n      ui-dir: web\n") || strings.Contains(ci, "go-dir") {
+	if !strings.Contains(ci, "node-version: \"27\"\n      ui-dir: web\n") || strings.Contains(ci, "go-dir") {
 		t.Errorf("ci.yaml:\n%s", ci)
 	}
 	for _, p := range []string{ESLint, TSConfigNode, NPMRC} {

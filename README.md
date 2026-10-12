@@ -158,10 +158,12 @@ mode. One line per rule: `ok`, `FAIL <rule>: <what> (<file>)`, `allowed <rule>: 
 library without images or UI skips what does not apply). `ship conform -fix` runs `ship init`, then conforms:
 what is left is by hand.
 
-`ship init` writes the files ship owns, rendered from `ship.yaml` and the repo (origin, visibility, package.json):
+`ship init` writes the files ship owns, rendered from `ship.yaml` and the repo (origin, visibility, Containerfiles):
 `.github/workflows/ci.yaml`, `release.yaml`, `cleanup-images.yaml` (images), `.github/dependabot.yaml`,
-`<ui.dir>/eslint.config.js`, `tsconfig.node.json` and `.npmrc` (UI), and in `.dockerignore` (images) and `Makefile` (apps, or one that exists) only the
-block between `# ship:begin` and `# ship:end`; the rest of those two is the repo's. Owned means byte-equal.
+`<ui.dir>/eslint.config.js`, `tsconfig.node.json` and `.npmrc` (UI), and in `.dockerignore` (images) and `Makefile`
+(apps, or one that exists) only the block between `# ship:begin` and `# ship:end`; the rest of those two is the repo's. Owned means byte-equal.
+The CI caller's `node-version` is the Containerfile's `node:N` builder major (26 without one): Dependabot moves the
+builder, `ship init` moves CI after it.
 `ship init -diff` prints the difference, writes nothing, exits 1 when anything differs.
 
 | rule | what | allowable |
@@ -170,12 +172,12 @@ block between `# ship:begin` and `# ship:end`; the rest of those two is the repo
 | `workflows` | ci/release/cleanup callers use `trick77/ship/.github/workflows/<x>.yaml@master`; release: `packages: write` ⇔ images, bump options include `auto`; no other image cleanup action | yes |
 | `visibility` | GitHub's visibility (Actions event, else the API unauthenticated, cached a day in the git dir; unknown = FAIL) matches `visibility:`; public: CI on every PR (no `if:`); private: Dependabot-only `if:`, every npm/docker update grouped, ≤ 5 open PRs, cleanup caller with images | yes |
 | `dependabot` | `commit-message: { prefix: deps }` everywhere; gomod, github-actions, npm (UI), docker (Containerfile) present | yes |
-| `containerfile` | per image: `ARG VERSION` into `-X github.com/trick77/ship/kit/version.Version=${VERSION}`, `-trimpath`, non-root final stage, builder `golang:X.Y` = go.mod's | per `image` |
+| `containerfile` | per image: `ARG VERSION` into `-X github.com/trick77/ship/kit/version.Version=${VERSION}`, `-trimpath`, non-root final stage, builder `golang:X.Y` = go.mod's and ≥ ship's Go floor (1.27), builder `node:N` ≥ ship's Node floor (26) | per `image` |
 | `distroless` | final stage on `gcr.io/distroless/` | per `image` |
 | `dockerignore` | exists with images; excludes `<ui.dir>/node_modules` and `<ui.dir>/dist` | yes |
 | `ui` | `ui.lint: npm run lint`; scripts exactly `build` = `tsc -b && vite build`, `lint` = `eslint . --max-warnings 0 && npm run format:check`, `format` = `prettier --write 'src/**/*.{ts,tsx,css}' '*.ts'`, `format:check` = `prettier --check …` (same globs), `test` = `vitest run`; devDependencies `typescript`, `prettier`, `eslint`, `typescript-eslint`, `eslint-config-prettier`, `@eslint/js`, `eslint-plugin-react-hooks` present at an exact version (no range; the version is the repo's), typescript below 7 (typescript-eslint); eslint.config.js; tsconfig.json references `./tsconfig.node.json`; vite.config.ts: `defineConfig` from `vitest/config`, `globals: true`, `setupFiles: ["./src/test/setup.ts"]`, `reportsDirectory: "../coverage/ui"`; `src/test/setup.ts`'s first statement `import "@testing-library/jest-dom/vitest";` | yes |
 | `golangci` | no `.golangci.yaml`/`.yml` in the repo: ship's config is the family's | per `path` |
-| `gomod` | `go x.y.z`; a required `github.com/trick77/ship/kit` is the newest `kit/v*` tag | yes |
+| `gomod` | `go x.y.z` ≥ 1.27.0 in go.dir and every go.modules module; a required `github.com/trick77/ship/kit` is the newest `kit/v*` tag | yes |
 | `kit` | a repo with images requires kit | yes |
 | `handrolled` | no `internal/version` package, health route strings, `signal.Notify`/`NotifyContext` outside tests: kit has them | per `path` |
 | `agents` | AGENTS.md has the commit-subject line | yes |

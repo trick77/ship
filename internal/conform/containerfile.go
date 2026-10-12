@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/trick77/ship/internal/pins"
 )
 
 // KitVersion is the -X target every image stamps its release version into.
@@ -129,7 +131,37 @@ func chain(stages []stage, final int) []int {
 	}
 }
 
-var golangTag = regexp.MustCompile(`^(?:docker\.io/)?(?:library/)?golang:(\d+)\.(\d+)`)
+var (
+	golangTag = regexp.MustCompile(`^(?:docker\.io/)?(?:library/)?golang:(\d+)\.(\d+)`)
+	nodeTag   = regexp.MustCompile(`^(?:docker\.io/)?(?:library/)?node:(\d+)`)
+)
+
+// nodeMajors are the node builder majors of the stages x is built from.
+func (x image) nodeMajors() []string {
+	var out []string
+	for _, i := range closure(x.stages, x.final) {
+		s := x.stages[i]
+		if stageIndex(x.stages[:i], s.base) >= 0 {
+			continue
+		}
+		if m := nodeTag.FindStringSubmatch(s.base); m != nil && !slices.Contains(out, m[1]) {
+			out = append(out, m[1])
+		}
+	}
+	return out
+}
+
+// nodeVersion is the Node major the images build the UI with, "" when none does: the CI caller sets up the same.
+func (e *env) nodeVersion() string {
+	for _, x := range e.images() {
+		if x.err == "" {
+			if n := x.nodeMajors(); len(n) > 0 {
+				return n[0]
+			}
+		}
+	}
+	return ""
+}
 
 // image is one ship.yaml image's Containerfile, parsed, with its final stage.
 type image struct {
@@ -226,6 +258,14 @@ func (e *env) containerfile() result {
 		for _, v := range golang {
 			if goMM != "" && v != goMM {
 				add(fmt.Sprintf("builder golang:%s, go.mod says go %s", v, goMM))
+			}
+			if !atLeast(v, pins.GoMin) {
+				add(fmt.Sprintf("builder golang:%s, want at least %s (pins.GoMin)", v, pins.GoMin))
+			}
+		}
+		for _, n := range x.nodeMajors() {
+			if !atLeast(n, pins.NodeMin) {
+				add(fmt.Sprintf("builder node:%s, want at least %s (pins.NodeMin)", n, pins.NodeMin))
 			}
 		}
 	}

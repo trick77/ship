@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/trick77/ship/internal/gitx"
+	"github.com/trick77/ship/internal/pins"
 	"github.com/trick77/ship/internal/scaffold"
 )
 
@@ -249,8 +250,11 @@ type goMod struct {
 	kit       string // required version of KitModule, "" when not required
 }
 
-func (e *env) goMod() (*goMod, error) {
-	b, err := e.read(e.goPath("go.mod"))
+func (e *env) goMod() (*goMod, error) { return e.goModAt(e.goPath("go.mod")) }
+
+// goModAt reads the go.mod at file, nil when it does not exist.
+func (e *env) goModAt(file string) (*goMod, error) {
+	b, err := e.read(file)
 	if err != nil || b == nil {
 		return nil, err
 	}
@@ -300,7 +304,35 @@ func (e *env) goMajorMinor() (string, error) {
 
 var fullGo = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
 
-// gomod: the go line is a full toolchain version (go mod tidy's own form), and kit, once required, is the newest.
+// goLineFindings: go x.y.z, x.y at least pins.GoMin.
+func goLineFindings(file, v string) []finding {
+	if !fullGo.MatchString(v) {
+		return []finding{{what: fmt.Sprintf("go %s: want x.y.z", v), file: file}}
+	}
+	if !atLeast(v, pins.GoMin) {
+		return []finding{{what: fmt.Sprintf("go %s: want at least go %s.0 (pins.GoMin)", v, pins.GoMin), file: file}}
+	}
+	return nil
+}
+
+// atLeast compares dotted versions over floor's parts: "1.27.3" is at least "1.27", "1.26.9" is not.
+func atLeast(v, floor string) bool {
+	vs, ms := strings.Split(v, "."), strings.Split(floor, ".")
+	for i, mp := range ms {
+		m, _ := strconv.Atoi(mp)
+		x := 0
+		if i < len(vs) {
+			x, _ = strconv.Atoi(vs[i])
+		}
+		if x != m {
+			return x > m
+		}
+	}
+	return true
+}
+
+// gomod: every module's go line is a full toolchain version (go mod tidy's own form) at least pins.GoMin, and kit,
+// once go.dir's module requires it, is the newest.
 func (e *env) gomod() result {
 	file := e.goPath("go.mod")
 	m, err := e.goMod()
@@ -310,9 +342,17 @@ func (e *env) gomod() result {
 	case m == nil:
 		return result{findings: []finding{{what: "missing", file: file}}}
 	}
-	var fs []finding
-	if !fullGo.MatchString(m.goVersion) {
-		fs = append(fs, finding{what: fmt.Sprintf("go %s: want x.y.z", m.goVersion), file: file})
+	fs := goLineFindings(file, m.goVersion)
+	for _, dir := range e.c.Go.Modules {
+		f := path.Join(filepath.ToSlash(dir), "go.mod")
+		switch nm, err := e.goModAt(f); {
+		case err != nil:
+			fs = append(fs, finding{what: err.Error(), file: f})
+		case nm == nil:
+			fs = append(fs, finding{what: "missing (ship.yaml go.modules)", file: f})
+		default:
+			fs = append(fs, goLineFindings(f, nm.goVersion)...)
+		}
 	}
 	if m.kit == "" {
 		return result{findings: fs}

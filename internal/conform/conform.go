@@ -140,7 +140,8 @@ func newEnv(root string, c *config.Config, o Options) *env {
 
 // render renders the owned files with the visibility ship.yaml names, else GitHub's.
 func (e *env) render() {
-	f := scaffold.Facts{Repo: e.repo, Visibility: e.c.Visibility, DockerDirs: e.dockerDirs()}
+	f := scaffold.Facts{Repo: e.repo, Visibility: e.c.Visibility, DockerDirs: e.dockerDirs(),
+		NodeVersion: e.nodeVersion()}
 	if f.Visibility == "" {
 		f.Visibility = e.vis
 	}

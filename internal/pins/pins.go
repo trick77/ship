@@ -11,4 +11,9 @@ const (
 	// Cosign is the cosign release the Release workflow installs (cosign-installer's cosign-release); a test keeps
 	// the workflow on it.
 	Cosign = "v3.1.3"
+	// GoMin is the lowest Go (major.minor) a repo's go.mod go lines and golang builder may name. A floor, not a pin:
+	// Dependabot and go get move a repo up on its own.
+	GoMin = "1.27"
+	// NodeMin is the lowest Node major a UI's node builder and CI caller may name, and the caller's default.
+	NodeMin = "26"
 )

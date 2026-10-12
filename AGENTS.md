@@ -19,7 +19,9 @@ deliberately.
 - Tool versions ship runs or demands (golangci-lint default, govulncheck, trivy, cosign) live in
   `internal/pins`, nowhere else (cosign also in release.yaml's installer, a test keeps them equal).
   npm versions never: Dependabot moves them per repo, an equality pin turns every bump PR red. conform wants the
-  UI tools present at an exact version (save-exact), typescript < 7 (typescript-eslint).
+  UI tools present at an exact version (save-exact), typescript < 7 (typescript-eslint). Go and Node are floors
+  (`pins.GoMin`, `pins.NodeMin`), never equality: Dependabot moves builders up per repo; conform keeps go.mod =
+  golang builder and CI node-version = node builder within a repo.
   `internal/check/golangci.yaml` is the family's golangci config, byte-identical to the repos' old copies.
 - Commit subjects + PR titles: Go style `area: what` (`hook: …`, `release: …`), gated, and the release notes.
 - Conform (`ship conform`, check's first step) is the canon gate: a consumer's owned files are byte-equal to
