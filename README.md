@@ -4,7 +4,7 @@ The gate, pre-push hook and release for the trick77 and ipverse Go repos, as one
 scripts copied into every repo.
 
 GitHub must never be first to find a failure. `ship check` runs everything CI checks, locally; the pre-push hook
-runs it before every push; CI (by hand) runs the same command.
+runs it before every push; CI runs the same command on pull requests (Dependabot, outside contributors).
 
 ## Use in a repo
 
@@ -89,7 +89,7 @@ Pre-push: deletes and tags pass; anything else must be HEAD with a clean tree (c
 
 ## Workflows
 
-Reusable, for running the same commands on GitHub by hand:
+Reusable, for running the same commands on GitHub:
 
 ```yaml
 jobs:
@@ -107,8 +107,11 @@ A repo moving to ship, in one PR (its own subject already Go style: the new gate
 
 1. `ship.yaml` at the root: only the keys that differ from the defaults above.
 2. `ship hooks` in every clone; drop the repo's own gate scripts and hooks.
-3. `.github/workflows/ci.yaml` and `release.yaml` calling the reusable ones, `workflow_dispatch` only: copy the
-   caller from the head comment of `check.yaml` / `release.yaml`.
+3. `.github/workflows/ci.yaml` and `release.yaml` calling the reusable ones: copy the caller from the head comment
+   of `check.yaml` / `release.yaml`. `release.yaml`: `workflow_dispatch` only. `ci.yaml`: `pull_request` +
+   `workflow_dispatch`, since Dependabot and fork PRs never pass the hook. Public repo: every PR, forks included
+   (read-only token, no secrets). Private repo: Dependabot PRs only (the caller's `if:`), Actions minutes are billed
+   and own pushes are gated by the hook already.
 4. `ship check` green locally, then push: the hook runs it.
 5. AGENTS.md, verbatim with the repo's own areas:
    ``- Commit subjects + PR titles: Go style `area: what` (`<area>: …`, `<area>: …`), gated by ship; release notes list them by area.``
