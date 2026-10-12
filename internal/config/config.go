@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -63,6 +64,10 @@ type Go struct {
 	// matches as a path segment anywhere ("cmd/" excludes backend/cmd/x.go). UI coverage scope is the test
 	// runner's own (vitest coverage include/exclude).
 	Exclude []string `yaml:"exclude"`
+	// Modules are repo-relative dirs of nested Go modules (each its own go.mod), gated like Dir: same commands,
+	// the same floor each on its own, their lines in the patch gate. Coverpkg is Dir's alone. A nested go.mod not
+	// listed fails check: no module is ever silently ungated.
+	Modules []string `yaml:"modules"`
 }
 
 // UI configures the frontend side of the gate.
@@ -188,6 +193,14 @@ func (c *Config) validate() error {
 	}
 	if c.Postgres != "" && !pgVersion.MatchString(c.Postgres) {
 		return fmt.Errorf("%s: postgres: %q, want a version like \"17\" or \"17.6\"", File, c.Postgres)
+	}
+	seen := map[string]bool{path.Clean(filepath.ToSlash(c.Go.Dir)): true}
+	for _, m := range c.Go.Modules {
+		d := path.Clean(filepath.ToSlash(m))
+		if !inRepo(m) || seen[d] {
+			return fmt.Errorf("%s: go.modules: %q, want a dir inside the repo, not go.dir, listed once", File, m)
+		}
+		seen[d] = true
 	}
 	for _, s := range c.Shell {
 		if !inRepo(s) {

@@ -86,6 +86,10 @@ func TestParse_whenUnknownKeyOrBadValue_thenError(t *testing.T) {
 		"ui:\n  embed: .\n",
 		"ui:\n  embed: ../x\n",
 		"shell: [\".\"]\n", // the root itself
+		"go:\n  modules: [../x]\n",
+		"go:\n  modules: [.]\n", // go.dir itself
+		"go:\n  dir: backend\n  modules: [backend/]\n", // go.dir itself
+		"go:\n  modules: [kit, ./kit]\n",               // twice
 	} {
 		if _, err := Parse([]byte(in)); err == nil {
 			t.Errorf("%q: no error", in)
@@ -117,6 +121,13 @@ func TestParse_whenUILintEmpty_thenNone(t *testing.T) {
 	}
 	if c.UI.Lint != "" || c.UI.Embed != "backend/web/dist" {
 		t.Fatalf("ui: %+v", c.UI)
+	}
+}
+
+func TestParse_whenModules_thenListed(t *testing.T) {
+	c, err := Parse([]byte("go:\n  modules: [kit, kit/auth]\n"))
+	if err != nil || len(c.Go.Modules) != 2 || c.Go.Modules[1] != "kit/auth" {
+		t.Fatalf("%+v %v", c, err)
 	}
 }
 
