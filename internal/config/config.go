@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
@@ -34,6 +35,9 @@ type Config struct {
 	UI    *UI     `yaml:"ui"`
 	// Steps are repo-specific checks (openapi lint, shell tests, e2e), run after lint, before the tests.
 	Steps []Step `yaml:"steps"`
+	// Postgres is the major (or major.minor) of the postgres:<v>-alpine container check starts for go test, its
+	// DSN in SHIP_TEST_DSN; empty = none.
+	Postgres string `yaml:"postgres"`
 	// Shell lists repo-relative shell scripts for shellcheck beyond the ones found by name (*.sh) or shebang.
 	Shell  []string `yaml:"shell"`
 	Images []Image  `yaml:"images"`
@@ -178,6 +182,9 @@ func (c *Config) validate() error {
 			return fmt.Errorf("%s: steps[%d] needs name and run", File, i)
 		}
 	}
+	if c.Postgres != "" && !pgVersion.MatchString(c.Postgres) {
+		return fmt.Errorf("%s: postgres: %q, want a version like \"17\" or \"17.6\"", File, c.Postgres)
+	}
 	for _, s := range c.Shell {
 		if !inRepo(s) {
 			return fmt.Errorf("%s: shell: %q is not a path inside the repo", File, s)
@@ -185,6 +192,8 @@ func (c *Config) validate() error {
 	}
 	return nil
 }
+
+var pgVersion = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?$`)
 
 // inRepo reports whether p is a repo-relative path below the root, lexically: no absolute path, no "..".
 func inRepo(p string) bool {

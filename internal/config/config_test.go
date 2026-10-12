@@ -81,6 +81,8 @@ func TestParse_whenUnknownKeyOrBadValue_thenError(t *testing.T) {
 		"ui: [\n",               // malformed
 		"shell: [/etc/x.sh]\n",  // outside the repo
 		"shell: [../x.sh]\n",    // outside the repo
+		"postgres: latest\n",
+		"postgres: 17-alpine\n",
 		"ui:\n  embed: .\n",
 		"ui:\n  embed: ../x\n",
 		"shell: [\".\"]\n", // the root itself
@@ -115,5 +117,14 @@ func TestParse_whenUILintEmpty_thenNone(t *testing.T) {
 	}
 	if c.UI.Lint != "" || c.UI.Embed != "backend/web/dist" {
 		t.Fatalf("ui: %+v", c.UI)
+	}
+}
+
+func TestParse_whenPostgresUnquoted_thenString(t *testing.T) {
+	for in, want := range map[string]string{"postgres: 17\n": "17", "postgres: \"17.6\"\n": "17.6", "": ""} {
+		c, err := Parse([]byte(in))
+		if err != nil || c.Postgres != want {
+			t.Errorf("%q: %q %v", in, c.Postgres, err)
+		}
 	}
 }

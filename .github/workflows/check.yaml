@@ -41,6 +41,12 @@ on:
       ui-dir:
         type: string
         default: ui
+      postgres:
+        description: >-
+          Postgres version for go test (postgres:<v>-alpine, DSN in SHIP_TEST_DSN); empty = none here, and ship
+          check starts the container itself for a ship.yaml postgres key.
+        type: string
+        default: ""
       ship:
         description: How to run ship; empty = ship at master's sha on GitHub. ship's own repo uses "go run .".
         type: string
@@ -69,6 +75,21 @@ jobs:
           node-version: ${{ inputs.node-version }}
           cache: npm
           cache-dependency-path: ${{ inputs.ui-dir }}/package-lock.json
+      # A step, not services: a reusable workflow cannot make a service depend on an input. ship check finds
+      # SHIP_TEST_DSN set and starts no container of its own. The runner goes with the job: no cleanup.
+      - if: inputs.postgres != ''
+        env:
+          PG: ${{ inputs.postgres }}
+        run: |
+          [[ "$PG" =~ ^[0-9]+(\.[0-9]+)?$ ]] || { echo "::error::postgres input '$PG': want a version like 17"; exit 1; }
+          docker run -d --rm --name ship-postgres -p 127.0.0.1:5432:5432 -e POSTGRES_PASSWORD=ship "postgres:$PG-alpine"
+          # Over TCP: the image's init runs a socket-only server first, which reads as ready and then restarts.
+          for _ in $(seq 120); do
+            docker exec ship-postgres pg_isready -q -h 127.0.0.1 -U postgres && break
+            sleep 0.5
+          done
+          docker exec ship-postgres pg_isready -h 127.0.0.1 -U postgres
+          echo "SHIP_TEST_DSN=postgres://postgres:ship@127.0.0.1:5432/postgres?sslmode=disable" >> "$GITHUB_ENV"
       # shellcheck (ship check's step for a repo's shell scripts): preinstalled on GitHub's ubuntu runner images.
       - working-directory: ${{ inputs.go-dir }}
         env:

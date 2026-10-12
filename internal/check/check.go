@@ -35,6 +35,10 @@ const SkipPatch = "[skip patch-coverage]"
 func Run(root string, c *config.Config) error {
 	start := time.Now()
 	r := runner{root: root, c: c}
+	// The postgres container lives from its step to the end of go test, and never past check, failed or not.
+	var pgEnv []string
+	stopPG := func() {}
+	defer func() { stopPG() }()
 	steps := []struct {
 		name string
 		fn   func() error
@@ -58,7 +62,14 @@ func Run(root string, c *config.Config) error {
 		{"ui lint", r.uiLint},
 		{"shellcheck", r.shellcheck},
 		{"repo steps", r.extra},
-		{"go test", r.goTest},
+		{"postgres", func() (err error) {
+			pgEnv, stopPG, err = r.postgres()
+			return err
+		}},
+		{"go test", func() error {
+			defer stopPG()
+			return r.goTest(pgEnv...)
+		}},
 		{"ui test", r.uiTest},
 		{"coverage", r.gates},
 	}
@@ -353,8 +364,8 @@ func (r runner) extra() error {
 }
 
 // goTest always runs uncached (-count=1): a cached result carries the coverage counters of the file set it was
-// recorded against.
-func (r runner) goTest() error {
+// recorded against. env goes to the tests on top of ship's own (the postgres DSN).
+func (r runner) goTest(env ...string) error {
 	profile, err := r.profile()
 	if err != nil {
 		return err
@@ -363,7 +374,6 @@ func (r runner) goTest() error {
 		return err
 	}
 	args := []string{"test", "-count=1", "-covermode=atomic", "-coverprofile=" + profile}
-	var env []string
 	if r.c.Go.RaceOn() {
 		args = append(args, "-race")
 		env = append(env, "CGO_ENABLED=1")
