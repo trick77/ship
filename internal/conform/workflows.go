@@ -189,7 +189,7 @@ func (e *env) visibilityRule() result {
 		}
 	}
 	if e.vis != "private" {
-		return result{findings: fs}
+		return result{findings: fs, note: e.visNote}
 	}
 	d, err := e.loadDependabot()
 	if err != nil {
@@ -210,7 +210,7 @@ func (e *env) visibilityRule() result {
 		fs = append(fs, finding{what: "private repo with images: the cleanup-images caller is missing (ship init)",
 			file: scaffold.Cleanup})
 	}
-	return result{findings: fs}
+	return result{findings: fs, note: e.visNote}
 }
 
 type dependabotFile struct {

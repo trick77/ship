@@ -572,13 +572,32 @@ func TestRun_whenVisibilityUnknown_thenScaffoldAndVisibilityFail(t *testing.T) {
 		!strings.Contains(out, "FAIL scaffold: repo visibility unknown") {
 		t.Errorf("%v\n%s", err, out)
 	}
-	// ship.yaml's visibility renders the files; the lookup still fails.
-	out, _ = r.run("visibility: private\n" + appShip)
-	if strings.Contains(out, "FAIL scaffold") || !strings.Contains(out, "FAIL visibility: cannot ask GitHub") {
-		t.Errorf("with visibility:\n%s", out)
+	// ship.yaml's visibility stands in for the failed lookup: a note, no FAIL.
+	out, err = r.run("visibility: private\n" + appShip)
+	if err != nil || !strings.Contains(out, "ok visibility: GitHub lookup failed (cannot ask GitHub") ||
+		!strings.Contains(out, "ship.yaml's visibility: private used") {
+		t.Errorf("with visibility: %v\n%s", err, out)
 	}
 	if err := Init(r.dir, r.config(appShip), r.opts, false); err == nil || !strings.Contains(err.Error(), "by hand") {
 		t.Errorf("init: %v", err)
+	}
+}
+
+func TestRun_whenRateLimited_thenDeclaredVisibilityStands(t *testing.T) {
+	status := http.StatusForbidden
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(status) }))
+	defer srv.Close()
+	r := app(t)
+	r.opts.Getenv, r.opts.API = fakeEnv(nil), srv.URL
+	out, err := r.run("visibility: private\n" + appShip)
+	if err != nil || !strings.Contains(out, "ok visibility: GitHub lookup failed (GitHub API") {
+		t.Errorf("403: %v\n%s", err, out)
+	}
+	// A lookup that answers and contradicts ship.yaml still fails.
+	status = http.StatusOK
+	out, err = r.run("visibility: private\n" + appShip)
+	if err == nil || !strings.Contains(out, "FAIL visibility: visibility: private, GitHub says public") {
+		t.Errorf("200: %v\n%s", err, out)
 	}
 }
 

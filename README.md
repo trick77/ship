@@ -170,7 +170,7 @@ builder, `ship init` moves CI after it.
 |---|---|---|
 | `scaffold` | every owned file equals ship's template | per `path` |
 | `workflows` | ci/release/cleanup callers use `trick77/ship/.github/workflows/<x>.yaml@master`; release: `packages: write` ⇔ images, bump options include `auto`; no other image cleanup action | yes |
-| `visibility` | GitHub's visibility (Actions event, else the API unauthenticated, cached a day in the git dir; unknown = FAIL) matches `visibility:`; public: CI on every PR (no `if:`); private: Dependabot-only `if:`, every npm/docker update grouped, ≤ 5 open PRs, cleanup caller with images | yes |
+| `visibility` | GitHub's visibility (Actions event, else the API unauthenticated, cached a day in the git dir) matches `visibility:`; a failed lookup: `visibility:` stands (a note), unset = FAIL; public: CI on every PR (no `if:`); private: Dependabot-only `if:`, every npm/docker update grouped, ≤ 5 open PRs, cleanup caller with images | yes |
 | `dependabot` | `commit-message: { prefix: deps }` everywhere; gomod, github-actions, npm (UI), docker (Containerfile) present | yes |
 | `containerfile` | per image: `ARG VERSION` into `-X github.com/trick77/ship/kit/version.Version=${VERSION}`, `-trimpath`, non-root final stage, builder `golang:X.Y` = go.mod's and ≥ ship's Go floor (1.27), builder `node:N` ≥ ship's Node floor (26) | per `image` |
 | `distroless` | final stage on `gcr.io/distroless/` | per `image` |

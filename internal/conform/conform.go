@@ -121,8 +121,10 @@ type env struct {
 	// vis is GitHub's visibility (or the event's); visErr why it is unknown.
 	vis    string
 	visErr error
-	files  []scaffold.File
-	git    map[string]bool
+	// visNote: the lookup failed and ship.yaml's visibility stood in.
+	visNote string
+	files   []scaffold.File
+	git     map[string]bool
 	// kitTags, kitErr: KitTags' answer, asked once.
 	kitTags []string
 	kitErr  error
@@ -134,6 +136,11 @@ func newEnv(root string, c *config.Config, o Options) *env {
 	e := &env{root: root, c: c, o: o.withDefaults()}
 	e.owner, e.repo = origin(root)
 	e.vis, e.visErr = e.visibility()
+	// Offline or rate-limited: the declared visibility stands, the next successful lookup still checks it.
+	if e.visErr != nil && c.Visibility != "" {
+		e.visNote = fmt.Sprintf("GitHub lookup failed (%v); ship.yaml's visibility: %s used", e.visErr, c.Visibility)
+		e.vis, e.visErr = c.Visibility, nil
+	}
 	e.render()
 	return e
 }
