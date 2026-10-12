@@ -64,12 +64,16 @@ type UI struct {
 	// Build runs first in check, so the Go packages embed a fresh dist, never a stale one. The family's
 	// `npm run build` is `tsc -b && vite build`: the typecheck.
 	Build string `yaml:"build"`
-	// Lint is the UI's lint/format check (eslint, prettier --check), run after the Go lint; empty = none.
+	// Lint is the UI's lint/format check (eslint, prettier --check), run after the Go lint; default npm run lint,
+	// an explicit "" = none.
 	Lint string `yaml:"lint"`
 	// Test runs the UI tests with coverage and must write Lcov.
 	Test string `yaml:"test"`
 	// Lcov is the lcov report path relative to the repo root. Its SF: paths are relative to Dir.
 	Lcov string `yaml:"lcov"`
+	// Embed is the repo-relative dir the Go side embeds the build into (go:embed): emptied but for .gitkeep before
+	// the build, so no file of an older build ships.
+	Embed string `yaml:"embed"`
 }
 
 // Step is one extra check command, run with sh -c.
@@ -118,7 +122,7 @@ func Parse(b []byte) (*Config, error) {
 	// `ui:` (null) decodes to nil and is put back: naming the key means a UI, never a silently skipped gate.
 	// Two passes, not a UnmarshalYAML method: node.Decode would drop KnownFields inside the ui: block.
 	uiDefaults := func() *UI {
-		return &UI{Dir: "ui", Floor: 75, Build: "npm ci && npm run build", Test: uiTest}
+		return &UI{Dir: "ui", Floor: 75, Build: "npm ci && npm run build", Lint: "npm run lint", Test: uiTest}
 	}
 	var keys map[string]any
 	_ = yaml.Unmarshal(b, &keys) // malformed input fails the strict decode below
@@ -165,6 +169,9 @@ func (c *Config) validate() error {
 	}
 	if c.UI != nil && (c.UI.Floor < 0 || c.UI.Floor > 100) {
 		return fmt.Errorf("%s: ui.floor %v out of 0-100", File, c.UI.Floor)
+	}
+	if c.UI != nil && c.UI.Embed != "" && !inRepo(c.UI.Embed) {
+		return fmt.Errorf("%s: ui.embed: %q is not a directory inside the repo", File, c.UI.Embed)
 	}
 	for i, s := range c.Steps {
 		if s.Name == "" || s.Run == "" {

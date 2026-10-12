@@ -28,7 +28,7 @@ func TestParse_whenUIAndImages_thenTheirDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if c.UI.Dir != "ui" || c.UI.Floor != 75 || c.UI.Lcov != filepath.Join("ui", "coverage", "lcov.info") ||
-		!strings.Contains(c.UI.Build, "npm ci") || !strings.Contains(c.UI.Test, "--coverage") {
+		!strings.Contains(c.UI.Build, "npm ci") || c.UI.Lint != "npm run lint" || c.UI.Embed != "" || !strings.Contains(c.UI.Test, "--coverage") {
 		t.Fatalf("ui: %+v", c.UI)
 	}
 	im := c.Images[0]
@@ -81,7 +81,9 @@ func TestParse_whenUnknownKeyOrBadValue_thenError(t *testing.T) {
 		"ui: [\n",               // malformed
 		"shell: [/etc/x.sh]\n",  // outside the repo
 		"shell: [../x.sh]\n",    // outside the repo
-		"shell: [\".\"]\n",      // the root itself
+		"ui:\n  embed: .\n",
+		"ui:\n  embed: ../x\n",
+		"shell: [\".\"]\n", // the root itself
 	} {
 		if _, err := Parse([]byte(in)); err == nil {
 			t.Errorf("%q: no error", in)
@@ -103,5 +105,15 @@ func TestLoad_whenPresent_thenParsed(t *testing.T) {
 	c, err := Load(dir)
 	if err != nil || c.Patch != 80 {
 		t.Fatalf("c=%+v err=%v", c, err)
+	}
+}
+
+func TestParse_whenUILintEmpty_thenNone(t *testing.T) {
+	c, err := Parse([]byte("ui:\n  lint: \"\"\n  embed: backend/web/dist\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.UI.Lint != "" || c.UI.Embed != "backend/web/dist" {
+		t.Fatalf("ui: %+v", c.UI)
 	}
 }
