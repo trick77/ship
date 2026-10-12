@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/trick77/ship/internal/pins"
 )
 
 func TestParse_whenEmpty_thenFamilyDefaults(t *testing.T) {
@@ -12,7 +14,7 @@ func TestParse_whenEmpty_thenFamilyDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Base != "master" || c.Lint != "v2.14.0" || c.Patch != 75 || c.Go.Dir != "." || c.Go.Floor != 75 {
+	if c.Base != "master" || c.Lint != pins.Golangci || c.Patch != 75 || c.Go.Dir != "." || c.Go.Floor != 75 {
 		t.Fatalf("defaults: %+v", c)
 	}
 	if !c.Go.RaceOn() || len(c.Go.Exclude) != 1 || c.Go.Exclude[0] != "cmd/" || c.UI != nil {
@@ -25,8 +27,8 @@ func TestParse_whenUIAndImages_thenTheirDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.UI.Dir != "ui" || c.UI.Floor != 75 || c.UI.Lcov != filepath.Join("ui", "coverage", "lcov.info") ||
-		!strings.Contains(c.UI.Build, "npm ci") || !strings.Contains(c.UI.Test, "--coverage") {
+	if c.UI.Dir != "ui" || c.UI.Floor != 75 || c.UI.Lcov != filepath.Join("coverage", "ui", "lcov.info") ||
+		!strings.Contains(c.UI.Build, "npm ci") || c.UI.Lint != "npm run lint" || c.UI.Embed != "" || !strings.Contains(c.UI.Test, "--coverage") {
 		t.Fatalf("ui: %+v", c.UI)
 	}
 	im := c.Images[0]
@@ -53,7 +55,7 @@ func TestParse_whenExplicitZero_thenZeroNotDefault(t *testing.T) {
 	if c.Patch != 0 || c.Go.Floor != 0 || c.UI.Floor != 0 {
 		t.Fatalf("explicit 0 replaced: patch %v go %v ui %v", c.Patch, c.Go.Floor, c.UI.Floor)
 	}
-	if c.Go.Dir != "." || c.UI.Build == "" || c.UI.Lcov != filepath.Join("web", "coverage", "lcov.info") {
+	if c.Go.Dir != "." || c.UI.Build == "" || c.UI.Lcov != filepath.Join("coverage", "ui", "lcov.info") {
 		t.Fatalf("defaults beside the zeros lost: %+v %+v", c.Go, c.UI)
 	}
 }
@@ -77,6 +79,17 @@ func TestParse_whenUnknownKeyOrBadValue_thenError(t *testing.T) {
 		"go: [1, 2]\n",          // wrong type
 		"ui:\n  flor: 80\n",     // typo inside the ui block
 		"ui: [\n",               // malformed
+		"shell: [/etc/x.sh]\n",  // outside the repo
+		"shell: [../x.sh]\n",    // outside the repo
+		"postgres: latest\n",
+		"postgres: 17-alpine\n",
+		"ui:\n  embed: .\n",
+		"ui:\n  embed: ../x\n",
+		"shell: [\".\"]\n", // the root itself
+		"go:\n  modules: [../x]\n",
+		"go:\n  modules: [.]\n", // go.dir itself
+		"go:\n  dir: backend\n  modules: [backend/]\n", // go.dir itself
+		"go:\n  modules: [kit, ./kit]\n",               // twice
 	} {
 		if _, err := Parse([]byte(in)); err == nil {
 			t.Errorf("%q: no error", in)
@@ -98,5 +111,31 @@ func TestLoad_whenPresent_thenParsed(t *testing.T) {
 	c, err := Load(dir)
 	if err != nil || c.Patch != 80 {
 		t.Fatalf("c=%+v err=%v", c, err)
+	}
+}
+
+func TestParse_whenUILintEmpty_thenNone(t *testing.T) {
+	c, err := Parse([]byte("ui:\n  lint: \"\"\n  embed: backend/web/dist\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.UI.Lint != "" || c.UI.Embed != "backend/web/dist" {
+		t.Fatalf("ui: %+v", c.UI)
+	}
+}
+
+func TestParse_whenModules_thenListed(t *testing.T) {
+	c, err := Parse([]byte("go:\n  modules: [kit, kit/auth]\n"))
+	if err != nil || len(c.Go.Modules) != 2 || c.Go.Modules[1] != "kit/auth" {
+		t.Fatalf("%+v %v", c, err)
+	}
+}
+
+func TestParse_whenPostgresUnquoted_thenString(t *testing.T) {
+	for in, want := range map[string]string{"postgres: 17\n": "17", "postgres: \"17.6\"\n": "17.6", "": ""} {
+		c, err := Parse([]byte(in))
+		if err != nil || c.Postgres != want {
+			t.Errorf("%q: %q %v", in, c.Postgres, err)
+		}
 	}
 }

@@ -1,3 +1,25 @@
 # ship's own gate: the family defaults (75% floor, 75% patch). ship runs itself with go run . (it is not a go
 # tool of itself).
 tag_prefix: v
+visibility: public
+go:
+  modules: [kit, kit/auth]
+# ship is where the canon lives, not a consumer of it.
+allow:
+  - rule: scaffold
+    path: .github/workflows/ci.yaml
+    why: ship's CI runs on every push, gates with go run ., tests on macOS and releases master
+  - rule: scaffold
+    path: .github/workflows/release.yaml
+    why: release.yaml here is the reusable workflow consumers call, not a caller
+  - rule: scaffold
+    path: .github/dependabot.yaml
+    why: ship's dependabot also bumps the testdata/ui fixture
+  - rule: workflows
+    why: ship calls its reusable workflows by path, at the commit under test; cleanup-images.yaml is the retention policy itself
+  - rule: handrolled
+    path: internal/check/postgres.go
+    why: check removes its test container on ctrl-c, a CLI's cleanup, not a service's shutdown
+  - rule: gomod
+    path: go.mod
+    why: go 1.24 is ship's floor for every consumer's go run, not a toolchain pin

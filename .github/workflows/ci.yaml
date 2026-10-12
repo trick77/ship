@@ -47,12 +47,18 @@ jobs:
 
   # A merge is already live for every consumer (they run master's sha): tag it, with notes, once both gates pass.
   # auto: patch, or a `Release: minor|major` + `Release-note:` line in a commit; docs/tests only → no release.
+  # Each module on its own (tags v…, kit/v…, kit/auth/v…), only its own changes count; one not merged yet skips.
   release:
     needs: [check, test-macos]
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    strategy:
+      fail-fast: false
+      matrix:
+        dir: ["", kit, kit/auth]
     uses: ./.github/workflows/release.yaml
     with:
       bump: auto
+      dir: ${{ matrix.dir }}
       ship: go run .
     permissions:
       contents: write

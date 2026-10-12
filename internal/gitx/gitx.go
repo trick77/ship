@@ -121,9 +121,10 @@ func SkipMarker(root, base, marker string) (bool, error) {
 // Commit is one commit's short hash, author name and subject.
 type Commit struct{ Hash, Author, Subject string }
 
-// Commits lists the non-merge commits of rev (a range like base..HEAD), newest first.
-func Commits(root, rev string) ([]Commit, error) {
-	out, err := Git(root, "log", "--no-merges", "--format=%h%x1f%an%x1f%s", rev)
+// Commits lists the non-merge commits of rev (a range like base..HEAD), newest first; with paths (pathspecs), only
+// those touching them.
+func Commits(root, rev string, paths ...string) ([]Commit, error) {
+	out, err := Git(root, limit([]string{"log", "--no-merges", "--format=%h%x1f%an%x1f%s", rev}, paths)...)
 	if err != nil || out == "" {
 		return nil, err
 	}
@@ -137,9 +138,18 @@ func Commits(root, rev string) ([]Commit, error) {
 	return cs, nil
 }
 
-// Messages lists the full commit messages of rev (a range like base..HEAD), oldest first, merges included.
-func Messages(root, rev string) ([]string, error) {
-	return GitZ(root, "log", "--reverse", "--format=%B%x00", rev)
+// Messages lists the full commit messages of rev (a range like base..HEAD), oldest first, merges included; with
+// paths (pathspecs), only those touching them.
+func Messages(root, rev string, paths ...string) ([]string, error) {
+	return GitZ(root, limit([]string{"log", "--reverse", "--format=%B%x00", rev}, paths)...)
+}
+
+// limit appends paths as pathspecs after --, none when empty.
+func limit(args, paths []string) []string {
+	if len(paths) == 0 {
+		return args
+	}
+	return append(append(args, "--"), paths...)
 }
 
 // Changed returns the lines the working tree adds or changes against base, per repo-relative path: committed,

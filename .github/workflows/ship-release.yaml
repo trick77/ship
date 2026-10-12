@@ -1,7 +1,7 @@
 name: Ship release
 
-# By hand: tags ship itself (v-prefixed, a Go module). CI cuts it on every master push (bump auto); this is the
-# fallback when that run failed, or to force a size.
+# By hand: tags ship itself (v-prefixed, a Go module) or a nested module (kit/v…, kit/auth/v…). CI cuts them on
+# every master push (bump auto); this is the fallback when that run failed, or to force a size.
 on:
   workflow_dispatch:
     inputs:
@@ -9,12 +9,18 @@ on:
         type: choice
         options: [patch, minor, major, auto]
         default: patch
+      dir:
+        description: The module, ship itself or a nested one.
+        type: choice
+        options: [ship, kit, kit/auth]
+        default: ship
 
 jobs:
   release:
     uses: ./.github/workflows/release.yaml
     with:
       bump: ${{ inputs.bump }}
+      dir: ${{ inputs.dir != 'ship' && inputs.dir || '' }}
       ship: go run .
     permissions:
       contents: write

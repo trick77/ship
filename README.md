@@ -28,6 +28,8 @@ ship check   # the gate by hand
 ```yaml
 base: master          # patch gate diffs against origin/<base>; release requires HEAD = origin/<base>
 lint: v2.14.0         # golangci-lint, built by go run; leave unset: ship's version, the same everywhere
+postgres: "17"        # go test gets postgres:17-alpine, its DSN in SHIP_TEST_DSN; omit for none
+shell: [hooks/pre-commit]   # shellcheck these too (*.sh and sh/bash shebangs are found by themselves)
 patch: 75             # min coverage of changed lines, %
 tag_prefix: ""        # "v" for a Go module
 go:
@@ -36,22 +38,33 @@ go:
   race: true
   coverpkg: ./internal/...
   exclude: [cmd/]     # not counted by either coverage gate
+  modules: [kit, kit/auth]   # nested modules (own go.mod), gated like go.dir; see below
 ui:                   # omit for no UI
   dir: ui
   floor: 75
   build: npm ci && npm run build      # tsc -b && vite build: the typecheck
-  lint: npm run lint                  # eslint / prettier --check; empty = none
+  lint: npm run lint                  # the default: eslint / prettier --check; "" = none
   test: npm run test -- --coverage --coverage.reporter=lcov --coverage.reporter=text-summary  # must write lcov
-  lcov: ui/coverage/lcov.info         # repo-relative; SF: paths relative to ui.dir
+  lcov: coverage/ui/lcov.info         # repo-relative, vite reportsDirectory "../coverage/ui"; SF: paths relative to ui.dir
+  embed: backend/web/dist             # go:embed dir, emptied but for .gitkeep before ui.build; omit for none
 steps:                # repo-specific checks, run after lint
   - { name: openapi lint, run: npx spectral lint api.yaml }
 images:               # release builds these; none = tag + GitHub release only
   - { suffix: "", target: "", containerfile: Containerfile, platforms: [linux/amd64] }
+visibility: private   # conform checks it against GitHub's; unset = GitHub's
+allow:                # conform exceptions, why required (see Conform)
+  - { rule: distroless, image: -agent, why: smartctl needs root }
 ```
 
 A platform other than amd64 builds under QEMU on the amd64 runner: every `RUN` in its stages is emulated, several
 times slower, inside the release job's 30 minutes. Cross-compile Go on the build platform
 (`FROM --platform=$BUILDPLATFORM golang…`, `GOOS=$TARGETOS GOARCH=$TARGETARCH`) so only the runtime stage is emulated.
+
+`go.modules`: every nested Go module (a go.mod below the repo other than go.dir's, outside `testdata/` and
+`vendor/`) is listed, or check fails: `go ./...` stops at a nested go.mod, so nothing else would build, lint or test
+it. Each listed module gets go.dir's gates (mod verify, tidy, build, govulncheck, golangci-lint, go test with
+`go.race`), its own floor at `go.floor` (a module is released and imported on its own: the root's lines never carry
+it), and its changed lines in the patch gate; `go.exclude` applies, `go.coverpkg` is go.dir's alone.
 
 The Go coverage report lives in the git dir (`.git/ship/`), never in the tree. Gitignore the UI test runner's
 coverage output.
@@ -60,10 +73,24 @@ coverage output.
 
 | | |
 |---|---|
-| `ship check` | fetch, commit subjects, ui build, gofmt, go mod verify, build, golangci-lint (incl. govet), ui lint, steps, go test (-race, coverage), ui test, floors, patch gate |
+| `ship check` | conform, fetch, commit subjects, secret scan, ui embed, ui build, go modules, gofmt, go mod verify, go mod tidy, build, govulncheck, golangci-lint (incl. govet), ui lint, shellcheck, steps, postgres, go test (-race, coverage), ui test, floors, patch gate |
+| `ship conform [-fix]` / `ship init [-diff]` | the repo against ship's canon / write the files ship owns (see Conform) |
 | `ship lint` | golangci-lint alone, at the version `ship check` runs: a Makefile's quick lint, no version of its own |
 | `ship hooks` | install the pre-push hook (respects core.hooksPath, never overwrites a foreign hook) |
-| `ship release [patch\|minor\|major\|auto] [-cache gha] [-dry-run]` | next version from tags, notes from the subjects since the last tag (grouped by area), images pushed (version + sha), tag (API), GitHub release, then :MAJOR.MINOR, :MAJOR, :latest. No `images:` and no `ui:`: `go build ./...` before the tag (in `-dry-run` too). With `images:` only on a GitHub-hosted runner (the Release workflow); elsewhere `-dry-run` only. The Release workflow inherits the caller's permissions: `packages: write` only with `images:` |
+| `ship release [patch\|minor\|major\|auto] [-cache gha] [-dry-run] [-dir <module>]` | next version from tags, notes from the subjects since the last tag (grouped by area), tag (API), images pushed (version + sha), scanned and signed, GitHub release, then :MAJOR.MINOR, :MAJOR, :latest. No `images:` and no `ui:`: `go build ./...` before the tag (in `-dry-run` too). With `images:` only on a GitHub-hosted runner (the Release workflow); elsewhere `-dry-run` only. The Release workflow inherits the caller's permissions: `packages: write` and `id-token: write` only with `images:`. `-dir`: a nested Go module, below |
+
+Gates beyond the build and tests, all hard failures:
+
+- golangci-lint: the family config embedded in ship (`internal/check/golangci.yaml`), unless the repo keeps its own
+  `.golangci.{yml,yaml,toml,json}` between `go.dir` and the root.
+- govulncheck (pinned, `go run`): a known vulnerability the module's code reaches.
+- `go mod tidy -diff`: go.mod/go.sum as tidy leaves them.
+- Secret scan: the tree and every line and message the commits not yet on origin/<base> add, for API key shapes
+  (`sk-`, `tp-`, GitHub tokens, AWS key ids) and `.env` files. A fixture line carrying `ship:allow-secret` passes.
+- shellcheck -x on `*.sh`, sh/bash shebang files and `shell:`; needs `shellcheck` on PATH (GitHub's ubuntu runners
+  have it).
+- `postgres:`: `SHIP_TEST_DSN` set already (a server of one's own) is used as is; else check starts the container
+  (docker, loopback, free port), waits for it and removes it after go test, on failure and on Ctrl-C too.
 
 TypeScript/React: `ui.build` is the typecheck (`tsc -b && vite build`), `ui.lint` runs ESLint/Prettier, `ui.test`
 runs vitest with coverage; its lcov feeds the UI floor and the patch gate for changed `.ts`/`.tsx` lines.
@@ -84,6 +111,21 @@ too). The gate checks these lines on the branch: a typo fails the push, never a 
 newer push's run releases both. No previous tag: refused, the first one is cut by hand. ship releases itself this
 way from CI on every master push.
 
+Images: OCI labels (`org.opencontainers.image.version`, `.revision` = HEAD, `.source`, `.created` = HEAD's commit
+time, so a rebuild labels the same), an SBOM and `mode=max` provenance as attestations. After the push, trivy (pinned,
+`internal/pins`) scans each image by digest: a HIGH or CRITICAL with a fix available fails the release and gives the
+tag back (the pushed version + sha tags stay until the rerun overwrites them; the moving ones never move). Then
+cosign signs each digest keyless, with the workflow's OIDC token: the caller grants `id-token: write` along with
+`packages: write`. Verify: `cosign verify --certificate-identity-regexp 'https://github.com/<owner>/<repo>/' --certificate-oidc-issuer https://token.actions.githubusercontent.com ghcr.io/<owner>/<repo>:<version>`.
+
+Nested Go modules (`-dir kit`; the Release workflow's `dir` input): tags `<dir>/vX.Y.Z` (`tag_prefix: v` required),
+`go build` in the dir, notes and `Release:` lines from the commits touching it, `release auto` counts only its
+changes, never those of a module nested below it (kit's release ignores `kit/auth/`); the root's release ignores
+its nested modules too, unless it has `images:` (a build context may copy them). No images, not the repo's
+"Latest" release. No go.mod in the dir: auto skips (CI can list a module before it merges). No previous tag: auto
+cuts 0.1.0, nothing to confuse a nested module's prefix with. ship's CI releases `kit` and `kit/auth` this way;
+`go.modules` gates them in check.
+
 Patch gate: changed lines (committed, staged, unstaged, untracked) against the merge-base with origin/<base>,
 intersected with the coverage reports; comment and blank lines never count. `[skip patch-coverage]` in a commit
 message skips it (floors still apply). A report path that names no file of the repo, exactly spelled, fails the
@@ -101,11 +143,52 @@ Reusable, for running the same commands on GitHub:
 ```yaml
 jobs:
   check:
-    uses: trick77/ship/.github/workflows/check.yaml@master      # inputs: go-dir, node-version, ui-dir
+    uses: trick77/ship/.github/workflows/check.yaml@master      # inputs: go-dir, node-version, ui-dir, postgres
   release:
-    uses: trick77/ship/.github/workflows/release.yaml@master    # inputs: bump, go-dir
+    uses: trick77/ship/.github/workflows/release.yaml@master    # inputs: bump, go-dir, dir
   cleanup:
     uses: trick77/ship/.github/workflows/cleanup-images.yaml@master   # inputs: packages (JSON), keep, dry-run
+```
+
+## Conform
+
+`ship conform` checks the repo against ship's canon, first in every `ship check` (so on every push): every
+divergence the consumer audit found was a copied file that drifted or an adoption step forgotten. Hard fail, no warn
+mode. One line per rule: `ok`, `FAIL <rule>: <what> (<file>)`, `allowed <rule>: <why>`, `skip <rule>: <why>` (a
+library without images or UI skips what does not apply). `ship conform -fix` runs `ship init`, then conforms:
+what is left is by hand.
+
+`ship init` writes the files ship owns, rendered from `ship.yaml` and the repo (origin, visibility, Containerfiles):
+`.github/workflows/ci.yaml`, `release.yaml`, `cleanup-images.yaml` (images), `.github/dependabot.yaml`,
+`<ui.dir>/eslint.config.js`, `tsconfig.node.json` and `.npmrc` (UI), and in `.dockerignore` (images) and `Makefile`
+(apps, or one that exists) only the block between `# ship:begin` and `# ship:end`; the rest of those two is the repo's. Owned means byte-equal.
+The CI caller's `node-version` is the Containerfile's `node:N` builder major (26 without one): Dependabot moves the
+builder, `ship init` moves CI after it.
+`ship init -diff` prints the difference, writes nothing, exits 1 when anything differs.
+
+| rule | what | allowable |
+|---|---|---|
+| `scaffold` | every owned file equals ship's template | per `path` |
+| `workflows` | ci/release/cleanup callers use `trick77/ship/.github/workflows/<x>.yaml@master`; release: `packages: write` ⇔ images, bump options include `auto`; no other image cleanup action | yes |
+| `visibility` | GitHub's visibility (Actions event, else the API unauthenticated, cached a day in the git dir) matches `visibility:`; a failed lookup: `visibility:` stands (a note), unset = FAIL; public: CI on every PR (no `if:`); private: Dependabot-only `if:`, every npm/docker update grouped, ≤ 5 open PRs, cleanup caller with images | yes |
+| `dependabot` | `commit-message: { prefix: deps }` everywhere; gomod, github-actions, npm (UI), docker (Containerfile) present | yes |
+| `containerfile` | per image: `ARG VERSION` into `-X github.com/trick77/ship/kit/version.Version=${VERSION}`, `-trimpath`, non-root final stage, builder `golang:X.Y` = go.mod's and ≥ ship's Go floor (1.27), builder `node:N` ≥ ship's Node floor (26) | per `image` |
+| `distroless` | final stage on `gcr.io/distroless/` | per `image` |
+| `dockerignore` | exists with images; excludes `<ui.dir>/node_modules` and `<ui.dir>/dist` | yes |
+| `ui` | `ui.lint: npm run lint`; scripts exactly `build` = `tsc -b && vite build`, `lint` = `eslint . --max-warnings 0 && npm run format:check`, `format` = `prettier --write 'src/**/*.{ts,tsx,css}' '*.ts'`, `format:check` = `prettier --check …` (same globs), `test` = `vitest run`; devDependencies `typescript`, `prettier`, `eslint`, `typescript-eslint`, `eslint-config-prettier`, `@eslint/js`, `eslint-plugin-react-hooks` present at an exact version (no range; the version is the repo's), typescript below 6.1 (typescript-eslint); eslint.config.js; tsconfig.json references `./tsconfig.node.json`; vite.config.ts: `defineConfig` from `vitest/config`, `globals: true`, `setupFiles: ["./src/test/setup.ts"]`, `reportsDirectory: "../coverage/ui"`; `src/test/setup.ts`'s first statement `import "@testing-library/jest-dom/vitest";` | yes |
+| `golangci` | no `.golangci.yaml`/`.yml` in the repo: ship's config is the family's | per `path` |
+| `gomod` | `go x.y.z` ≥ 1.27.0 in go.dir and every go.modules module; a required `github.com/trick77/ship/kit` is the newest `kit/v*` tag | yes |
+| `kit` | a repo with images requires kit | yes |
+| `handrolled` | no `internal/version` package, health route strings, `signal.Notify`/`NotifyContext` outside tests: kit has them | per `path` |
+| `agents` | AGENTS.md has the commit-subject line | yes |
+
+An exception lives in `ship.yaml`, its why required (an entry without one fails the parse):
+
+```yaml
+visibility: private   # optional: checked against GitHub's
+allow:
+  - { rule: distroless, image: -agent, why: smartctl's passthrough ioctls need root and busybox }
+  - { rule: scaffold, path: ui/eslint.config.js, why: the thin-space number rule }
 ```
 
 ## Adopting ship
@@ -113,14 +196,10 @@ jobs:
 A repo moving to ship, in one PR (its own subject already Go style: the new gate checks it):
 
 1. `ship.yaml` at the root: only the keys that differ from the defaults above.
-2. `ship hooks` in every clone; drop the repo's own gate scripts and hooks.
-3. `.github/workflows/ci.yaml` and `release.yaml` calling the reusable ones: copy the caller from the head comment
-   of `check.yaml` / `release.yaml`. `release.yaml`: `workflow_dispatch` only. `ci.yaml`: `pull_request` +
-   `workflow_dispatch`, since Dependabot and fork PRs never pass the hook. Public repo: every PR, forks included
-   (read-only token, no secrets). Private repo: Dependabot PRs only (the caller's `if:`), Actions minutes are billed
-   and own pushes are gated by the hook already.
-4. `ship check` green locally, then push: the hook runs it.
-5. AGENTS.md, verbatim with the repo's own areas:
+2. `ship init`: the workflow callers, dependabot, `.dockerignore` and `Makefile` blocks, the UI's ESLint config,
+   tsconfig.node.json and .npmrc. Drop the repo's own gate scripts and hooks.
+3. `ship conform`: what init cannot write (Containerfile, package.json scripts and devDependencies, vite config, kit, AGENTS.md)
+   by hand, or an `allow` entry with its why. AGENTS.md, verbatim with the repo's own areas:
    ``- Commit subjects + PR titles: Go style `area: what` (`<area>: …`, `<area>: …`), gated by ship; release notes list them by area.``
-6. `.github/dependabot.yaml`: `commit-message: { prefix: deps }` on every ecosystem (`deps: bump …`). The gate
-   skips bots either way; the prefix keeps them out of "other" in the release notes.
+4. `ship hooks` in every clone.
+5. `ship check` green locally, then push: the hook runs it.

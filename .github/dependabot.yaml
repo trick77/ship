@@ -10,6 +10,27 @@ updates:
         patterns: ["*"]
         update-types: ["minor", "patch"]
 
+  # The nested modules (ship.yaml go.modules), each its own go.mod.
+  - package-ecosystem: gomod
+    directory: /kit
+    commit-message: { prefix: deps }   # Go style: "deps: bump …"
+    schedule:
+      interval: weekly
+    groups:
+      go-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: gomod
+    directory: /kit/auth
+    commit-message: { prefix: deps }   # Go style: "deps: bump …"
+    schedule:
+      interval: weekly
+    groups:
+      go-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
   - package-ecosystem: github-actions
     directory: /
     commit-message: { prefix: deps }   # Go style: "deps: bump …"

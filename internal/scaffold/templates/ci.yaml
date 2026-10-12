@@ -1,0 +1,39 @@
+name: CI
+
+[[ if .Private -]]
+# Dependabot PRs only (Actions minutes): own pushes are gated by the pre-push hook, a bot PR has none.
+# By hand: gh workflow run CI --ref <branch>
+[[ else -]]
+# Every pull request, fork PRs included (read-only token, no secrets): Dependabot and outside contributors have no
+# pre-push hook. Own pushes are gated by the hook already. By hand: gh workflow run CI --ref <branch>
+[[ end -]]
+on:
+  pull_request:
+    branches: [[ .Branches ]]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+[[- if .Private ]]
+    if: [[ .DependabotOnly ]]
+[[- end ]]
+    uses: trick77/ship/.github/workflows/check.yaml@master
+[[- if or .GoDirSet .UI ]]
+    with:
+[[- if .GoDirSet ]]
+      go-dir: [[ .GoDir ]]
+[[- end ]]
+[[- if .UI ]]
+      node-version: "[[ .NodeVersion ]]"
+[[- if .UIDirSet ]]
+      ui-dir: [[ .UIDir ]]
+[[- end ]]
+[[- end ]]
+[[- end ]]

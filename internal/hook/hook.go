@@ -55,8 +55,10 @@ fi
 if [ -n "$SHIP_CMD" ]; then
 	printf '%s\n' "$refs" | $SHIP_CMD pre-push "$@"
 else
-	sha="$(git ls-remote https://github.com/trick77/ship refs/heads/master | cut -f1)"
-	[ -n "$sha" ] || { echo "pre-push: cannot resolve ship's master on GitHub (git ls-remote, error above)"; exit 1; }
+	# Exactly refs/heads/master (ls-remote matches by suffix), a 40-hex sha or nothing runs, as in the workflows.
+	sha="$(git ls-remote https://github.com/trick77/ship refs/heads/master | awk '$2 == "refs/heads/master" { print $1 }')"
+	printf '%s\n' "$sha" | grep -Eqx '[0-9a-f]{40}' ||
+		{ echo "pre-push: cannot resolve ship's master on GitHub: '$sha' (git ls-remote, error above)"; exit 1; }
 	printf '%s\n' "$refs" | go run "github.com/trick77/ship@$sha" pre-push "$@"
 fi
 `

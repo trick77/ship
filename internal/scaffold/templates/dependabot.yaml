@@ -1,0 +1,85 @@
+[[- define "head" ]]
+    commit-message: { prefix: deps }   # Go style: "deps: bump …"
+    schedule:
+      interval: weekly
+      day: sunday
+      time: "07:00"
+      timezone: Europe/Zurich
+    open-pull-requests-limit: 5
+[[- end ]]
+[[- define "split" ]]
+      [[ . ]]-non-major:
+        patterns:
+          - "*"
+        update-types:
+          - patch
+          - minor
+      [[ . ]]-major:
+        patterns:
+          - "*"
+        update-types:
+          - major
+[[- end -]]
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: [[ .GoDirAbs ]]
+[[- template "head" ]]
+    groups:
+[[- template "split" "gomod" ]]
+[[- range .GoModules ]]
+
+  # Nested Go module (ship.yaml go.modules), its own go.mod.
+  - package-ecosystem: gomod
+    directory: [[ . ]]
+[[- template "head" ]]
+    groups:
+[[- template "split" "gomod" ]]
+[[- end ]]
+[[- if .UI ]]
+
+  - package-ecosystem: npm
+    directory: [[ .UIDirAbs ]]
+[[- template "head" ]]
+    groups:
+      # First matching group wins, so the specific groups come first and the
+      # catch-alls stay last. vite, its react plugin, vitest and its coverage
+      # provider are one dependency family: vitest pins a vite major range and
+      # @vitest/coverage-v8 pins vitest's exact version, so bumping any one
+      # alone fails npm ci on ERESOLVE (or nests a second vite). They always
+      # travel together. @tailwindcss/vite peer-depends on vite's major too.
+      vite-and-vitest:
+        patterns: ["vite", "@vitejs/*", "vitest", "@vitest/*", "@tailwindcss/vite"]
+      # Pinned exact; a release may format differently and fail the gate's
+      # format:check, so it never blocks the other bumps: its own PR,
+      # reformatted there.
+      prettier:
+        patterns: ["prettier"]
+      # A new rule or recommended-set change can fail the gate's lint: its own
+      # PR, findings fixed there. typescript-eslint, @eslint/js and the
+      # eslint-config-*/eslint-plugin-* packages track eslint's major.
+      eslint:
+        patterns: ["eslint", "eslint-*", "typescript-eslint", "@eslint/*"]
+[[- template "split" "npm" ]]
+    ignore:
+      # typescript-eslint's peer dependency takes typescript <6.1.0: any newer
+      # one, minor included, fails npm ci on ERESOLVE. Lift this (and
+      # conform's typescriptCap) once typescript-eslint supports newer TS.
+      - dependency-name: "typescript"
+        versions: [">=6.1.0"]
+[[- end ]]
+[[- range .DockerDirs ]]
+
+  # Base images in the Containerfile.
+  - package-ecosystem: docker
+    directory: [[ . ]]
+[[- template "head" ]]
+    groups:
+[[- template "split" "docker" ]]
+[[- end ]]
+
+  - package-ecosystem: github-actions
+    directory: /
+[[- template "head" ]]
+    groups:
+[[- template "split" "actions" ]]
