@@ -13,7 +13,12 @@ to master only what is releasable is the only guard). A proxy may lag on `@maste
 as the hook does, and run that.
 
 ```sh
-ship() { go run "github.com/trick77/ship@$(git ls-remote https://github.com/trick77/ship refs/heads/master | cut -f1)" "$@"; }
+ship() {
+  local sha
+  sha="$(git ls-remote https://github.com/trick77/ship refs/heads/master | cut -f1)"
+  [ -n "$sha" ] || { echo "ship: cannot resolve ship's master on GitHub (git ls-remote, error above)" >&2; return 1; }
+  go run "github.com/trick77/ship@$sha" "$@"
+}
 ship hooks   # once per clone: the pre-push hook (runs master's ship on every push)
 ship check   # the gate by hand
 ```
