@@ -50,6 +50,10 @@ jobs:
           if [ -f ship.yaml ] && grep -q '^images:' ship.yaml; then
             echo "images=true" >> "$GITHUB_OUTPUT"
           fi
+      # Emulation for non-amd64 platforms (images.platforms, e.g. linux/arm64): a RUN step in a foreign-arch stage
+      # cannot execute on the amd64 runner without it. Before buildx, so its builder sees the binfmt handlers.
+      - if: steps.shape.outputs.images == 'true'
+        uses: docker/setup-qemu-action@v4
       - if: steps.shape.outputs.images == 'true'
         uses: docker/setup-buildx-action@v4
       - if: steps.shape.outputs.images == 'true'

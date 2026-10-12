@@ -44,6 +44,10 @@ images:               # release builds these; none = tag + GitHub release only
   - { suffix: "", target: "", containerfile: Containerfile, platforms: [linux/amd64] }
 ```
 
+A platform other than amd64 builds under QEMU on the amd64 runner: every `RUN` in its stages is emulated, several
+times slower, inside the release job's 30 minutes. Cross-compile Go on the build platform
+(`FROM --platform=$BUILDPLATFORM golang…`, `GOOS=$TARGETOS GOARCH=$TARGETARCH`) so only the runtime stage is emulated.
+
 The Go coverage report lives in the git dir (`.git/ship/`), never in the tree. Gitignore the UI test runner's
 coverage output.
 
