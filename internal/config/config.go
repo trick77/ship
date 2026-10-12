@@ -37,7 +37,8 @@ type Config struct {
 	// Steps are repo-specific checks (openapi lint, shell tests, e2e), run after lint, before the tests.
 	Steps []Step `yaml:"steps"`
 	// Postgres is the container check starts for go test, its DSN in SHIP_TEST_DSN: a version ("17", "17.6") for
-	// postgres:<v>-alpine, or a whole image ref for a postgres with extensions (timescale/timescaledb:2.29.1-pg17);
+	// postgres:<v>-alpine, a whole image ref for a postgres with extensions (timescale/timescaledb:2.29.1-pg17), or
+	// compose:<service> for that root compose service's image (Dependabot bumps it there: one pin, no drift);
 	// empty = none.
 	Postgres string `yaml:"postgres"`
 	// Shell lists repo-relative shell scripts for shellcheck beyond the ones found by name (*.sh) or shebang.
@@ -193,9 +194,10 @@ func (c *Config) validate() error {
 			return fmt.Errorf("%s: steps[%d] needs name and run", File, i)
 		}
 	}
-	if c.Postgres != "" && !pgVersion.MatchString(c.Postgres) && !pgImage.MatchString(c.Postgres) {
-		return fmt.Errorf("%s: postgres: %q, want a version like \"17\" or an image like \"timescale/timescaledb:2.29.1-pg17\"",
-			File, c.Postgres)
+	if c.Postgres != "" && !pgVersion.MatchString(c.Postgres) && !pgImage.MatchString(c.Postgres) &&
+		!pgCompose.MatchString(c.Postgres) {
+		return fmt.Errorf("%s: postgres: %q, want a version like \"17\", an image like "+
+			"\"timescale/timescaledb:2.29.1-pg17\" or a compose service like \"compose:db\"", File, c.Postgres)
 	}
 	seen := map[string]bool{path.Clean(filepath.ToSlash(c.Go.Dir)): true}
 	for _, m := range c.Go.Modules {
@@ -217,9 +219,20 @@ var (
 	pgVersion = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?$`)
 	// pgImage is a tagged or digest-pinned image ref: an untagged one would be :latest, a moving target.
 	pgImage = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]*(:[A-Za-z0-9._-]+(@sha256:[0-9a-f]{64})?|@sha256:[0-9a-f]{64})$`)
+	// pgCompose names a compose service, spelled as compose allows.
+	pgCompose = regexp.MustCompile(`^compose:[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
 )
 
+// PostgresCompose returns the service a postgres: compose:<service> names; ok false for any other form.
+func (c *Config) PostgresCompose() (service string, ok bool) {
+	if !pgCompose.MatchString(c.Postgres) {
+		return "", false
+	}
+	return strings.TrimPrefix(c.Postgres, "compose:"), true
+}
+
 // PostgresImage is the image check starts for go test: postgres:<v>-alpine for a version, else the ref as written.
+// compose:<service> is resolved against the repo (internal/compose), not here.
 func (c *Config) PostgresImage() string {
 	if pgVersion.MatchString(c.Postgres) {
 		return "postgres:" + c.Postgres + "-alpine"

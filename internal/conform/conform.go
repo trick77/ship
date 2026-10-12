@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/trick77/ship/internal/compose"
 	"github.com/trick77/ship/internal/config"
 	"github.com/trick77/ship/internal/gitx"
 	"github.com/trick77/ship/internal/scaffold"
@@ -39,6 +40,7 @@ const (
 	Kit           = "kit"
 	Handrolled    = "handrolled"
 	Agents        = "agents"
+	Postgres      = "postgres"
 )
 
 // Options are conform's outside world, injectable for tests. Zero values are the real one.
@@ -109,6 +111,7 @@ func rules() []rule {
 		{Kit, (*env).kit},
 		{Handrolled, (*env).handrolled},
 		{Agents, (*env).agents},
+		{Postgres, (*env).postgres},
 	}
 }
 
@@ -324,20 +327,12 @@ func (e *env) dockerDirs() []string {
 	return dirs
 }
 
-var (
-	// composeFile: the names Dependabot's docker-compose ecosystem reads at a directory (compose.yaml,
-	// compose.dev.yaml, docker-compose.override.yml).
-	composeFile = regexp.MustCompile(`^(?:docker-)?compose(?:[.-][\w.-]+)?\.ya?ml$`)
-	composeImg  = regexp.MustCompile(`(?m)^\s*image:\s*["']?([^\s"'#]+)`)
-)
+var composeImg = regexp.MustCompile(`(?m)^\s*image:\s*["']?([^\s"'#]+)`)
 
 // composePins: a compose file at the root (tracked or untracked, not ignored) names an image by a version tag or a
 // digest. An untagged, ${VAR} or digit-free tag (latest, alpine, stable, lts) is not one Dependabot could bump.
 func (e *env) composePins() bool {
-	for f := range e.listed() {
-		if strings.Contains(f, "/") || !composeFile.MatchString(f) {
-			continue
-		}
+	for _, f := range compose.Files(e.listed()) {
 		b, err := e.read(f)
 		if err != nil {
 			continue

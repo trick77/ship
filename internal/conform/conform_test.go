@@ -34,7 +34,7 @@ RUN CGO_ENABLED=0 go build -trimpath \
       -ldflags="-s -w -X github.com/trick77/ship/kit/version.Version=${VERSION}" \
       -o /out/app ./cmd/app
 
-FROM gcr.io/distroless/static-debian13 AS core-ui
+FROM gcr.io/distroless/static-debian13:debug-nonroot AS core-ui
 COPY --from=build /out/app /app
 USER 65532:65532
 
@@ -212,7 +212,7 @@ func app(t *testing.T) *repo {
 
 func TestRun_whenAppConforms_thenEveryRuleOK(t *testing.T) {
 	r := app(t)
-	out, err := r.run(appShip)
+	out, err := r.run(appShip + "postgres: \"17\"\n")
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
@@ -281,6 +281,20 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 			r.write("compose.yaml", "services:\n  app:\n    image: ghcr.io/o/app:latest\n")
 			r.write("compose.dev.yaml", "services:\n  d:\n    image: \"ghcr.io/linuxserver/transmission:4.1.3-r0-ls360\"\n")
 		}, []string{"FAIL dependabot: no docker-compose entry for /"}},
+		// netra's drift: the compose pin bumped, ship.yaml's not.
+		{"postgres duplicated", appShip + "postgres: timescale/timescaledb:2.29.0-pg17\n", func(r *repo) {
+			r.write("compose.yaml", "services:\n  db:\n    image: timescale/timescaledb:2.29.1-pg17\n  app:\n    build: .\n")
+		}, []string{"FAIL dependabot: no docker-compose entry for /",
+			"FAIL postgres: duplicates compose service db's image, use compose:db (ship.yaml)"}},
+		{"postgres version duplicated", appShip + "postgres: \"17\"\n", func(r *repo) {
+			r.write("compose.yaml", "services:\n  pg:\n    image: docker.io/library/postgres:17-alpine\n")
+			r.write("compose.override.yaml", "services:\n  pg:\n    image: postgres:17-alpine\n")
+		}, []string{"FAIL dependabot: no docker-compose entry for /",
+			"FAIL postgres: duplicates compose service pg's image, use compose:pg (ship.yaml)"}},
+		{"postgres compose unresolved", appShip + "postgres: compose:db\n", func(*repo) {},
+			[]string{"FAIL postgres: compose:db: no compose file at the repo root (ship.yaml)"}},
+		{"postgres compose broken", appShip + "postgres: \"17\"\n", func(r *repo) { r.write("compose.yaml", "services: [\n") },
+			[]string{"FAIL postgres: compose.yaml: yaml"}},
 		{"dependabot nested module", strings.Replace(appShip, "dir: backend\n", "dir: backend\n  modules: [lib]\n", 1),
 			func(r *repo) { r.write("lib/go.mod", "module example.com/lib\n\ngo 1.27.1\n") },
 			[]string{"FAIL dependabot: no gomod entry for /lib"}},
@@ -303,6 +317,14 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 			`FAIL containerfile: image "-ui": no ARG VERSION`, `FAIL containerfile: image "-ui": go build ldflags lack -X`,
 			`FAIL containerfile: image "-ui": go build without -trimpath`,
 			`FAIL containerfile: image "-ui": builder golang:1.26`}},
+		// Untagged is a floating :latest; scratch, a stage and an ARG's base are not refs to pin.
+		{"containerfile untagged base", appShip, func(r *repo) {
+			r.edit("Containerfile", "static-debian13:debug-nonroot AS core-ui", "static-debian13 AS core-ui")
+			r.edit("Containerfile", "FROM node:26-alpine AS ui", "FROM scratch AS empty\nARG BASE=x\nFROM ${BASE} AS arg\n"+
+				"FROM empty AS again\nFROM node:26-alpine AS ui")
+			r.edit("Containerfile", "COPY --from=ui /ui/dist ./web/dist",
+				"COPY --from=ui /ui/dist ./web/dist\nCOPY --from=arg / /\nCOPY --from=again / /")
+		}, []string{`FAIL containerfile: image "-ui": base gcr.io/distroless/static-debian13 has no tag or digest`}},
 		{"containerfile no build", appShip, func(r *repo) { r.write("Containerfile", "FROM gcr.io/distroless/static:nonroot\n") },
 			[]string{`FAIL containerfile: image "": no RUN go build`, `FAIL containerfile: image "-ui": no stage "core-ui"`}},
 		// A global ARG reaches no stage that does not redeclare it: ${VERSION} would build empty.
@@ -490,10 +512,30 @@ func TestComposePins(t *testing.T) {
 	}
 }
 
+func TestPostgres_whenComposeOrAllowed_thenOK(t *testing.T) {
+	r := app(t)
+	r.write("compose.yaml", "services:\n  db:\n    image: timescale/timescaledb:2.29.1-pg17\n")
+	if err := Init(r.dir, r.config(appShip), r.opts, false); err != nil {
+		t.Fatal(err)
+	}
+	out, err := r.run(appShip + "postgres: compose:db\n")
+	if err != nil || !strings.Contains(out, "ok postgres: timescale/timescaledb:2.29.1-pg17\n") {
+		t.Errorf("%v\n%s", err, out)
+	}
+	out, err = r.run(appShip + "postgres: timescale/timescaledb:2.29.1-pg17\n" +
+		"allow:\n  - { rule: postgres, why: a second server }\n")
+	if err != nil || !strings.Contains(out, "allowed postgres: a second server\n") {
+		t.Errorf("%v\n%s", err, out)
+	}
+	if out, _ := r.run(appShip); !strings.Contains(out, "skip postgres: no postgres\n") {
+		t.Error(out)
+	}
+}
+
 func TestRun_whenAllowed_thenWhyPrinted(t *testing.T) {
 	r := app(t)
 	r.edit("Containerfile", "USER 65532:65532", "USER 0")
-	r.edit("Containerfile", "FROM gcr.io/distroless/static-debian13 AS core-ui", "FROM alpine:3.24 AS core-ui")
+	r.edit("Containerfile", "FROM gcr.io/distroless/static-debian13:debug-nonroot AS core-ui", "FROM alpine:3.24 AS core-ui")
 	r.write("backend/.golangci.yaml", "")
 	r.edit(scaffold.CI, "cancel-in-progress: true", "cancel-in-progress: false")
 	ship := appShip + "allow:\n" +

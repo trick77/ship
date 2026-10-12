@@ -96,8 +96,12 @@ func run(args []string) error {
 		if len(gated) == 0 {
 			return nil
 		}
-		if hook.Stale(root) {
-			fmt.Fprintln(os.Stderr, "ship: this clone's pre-push hook is not this ship's script; rerun `ship hooks` (see README)")
+		// ship runs unpinned, the hook is a copy: bring it up to this ship's script, the next push runs that.
+		if p, ok, err := hook.Refresh(root); err != nil {
+			fmt.Fprintln(os.Stderr, "ship: this clone's pre-push hook is not this ship's script and could not be refreshed:", err)
+		} else if ok {
+			fmt.Fprintf(os.Stderr, "ship: pre-push hook refreshed to this ship's script: %s (previous kept as %s)\n", p,
+				p+hook.Backup)
 		}
 		if err := hook.Ready(root, gated); err != nil {
 			return fmt.Errorf("pre-push: %w", err)

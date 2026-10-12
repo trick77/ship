@@ -113,7 +113,7 @@ func TestRun_whenHooks_thenInstalled(t *testing.T) {
 
 // A hook from ship v0.2.0 in a linked worktree: git sets GIT_DIR alone, the hook cds into backend/ and runs ship
 // pre-push there. ship pins the top itself: the clean tree reads clean (the ship.yaml error is the next step). That
-// old hook is stale: ship warns and still gates.
+// old hook is stale: ship refreshes it and still gates.
 func TestRun_whenOldHookFromModuleSubdirInLinkedWorktree_thenTreeSeenWhole(t *testing.T) {
 	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
@@ -172,5 +172,9 @@ func TestRun_whenOldHookFromModuleSubdirInLinkedWorktree_thenTreeSeenWhole(t *te
 	err = run([]string{"pre-push"})
 	if err == nil || strings.Contains(err.Error(), "uncommitted") || !strings.Contains(err.Error(), "ship.yaml") {
 		t.Fatalf("want the ship.yaml error past a clean tree check, got: %v", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, ".git", "hooks", "pre-push")); err != nil ||
+		string(b) == stale || !strings.Contains(string(b), "Runs the newest ship pre-push") {
+		t.Fatalf("stale hook not refreshed: %q %v", b, err)
 	}
 }

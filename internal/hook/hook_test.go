@@ -1,6 +1,7 @@
 package hook
 
 import (
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -141,6 +142,105 @@ func TestStale(t *testing.T) {
 		if got := Stale(dir); got != want {
 			t.Errorf("%q: stale = %v, want %v", s, got, want)
 		}
+	}
+}
+
+// A stale hook of ship's is rewritten, by rename (a running sh keeps the old file); a current or foreign one is not.
+func TestRefresh(t *testing.T) {
+	t.Setenv("SHIP_CMD", "")
+	dir := repo(t)
+	if _, ok, err := Refresh(dir); ok || err != nil {
+		t.Fatalf("no hook: %v %v", ok, err)
+	}
+	p, err := Install(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := Refresh(dir); ok || err != nil {
+		t.Fatalf("current hook: %v %v", ok, err)
+	}
+	old := "#!/bin/sh\n# " + marker + "\ngo run github.com/trick77/ship@latest pre-push\n"
+	if err := os.WriteFile(p, []byte(old), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	running, err := os.Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = running.Close() }()
+	got, ok, err := Refresh(dir)
+	if !ok || err != nil || got != p || Stale(dir) {
+		t.Fatalf("stale hook: %q %v %v", got, ok, err)
+	}
+	if fi, err := os.Stat(p); err != nil || fi.Mode().Perm() != 0o755 {
+		t.Fatalf("mode: %v %v", fi, err)
+	}
+	if b, err := io.ReadAll(running); err != nil || string(b) != old {
+		t.Fatalf("running hook's file changed under it: %q %v", b, err)
+	}
+	if b, err := os.ReadFile(p + Backup); err != nil || string(b) != old {
+		t.Fatalf("previous hook not kept: %q %v", b, err)
+	}
+	// SHIP_CMD's ship is not master's: a stale hook stays, with an error to warn about.
+	if err := os.WriteFile(p, []byte(old), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SHIP_CMD", "go run .")
+	if _, ok, err := Refresh(dir); ok || err == nil || !strings.Contains(err.Error(), "SHIP_CMD") {
+		t.Fatalf("SHIP_CMD set: %v %v", ok, err)
+	}
+	if b, _ := os.ReadFile(p); string(b) != old {
+		t.Fatalf("hook refreshed under SHIP_CMD: %q", b)
+	}
+	t.Setenv("SHIP_CMD", "")
+	if left, _ := filepath.Glob(filepath.Join(filepath.Dir(p), ".pre-push-*")); len(left) != 0 {
+		t.Fatalf("leftovers: %v", left)
+	}
+	foreign := "#!/bin/sh\necho mine\n"
+	if err := os.WriteFile(p, []byte(foreign), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := Refresh(dir); ok || err != nil {
+		t.Fatalf("foreign hook: %v %v", ok, err)
+	}
+	if b, _ := os.ReadFile(p); string(b) != foreign {
+		t.Fatalf("foreign hook touched: %q", b)
+	}
+}
+
+// A symlinked hook, even to ship's own script, is left alone: replacing it would cut the link.
+func TestRefresh_whenHookSymlinked_thenLeft(t *testing.T) {
+	t.Setenv("SHIP_CMD", "")
+	dir := repo(t)
+	p, err := Install(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(p); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "pre-push")
+	old := "#!/bin/sh\n# " + marker + "\ngo run github.com/trick77/ship@latest pre-push\n"
+	if err := os.WriteFile(target, []byte(old), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, p); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := Refresh(dir); ok || err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("symlinked stale hook: %v %v", ok, err)
+	}
+	if _, err := Install(dir); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("Install over a symlink: %v", err)
+	}
+	if fi, err := os.Lstat(p); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("link replaced: %v %v", fi, err)
+	}
+	if b, _ := os.ReadFile(target); string(b) != old {
+		t.Fatalf("target changed: %q", b)
+	}
+	if _, err := os.Stat(p + Backup); err == nil {
+		t.Fatal("backup written for a hook left alone")
 	}
 }
 

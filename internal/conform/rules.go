@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/trick77/ship/internal/compose"
+	"github.com/trick77/ship/internal/config"
 	"github.com/trick77/ship/internal/gitx"
 	"github.com/trick77/ship/internal/pins"
 	"github.com/trick77/ship/internal/scaffold"
@@ -510,4 +512,57 @@ func (e *env) agents() result {
 			" (…), gated by ship; …`)", file: "AGENTS.md"}}}
 	}
 	return result{}
+}
+
+// postgres: the test DB image is pinned once. compose:<service> must resolve; a literal image (or version) of a
+// repository a root compose service names too is a second pin Dependabot never bumps, drifting from the first.
+func (e *env) postgres() result {
+	if e.c.Postgres == "" {
+		return result{skip: "no postgres"}
+	}
+	files, svcs, err := e.composeServices()
+	if err != nil {
+		return result{findings: []finding{{what: err.Error(), file: config.File}}}
+	}
+	if svc, ok := e.c.PostgresCompose(); ok {
+		img, err := compose.Resolve(svc, files, svcs)
+		if err != nil {
+			return result{findings: []finding{{what: err.Error(), file: config.File}}}
+		}
+		return result{note: img}
+	}
+	want := compose.Repository(e.c.PostgresImage())
+	var fs []finding
+	seen := map[string]bool{}
+	for _, s := range svcs {
+		if lit := s.Literal(); !seen[s.Name] && lit != "" && compose.Repository(lit) == want {
+			seen[s.Name] = true
+			fs = append(fs, finding{what: fmt.Sprintf("duplicates compose service %s's image, use compose:%s",
+				s.Name, s.Name), file: config.File})
+		}
+	}
+	return result{findings: fs}
+}
+
+// composeServices: the root compose files present on disk (e.listed, a tracked file deleted skipped) and their
+// services.
+func (e *env) composeServices() ([]string, []compose.Service, error) {
+	var files []string
+	var all []compose.Service
+	for _, f := range compose.Files(e.listed()) {
+		b, err := e.read(f)
+		if err != nil {
+			return nil, nil, err
+		}
+		if b == nil {
+			continue
+		}
+		svcs, err := compose.Parse(f, b)
+		if err != nil {
+			return nil, nil, err
+		}
+		files = append(files, f)
+		all = append(all, svcs...)
+	}
+	return files, all, nil
 }

@@ -84,6 +84,9 @@ func TestParse_whenUnknownKeyOrBadValue_thenError(t *testing.T) {
 		"postgres: latest\n",
 		"postgres: 17-alpine\n",
 		"postgres: timescale/timescaledb\n", // untagged: :latest, a moving target
+		"postgres: \"compose:\"\n",
+		"postgres: \"compose:${DB}\"\n",
+		"postgres: \"compose:a b\"\n",
 		"ui:\n  embed: .\n",
 		"ui:\n  embed: ../x\n",
 		"shell: [\".\"]\n", // the root itself
@@ -141,6 +144,19 @@ func TestPostgresImage_whenVersionOrRef_thenImage(t *testing.T) {
 		c, err := Parse([]byte(in))
 		if err != nil || c.PostgresImage() != want {
 			t.Errorf("%q: %q %v", in, c.PostgresImage(), err)
+		}
+	}
+}
+
+func TestPostgresCompose_whenComposeForm_thenService(t *testing.T) {
+	for in, want := range map[string]string{"postgres: compose:db\n": "db", "postgres: compose:pg_test.1\n": "pg_test.1",
+		"postgres: 17\n": "", "postgres: timescale/timescaledb:2.29.1-pg17\n": ""} {
+		c, err := Parse([]byte(in))
+		if err != nil {
+			t.Fatalf("%q: %v", in, err)
+		}
+		if svc, ok := c.PostgresCompose(); svc != want || ok != (want != "") {
+			t.Errorf("%q: %q %v", in, svc, ok)
 		}
 	}
 }

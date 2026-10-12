@@ -140,7 +140,7 @@ func TestAccessLog(t *testing.T) {
 	}
 
 	l, hdr := do("/ok?code=secret", "proxy-id.1")
-	if l.Level != "INFO" || l.Msg != "http_request" || l.Path != "/ok" || l.Status != 200 || l.RequestID != "proxy-id.1" {
+	if l.Level != "DEBUG" || l.Msg != "http_request" || l.Path != "/ok" || l.Status != 200 || l.RequestID != "proxy-id.1" {
 		t.Errorf("ok line = %+v", l)
 	}
 	if strings.Contains(logs.String(), "secret") {
@@ -159,10 +159,10 @@ func TestAccessLog(t *testing.T) {
 	if l, _ = do("/boom", ""); l.Level != "ERROR" || l.Status != 500 {
 		t.Errorf("5xx line = %+v", l)
 	}
-	if l, _ = do("/401", ""); l.Level != "INFO" {
+	if l, _ = do("/401", ""); l.Level != "DEBUG" {
 		t.Errorf("401 line = %+v", l)
 	}
-	if l, _ = do("/no-such-page", ""); l.Level != "INFO" || l.Status != 404 {
+	if l, _ = do("/no-such-page", ""); l.Level != "DEBUG" || l.Status != 404 {
 		t.Errorf("404 line = %+v", l)
 	}
 	if l, _ = do("/healthz", ""); l.Msg != "" {
@@ -172,6 +172,38 @@ func TestAccessLog(t *testing.T) {
 		t.Errorf("failing quiet path not logged: %+v", l)
 	}
 	_ = AccessLog(nil, AccessLogOptions{})
+}
+
+// Routine lines sit at debug so LOG_LEVEL=info hides them; RoutineLevel lifts them, failures log either way.
+func TestAccessLogRoutineLevel(t *testing.T) {
+	var logs bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&logs, nil)) // info, the family default
+	h := func(opts AccessLogOptions) http.Handler {
+		return AccessLog(log, opts)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/401":
+				w.WriteHeader(401)
+			case "/404":
+				w.WriteHeader(404)
+			case "/403":
+				w.WriteHeader(403)
+			case "/500":
+				w.WriteHeader(500)
+			}
+		}))
+	}
+	for path, want := range map[string]string{"/": "", "/401": "", "/404": "", "/403": "WARN", "/500": "ERROR"} {
+		m, _ := accessLine(t, h(AccessLogOptions{}), &logs, httptest.NewRequest(http.MethodGet, path, nil))
+		if got, _ := m["level"].(string); got != want {
+			t.Errorf("default %s: level %q, want %q", path, got, want)
+		}
+	}
+	for path, want := range map[string]string{"/": "INFO", "/401": "INFO", "/404": "INFO", "/403": "WARN", "/500": "ERROR"} {
+		m, _ := accessLine(t, h(AccessLogOptions{RoutineLevel: slog.LevelInfo}), &logs, httptest.NewRequest(http.MethodGet, path, nil))
+		if got, _ := m["level"].(string); got != want {
+			t.Errorf("RoutineLevel info %s: level %q, want %q", path, got, want)
+		}
+	}
 }
 
 // accessLine runs one request through h and decodes the single JSON line it logged (nil when none).
@@ -195,7 +227,7 @@ func accessLine(t *testing.T, h http.Handler, logs *bytes.Buffer, req *http.Requ
 func TestAccessLogUntrustedRequestID(t *testing.T) {
 	const secret = "totp-123456"
 	var logs bytes.Buffer
-	log := slog.New(slog.NewJSONHandler(&logs, nil))
+	log := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	var seenID, seenHeader string
 	inner := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		seenID = RequestID(r.Context())
@@ -238,7 +270,7 @@ func TestAccessLogUntrustedRequestID(t *testing.T) {
 
 func TestAccessLogFieldsAndHooks(t *testing.T) {
 	var logs bytes.Buffer
-	log := slog.New(slog.NewJSONHandler(&logs, nil))
+	log := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	type record struct {
 		path, ip string
 		status   int

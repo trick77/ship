@@ -3,6 +3,7 @@ package hook
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -70,6 +71,9 @@ func Install(root string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if err := symlink(p); err != nil {
+		return "", err
+	}
 	// A core.hooksPath outside this repo (a global or shared hooks dir) would gate every repo using it, and refuse
 	// every push of a repo without ship.
 	common, err := gitx.Git(root, "rev-parse", "--path-format=absolute", "--git-common-dir")
@@ -90,7 +94,70 @@ func Install(root string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
 		return "", err
 	}
-	return p, os.WriteFile(p, []byte(script), 0o755) //nolint:gosec // a git hook must be executable
+	// A new file renamed over the old, never written in place: sh reads a running hook as it goes, and the hook
+	// running this very ship (Refresh) would read on into the new script's bytes.
+	tmp, err := os.CreateTemp(filepath.Dir(p), ".pre-push-*")
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	if _, err := tmp.WriteString(script); err != nil {
+		_ = tmp.Close()
+		return "", err
+	}
+	if err := tmp.Close(); err != nil {
+		return "", err
+	}
+	if err := os.Chmod(tmp.Name(), 0o755); err != nil { //nolint:gosec // a git hook must be executable
+		return "", err
+	}
+	return p, os.Rename(tmp.Name(), p)
+}
+
+// Backup suffixes the previous hook Refresh keeps (pre-push.ship-old), one copy, the last one replaced.
+const Backup = ".ship-old"
+
+// Refresh reinstalls a stale hook (Stale) with this ship's script, as Install does, keeping the old one at its path +
+// Backup, and reports whether it did. A hook ship did not install, or a symlink, is never touched; nor is any hook
+// while SHIP_CMD is set: that ship (a local build, a pin) is not master's, whose script the hook must carry, so a
+// stale hook is an error to warn about.
+func Refresh(root string) (string, bool, error) {
+	if !Stale(root) {
+		return "", false, nil
+	}
+	if os.Getenv("SHIP_CMD") != "" {
+		return "", false, errors.New("SHIP_CMD runs a ship other than master's, which only warns: rerun `ship hooks` " +
+			"with master's (see README)")
+	}
+	p, err := path(root)
+	if err != nil {
+		return "", false, err
+	}
+	if err := symlink(p); err != nil {
+		return "", false, err
+	}
+	old, err := os.ReadFile(p) //nolint:gosec // the hook path git reports
+	if err != nil {
+		return "", false, err
+	}
+	// Removed first: a symlink planted at the backup's path is replaced, never written through.
+	if err := os.Remove(p + Backup); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", false, err
+	}
+	if err := os.WriteFile(p+Backup, old, 0o600); err != nil { //nolint:gosec // next to the hook path git reports
+		return "", false, err
+	}
+	p, err = Install(root)
+	return p, err == nil, err
+}
+
+// symlink refuses a symlinked hook (a dotfiles or shared hook): someone's arrangement, renaming over it would cut
+// the link.
+func symlink(p string) error {
+	if fi, err := os.Lstat(p); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s is a symlink: ship never replaces it; update its target by hand", p)
+	}
+	return nil
 }
 
 func ours(s string) bool { return strings.Contains(s, marker) }

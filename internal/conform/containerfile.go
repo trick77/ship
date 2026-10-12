@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/trick77/ship/internal/compose"
 	"github.com/trick77/ship/internal/pins"
 )
 
@@ -231,6 +232,11 @@ func (e *env) containerfile() result {
 		for _, i := range closure(x.stages, x.final) {
 			s := x.stages[i]
 			if stageIndex(x.stages[:i], s.base) < 0 {
+				// Untagged is a floating :latest: no reproducible build, nothing Dependabot can track. A ${ARG}
+				// base is the ARG's to pin.
+				if s.base != "scratch" && !strings.Contains(s.base, "$") && !compose.Pinned(s.base) {
+					add(fmt.Sprintf("base %s has no tag or digest", s.base))
+				}
 				if m := golangTag.FindStringSubmatch(s.base); m != nil {
 					golang = append(golang, m[1]+"."+m[2])
 				} else if t := toolchain.FindStringSubmatch(s.base); t != nil && !nodeTag.MatchString(s.base) {

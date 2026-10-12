@@ -28,7 +28,7 @@ ship check   # the gate by hand
 ```yaml
 base: master          # patch gate diffs against origin/<base>; release requires HEAD = origin/<base>
 lint: v2.14.0         # golangci-lint, built by go run; leave unset: ship's version, the same everywhere
-postgres: "17"        # go test gets postgres:17-alpine (or a tagged image: timescale/timescaledb:2.29.1-pg17), DSN in SHIP_TEST_DSN
+postgres: "17"        # go test gets postgres:17-alpine (or a tagged image: timescale/timescaledb:2.29.1-pg17, or compose:db: that root compose service's image), DSN in SHIP_TEST_DSN
 shell: [hooks/pre-commit]   # shellcheck these too (*.sh and sh/bash shebangs are found by themselves)
 patch: 75             # min coverage of changed lines, %
 tag_prefix: ""        # "v" for a Go module
@@ -73,10 +73,10 @@ coverage output.
 
 | | |
 |---|---|
-| `ship check` | conform, fetch, commit subjects, secret scan, ui embed, ui build, go modules, gofmt, go mod verify, go mod tidy, build, govulncheck, golangci-lint (incl. govet), ui lint, shellcheck, steps, postgres, go test (-race, coverage), ui test, floors, patch gate |
+| `ship check` | conform, fetch, commit subjects, secret scan, ui embed, ui build, npm audit, go modules, gofmt, go mod verify, go mod tidy, build, govulncheck, golangci-lint (incl. govet), ui lint, shellcheck, steps, postgres, go test (-race, coverage), ui test, floors, patch gate |
 | `ship conform [-fix]` / `ship init [-diff]` | the repo against ship's canon / write the files ship owns (see Conform) |
 | `ship lint` | golangci-lint alone, at the version `ship check` runs: a Makefile's quick lint, no version of its own |
-| `ship hooks` | install the pre-push hook (respects core.hooksPath, never overwrites a foreign hook) |
+| `ship hooks` | install the pre-push hook (respects core.hooksPath, never overwrites a foreign or symlinked hook) |
 | `ship release [patch\|minor\|major\|auto] [-cache gha] [-dry-run] [-dir <module>]` | next version from tags, notes from the subjects since the last tag (grouped by area), tag (API), images pushed (version + sha), scanned and signed, GitHub release, then :MAJOR.MINOR, :MAJOR, :latest. No `images:` and no `ui:`: `go build ./...` before the tag (in `-dry-run` too). With `images:` only on a GitHub-hosted runner (the Release workflow); elsewhere `-dry-run` only. The Release workflow inherits the caller's permissions: `packages: write` and `id-token: write` only with `images:`. `-dir`: a nested Go module, below |
 
 Gates beyond the build and tests, all hard failures:
@@ -84,6 +84,8 @@ Gates beyond the build and tests, all hard failures:
 - golangci-lint: the family config embedded in ship (`internal/check/golangci.yaml`), unless the repo keeps its own
   `.golangci.{yml,yaml,toml,json}` between `go.dir` and the root.
 - govulncheck (pinned, `go run`): a known vulnerability the module's code reaches.
+- npm audit (with `ui:`, in `ui.dir`, after ui build): `npm audit --audit-level=high --omit=dev`, a high or
+  critical advisory in what the UI ships; dev dependencies only build it.
 - `go mod tidy -diff`: go.mod/go.sum as tidy leaves them.
 - Secret scan: the tree and every line and message the commits not yet on origin/<base> add, for API key shapes
   (`sk-`, `tp-`, GitHub tokens, AWS key ids) and `.env` files. A fixture line carrying `ship:allow-secret` passes.
@@ -91,6 +93,9 @@ Gates beyond the build and tests, all hard failures:
   have it).
 - `postgres:`: `SHIP_TEST_DSN` set already (a server of one's own) is used as is; else check starts the container
   (docker, loopback, free port), waits for it and removes it after go test, on failure and on Ctrl-C too.
+  `compose:<service>`: the image that service names in the root compose files (`compose*.yaml`,
+  `docker-compose*.yaml`, `.yml` too), the one pin Dependabot's docker-compose ecosystem bumps; a missing service, no `image:`,
+  `${VAR}`, no tag or two files disagreeing fail. A literal image a compose service names too fails conform.
 
 TypeScript/React: `ui.build` is the typecheck (`tsc -b && vite build`), `ui.lint` runs ESLint/Prettier, `ui.test`
 runs vitest with coverage; its lcov feeds the UI floor and the patch gate for changed `.ts`/`.tsx` lines.
@@ -134,7 +139,10 @@ gate does not run rather than pass over the other side alone. Scope is the repor
 `go.coverpkg` and UI files outside vitest's `coverage.include` are not measured.
 
 Pre-push: deletes and tags pass; anything else must be HEAD with a clean tree (check tests the tree), then
-`ship check`. A tree with no `ship.yaml` in the index (a branch cut before ship) is refused: rebase it.
+`ship check`. A tree with no `ship.yaml` in the index (a branch cut before ship) is refused: rebase it. A hook
+ship installed that is not this ship's script is rewritten with it (renamed over, so the running hook is
+unharmed; the old one kept as `pre-push.ship-old`), one line says so; a foreign or symlinked hook is never touched. Under
+`SHIP_CMD` (not master's ship) a stale hook only gets a warning.
 
 ## Workflows
 
@@ -172,7 +180,7 @@ builder, `ship init` moves CI after it.
 | `workflows` | ci/release/cleanup callers use `trick77/ship/.github/workflows/<x>.yaml@master`; release: `packages: write` ⇔ images, bump options include `auto`; no other image cleanup action | yes |
 | `visibility` | GitHub's visibility (Actions event, else the API unauthenticated, cached a day in the git dir) matches `visibility:`; a failed lookup: `visibility:` stands (a note), unset = FAIL; public: CI on every PR (no `if:`); private: Dependabot-only `if:`, every npm/docker/docker-compose update grouped, ≤ 5 open PRs, cleanup caller with images | yes |
 | `dependabot` | `commit-message: { prefix: deps }` everywhere; gomod, github-actions, npm (UI), docker (Containerfile), docker-compose `/` (a root `compose*.yaml` naming an image by a version tag) present | yes |
-| `containerfile` | per image: `ARG VERSION` into `-X github.com/trick77/ship/kit/version.Version=${VERSION}`, `-trimpath`, non-root final stage, builder `golang:X.Y` = go.mod's and ≥ ship's Go floor (1.27), builder `node:N` ≥ ship's Node floor (26) | per `image` |
+| `containerfile` | per image: `ARG VERSION` into `-X github.com/trick77/ship/kit/version.Version=${VERSION}`, `-trimpath`, non-root final stage, builder `golang:X.Y` = go.mod's and ≥ ship's Go floor (1.27), builder `node:N` ≥ ship's Node floor (26), every base (not a stage, `scratch` or `${ARG}`) with a tag or digest (untagged = a floating `:latest` Dependabot cannot track) | per `image` |
 | `distroless` | final stage on `gcr.io/distroless/` | per `image` |
 | `dockerignore` | exists with images; excludes `<ui.dir>/node_modules` and `<ui.dir>/dist` | yes |
 | `ui` | `ui.lint: npm run lint`; scripts exactly `build` = `tsc -b && vite build`, `lint` = `eslint . --max-warnings 0 && npm run format:check`, `format` = `prettier --write 'src/**/*.{ts,tsx,css}' '*.ts'`, `format:check` = `prettier --check …` (same globs), `test` = `vitest run`; devDependencies `typescript`, `prettier`, `eslint`, `typescript-eslint`, `eslint-config-prettier`, `@eslint/js`, `eslint-plugin-react-hooks` present at an exact version (no range; the version is the repo's), typescript below 6.1 (typescript-eslint); eslint.config.js; tsconfig.json references `./tsconfig.node.json`; vite.config.ts: `defineConfig` from `vitest/config`, `globals: true`, `setupFiles: ["./src/test/setup.ts"]`, `reportsDirectory: "../coverage/ui"`; `src/test/setup.ts`'s first statement `import "@testing-library/jest-dom/vitest";` | yes |
@@ -181,6 +189,7 @@ builder, `ship init` moves CI after it.
 | `kit` | a repo with images requires kit | yes |
 | `handrolled` | no `internal/version` package, health route strings, `signal.Notify`/`NotifyContext`, `github.com/coreos/go-oidc` import outside tests: kit (kit/auth) has them | per `path` |
 | `agents` | AGENTS.md has the commit-subject line | yes |
+| `postgres` | `compose:<service>` resolves; a literal `postgres:` (a version too) names no repository a root compose service's `image:` names (`duplicates compose service <s>'s image, use compose:<s>`): two pins drift | yes |
 
 An exception lives in `ship.yaml`, its why required (an entry without one fails the parse):
 

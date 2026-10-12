@@ -44,7 +44,8 @@ on:
       postgres:
         description: >-
           Postgres for go test: a version (postgres:<v>-alpine) or a tagged image ref, DSN in SHIP_TEST_DSN; empty =
-          none here, and ship check starts the container itself for a ship.yaml postgres key.
+          none here. Redundant with a ship.yaml postgres key: ship check starts that container itself (and resolves
+          compose:<service>, which this input does not take).
         type: string
         default: ""
       ship:
@@ -81,7 +82,9 @@ jobs:
         env:
           PG: ${{ inputs.postgres }}
         run: |
-          if [[ "$PG" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+          if [[ "$PG" == compose:* ]]; then
+            echo "::error::postgres input '$PG': compose:<service> is ship.yaml's postgres key, not this input; drop the input, ship check resolves it"; exit 1
+          elif [[ "$PG" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
             PG="postgres:$PG-alpine"
           elif [[ ! "$PG" =~ ^[a-z0-9][a-z0-9._/-]*(:[A-Za-z0-9._-]+(@sha256:[0-9a-f]{64})?|@sha256:[0-9a-f]{64})$ ]]; then
             echo "::error::postgres input '$PG': want a version like 17 or a tagged image ref"; exit 1
