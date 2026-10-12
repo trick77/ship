@@ -60,8 +60,11 @@ jobs:
         env:
           SHIP: ${{ inputs.ship }}
           # A squash merge makes the PR title master's subject: the gate checks it with the branch's. Through env,
-          # never ${{ }} in the script: a title is untrusted input. Empty off a pull_request event.
-          SHIP_PR_TITLE: ${{ github.event.pull_request.title }}
+          # never ${{ }} in the script: a title is untrusted input. Empty off a pull_request event, and for a bot's PR
+          # (Dependabot: `Bump x from …`, past 76 chars), skipped as its commits are.
+          SHIP_PR_TITLE: ${{ github.event.pull_request.user.type != 'Bot' && github.event.pull_request.title || '' }}
+          # A fork PR: only the title is checked, the squash merge drops the contributor's branch subjects.
+          SHIP_PR_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         # Default: master's sha on GitHub, as the pre-push hook runs it, so hook and CI gate alike. Not @master: the
         # module proxy can still serve an older master. Not github.job_workflow_sha: empty for a caller (2026-10-11).
         run: |

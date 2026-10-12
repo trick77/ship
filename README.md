@@ -69,7 +69,8 @@ Commit subjects: Go style (go.dev/doc/contribute), `area: what`, e.g. `hook: pin
 `net/http, net/url: fix parsing`. No trailing period, at most 76 characters (a squash merge's ` (#N)` not
 counted). Every non-merge commit on origin/<base>..HEAD is checked, `[bot]` authors (Dependabot) skipped,
 `Revert "…"` and `fixup!` commits judged by what they wrap. The Check workflow adds a pull request's title
-(`SHIP_PR_TITLE`): a squash merge makes it master's subject. Release notes group by the first area.
+(`SHIP_PR_TITLE`, not a bot's): a squash merge makes it master's subject. A PR from a fork (`SHIP_PR_FORK=true`): the title
+alone, an outside contributor's branch subjects never reach master. Release notes group by the first area.
 
 `release auto`: patch, unless a commit message since the last tag has a line `Release: minor` or `Release: major`
 (highest wins; a minor or major also needs a `Release-note: …` line, which goes above the notes, a bump by hand

@@ -21,6 +21,10 @@ import (
 // master's commit subject, so it is checked with the branch's own.
 const PRTitle = "SHIP_PR_TITLE"
 
+// PRFork is "true" in the Check workflow for a pull request from a fork: the squash merge keeps only the title, so
+// an outside contributor's branch subjects are not checked, the title alone is.
+const PRFork = "SHIP_PR_FORK"
+
 // SkipPatch in a commit message on the branch skips the patch gate (a mass reformat or rename adds no logic, but
 // every touched line would count). The floor still applies.
 const SkipPatch = "[skip patch-coverage]"
@@ -84,7 +88,11 @@ func (r runner) subjects() error {
 	if _, _, err := subject.Release(messages); err != nil {
 		return fmt.Errorf("release lines (reword: git rebase -i origin/%s): %w", r.c.Base, err)
 	}
+	what := "commits"
 	if t := os.Getenv(PRTitle); t != "" {
+		if os.Getenv(PRFork) == "true" {
+			cs, what = nil, "fork PR, title only"
+		}
 		cs = append(cs, gitx.Commit{Hash: "PR title", Subject: t})
 	}
 	var bad []string
@@ -102,7 +110,7 @@ func (r runner) subjects() error {
 		return fmt.Errorf("%d of %d not Go style `area: what` (reword: git rebase -i origin/%s):\n%s",
 			len(bad), n, r.c.Base, strings.Join(bad, "\n"))
 	}
-	fmt.Printf("ship: subjects ok: %d commits\n", n)
+	fmt.Printf("ship: subjects ok: %d %s\n", n, what)
 	return nil
 }
 
