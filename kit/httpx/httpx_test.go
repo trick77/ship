@@ -407,6 +407,58 @@ func TestSecurityHeaders(t *testing.T) {
 	}
 }
 
+func TestSecurityHeadersWith(t *testing.T) {
+	mw := SecurityHeadersWith(SecurityOptions{
+		CSP: "default-src 'self'", HTMLOnly: true, COOP: "same-origin",
+		HSTS: 2 * 365 * 24 * time.Hour, HSTSSubdomains: true,
+		NoIndex: func(p string) bool { return strings.HasPrefix(p, "/api/") || p == "/healthz" },
+	})
+	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = w.Write([]byte("<html>"))
+		case "/api/denied":
+			w.Header().Set("X-Robots-Tag", "none")
+			w.WriteHeader(http.StatusUnauthorized)
+		default:
+			WriteJSON(w, http.StatusOK, map[string]string{})
+		}
+	}))
+	get := func(p string) http.Header {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, p, nil))
+		return rec.Header()
+	}
+	page := get("/")
+	if page.Get("Content-Security-Policy") != "default-src 'self'" || page.Get("X-Frame-Options") != "DENY" ||
+		page.Get("Cross-Origin-Opener-Policy") != "same-origin" || page.Get("X-Robots-Tag") != "" {
+		t.Errorf("html = %v", page)
+	}
+	if got := page.Get("Strict-Transport-Security"); got != "max-age=63072000; includeSubDomains" {
+		t.Errorf("HSTS = %q", got)
+	}
+	api := get("/api/x")
+	if api.Get("Content-Security-Policy") != "" || api.Get("X-Frame-Options") != "" ||
+		api.Get("X-Robots-Tag") != "noindex, nofollow" || api.Get("X-Content-Type-Options") != "nosniff" {
+		t.Errorf("json = %v", api)
+	}
+	if got := get("/api/denied").Get("X-Robots-Tag"); got != "none" {
+		t.Errorf("handler's X-Robots-Tag = %q", got)
+	}
+	if got := get("/healthz").Get("X-Robots-Tag"); got != "noindex, nofollow" {
+		t.Errorf("probe X-Robots-Tag = %q", got)
+	}
+
+	// The zero value is SecurityHeaders(""): every response, no HSTS.
+	rec := httptest.NewRecorder()
+	SecurityHeadersWith(SecurityOptions{})(http.NotFoundHandler()).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rec.Header().Get("Content-Security-Policy") != DefaultCSP || rec.Header().Get("Strict-Transport-Security") != "" ||
+		rec.Header().Get("X-Robots-Tag") != "" {
+		t.Errorf("zero = %v", rec.Header())
+	}
+}
+
 func TestLocalURL(t *testing.T) {
 	for _, tt := range []struct{ addr, path, want string }{
 		{":8080", "/healthz", "http://127.0.0.1:8080/healthz"},

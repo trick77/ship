@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"regexp"
 	"runtime/debug"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/trick77/ship/kit/logging"
@@ -226,19 +228,100 @@ const DefaultCSP = "default-src 'self'; img-src 'self' data:; style-src 'self' '
 	"frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
 
 // SecurityHeaders sets the baseline headers on every response: no sniffing, same-origin referrers, no framing, and
-// csp as the Content-Security-Policy ("" means DefaultCSP).
+// csp as the Content-Security-Policy ("" means DefaultCSP). SecurityHeadersWith takes the rest.
 func SecurityHeaders(csp string) func(http.Handler) http.Handler {
-	if csp == "" {
-		csp = DefaultCSP
+	return SecurityHeadersWith(SecurityOptions{CSP: csp})
+}
+
+// SecurityOptions shapes SecurityHeadersWith. The zero value is SecurityHeaders(""): DefaultCSP and no framing on
+// every response.
+type SecurityOptions struct {
+	// CSP is the Content-Security-Policy, "" means DefaultCSP.
+	CSP string
+	// HTMLOnly sends CSP, X-Frame-Options and COOP only on text/html responses, judged by the Content-Type the
+	// handler set: a JSON or image answer renders nothing a policy could restrict.
+	HTMLOnly bool
+	// COOP is the Cross-Origin-Opener-Policy ("same-origin"), none when empty.
+	COOP string
+	// HSTS sends Strict-Transport-Security with this max-age (lens: two years); 0 sends none. Browsers ignore it over
+	// plain http, so it is safe behind a TLS-terminating proxy. Opt-in: once sent, a browser refuses http to the
+	// host for max-age.
+	HSTS time.Duration
+	// HSTSSubdomains adds includeSubDomains.
+	HSTSSubdomains bool
+	// NoIndex marks the paths it matches X-Robots-Tag "noindex, nofollow" (an API prefix, the probes); a handler
+	// setting its own X-Robots-Tag replaces it.
+	NoIndex func(path string) bool
+}
+
+// SecurityHeadersWith sets the headers o describes. HTMLOnly's are added when the handler writes its header, so they
+// see the Content-Type it set.
+func SecurityHeadersWith(o SecurityOptions) func(http.Handler) http.Handler {
+	if o.CSP == "" {
+		o.CSP = DefaultCSP
+	}
+	hsts := ""
+	if o.HSTS > 0 {
+		hsts = "max-age=" + strconv.FormatInt(int64(o.HSTS/time.Second), 10)
+		if o.HSTSSubdomains {
+			hsts += "; includeSubDomains"
+		}
+	}
+	html := func(h http.Header) {
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Content-Security-Policy", o.CSP)
+		if o.COOP != "" {
+			h.Set("Cross-Origin-Opener-Policy", o.COOP)
+		}
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			h := w.Header()
 			h.Set("X-Content-Type-Options", "nosniff")
 			h.Set("Referrer-Policy", "same-origin")
-			h.Set("X-Frame-Options", "DENY")
-			h.Set("Content-Security-Policy", csp)
-			next.ServeHTTP(w, r)
+			if hsts != "" {
+				h.Set("Strict-Transport-Security", hsts)
+			}
+			// Set up front, so a handler's own (stricter) X-Robots-Tag replaces it.
+			if o.NoIndex != nil && o.NoIndex(r.URL.Path) {
+				h.Set("X-Robots-Tag", "noindex, nofollow")
+			}
+			if !o.HTMLOnly {
+				html(h)
+				next.ServeHTTP(w, r)
+				return
+			}
+			next.ServeHTTP(&headerHook{ResponseWriter: w, hook: func(h http.Header) {
+				if strings.Contains(h.Get("Content-Type"), "text/html") {
+					html(h)
+				}
+			}}, r)
 		})
 	}
 }
+
+// headerHook runs hook once, just before the header is sent. Unwrap keeps http.ResponseController working.
+type headerHook struct {
+	http.ResponseWriter
+	hook func(http.Header)
+	done bool
+}
+
+func (w *headerHook) fire() {
+	if !w.done {
+		w.done = true
+		w.hook(w.Header())
+	}
+}
+
+func (w *headerHook) WriteHeader(code int) {
+	w.fire()
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *headerHook) Write(b []byte) (int, error) {
+	w.fire()
+	return w.ResponseWriter.Write(b)
+}
+
+func (w *headerHook) Unwrap() http.ResponseWriter { return w.ResponseWriter }
