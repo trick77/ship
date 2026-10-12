@@ -138,7 +138,9 @@ func AccessLog(log *slog.Logger, opts AccessLogOptions) func(http.Handler) http.
 				switch {
 				case status >= 500:
 					lvl = slog.LevelError
-				case status >= 400 && status != http.StatusUnauthorized:
+				// 401 (a signed-out browser) and 404 (bots and scanners, most of a public site's traffic) are
+				// routine: at warn they would bury the 4xx that point at a real problem.
+				case status >= 400 && status != http.StatusUnauthorized && status != http.StatusNotFound:
 					lvl = slog.LevelWarn
 				}
 				ms := float64(dur.Microseconds()) / 1000

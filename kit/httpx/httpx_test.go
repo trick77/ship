@@ -159,6 +159,9 @@ func TestAccessLog(t *testing.T) {
 	if l, _ = do("/401", ""); l.Level != "INFO" {
 		t.Errorf("401 line = %+v", l)
 	}
+	if l, _ = do("/no-such-page", ""); l.Level != "INFO" || l.Status != 404 {
+		t.Errorf("404 line = %+v", l)
+	}
 	if l, _ = do("/healthz", ""); l.Msg != "" {
 		t.Errorf("quiet path logged: %+v", l)
 	}
