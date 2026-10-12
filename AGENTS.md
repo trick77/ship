@@ -16,7 +16,8 @@ deliberately.
 - Dependencies stay minimal (stdlib + yaml): `go run ...@master` builds them on every machine. `go 1.24` floor.
 - golangci-lint runs via `go run ...@<ship.yaml lint>`, never the action's release binary (built with an older Go
   than consumers' go.mod: v2.14.0 binary = go1.27.0).
-- Tool versions ship runs or demands (golangci-lint default, govulncheck, prettier) live in `internal/pins`, nowhere
-  else. `internal/check/golangci.yaml` is the family's golangci config, byte-identical to the repos' old copies.
+- Tool versions ship runs or demands (golangci-lint default, govulncheck, prettier, trivy, cosign) live in
+  `internal/pins`, nowhere else (cosign also in release.yaml's installer, a test keeps them equal).
+  `internal/check/golangci.yaml` is the family's golangci config, byte-identical to the repos' old copies.
 - Commit subjects + PR titles: Go style `area: what` (`hook: …`, `release: …`), gated, and the release notes.
 - Coverage: comment/blank lines never count (go/scanner, not a regex). Floors and patch share one line model.
