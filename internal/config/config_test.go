@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/trick77/ship/internal/pins"
 )
 
 func TestParse_whenEmpty_thenFamilyDefaults(t *testing.T) {
@@ -12,7 +14,7 @@ func TestParse_whenEmpty_thenFamilyDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Base != "master" || c.Lint != "v2.14.0" || c.Patch != 75 || c.Go.Dir != "." || c.Go.Floor != 75 {
+	if c.Base != "master" || c.Lint != pins.Golangci || c.Patch != 75 || c.Go.Dir != "." || c.Go.Floor != 75 {
 		t.Fatalf("defaults: %+v", c)
 	}
 	if !c.Go.RaceOn() || len(c.Go.Exclude) != 1 || c.Go.Exclude[0] != "cmd/" || c.UI != nil {

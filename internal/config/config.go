@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 
 	"go.yaml.in/yaml/v3"
+
+	"github.com/trick77/ship/internal/pins"
 )
 
 // uiTest asks vitest for lcov itself: its default reporters write none, and a repo relying on the default must not
@@ -105,7 +107,7 @@ func Load(root string) (*Config, error) {
 func Parse(b []byte) (*Config, error) {
 	c := Config{
 		Base:  "master",
-		Lint:  "v2.14.0",
+		Lint:  pins.Golangci,
 		Patch: 75,
 		Go:    Go{Dir: ".", Floor: 75, Exclude: []string{"cmd/"}},
 	}
