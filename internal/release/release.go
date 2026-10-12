@@ -1,5 +1,5 @@
-// Package release cuts a version: the next semver tag claimed, images built and pushed, the GitHub release, then
-// the moving image tags.
+// Package release cuts a version: the next semver tag claimed, images built and pushed (OCI labels, SBOM,
+// provenance), scanned (trivy) and signed (cosign, keyless), the GitHub release, then the moving image tags.
 //
 // Creating the tag is atomic, so it claims the version against a concurrent release; a failed build deletes it
 // again, so no orphan tag burns a number (the next version derives from the newest tag on origin). :latest and
@@ -216,13 +216,31 @@ func Run(root string, c *config.Config, o Options) error {
 		return cause
 	}
 
-	var images, names []string
-	for _, im := range c.Images {
+	var images, names, refs, labels []string
+	var meta string // buildx metadata files, outside the tree
+	if len(c.Images) > 0 {
+		if labels, err = ociLabels(root, head, repo, next); err != nil {
+			return unclaim(err)
+		}
+		if meta, err = os.MkdirTemp("", "ship-release-"); err != nil {
+			return unclaim(err)
+		}
+		defer func() { _ = os.RemoveAll(meta) }()
+	}
+	for i, im := range c.Images {
 		name := "ghcr.io/" + strings.ToLower(repo) + im.Suffix
+		// SBOM and max provenance go into the pushed index as attestations; the metadata file yields the digest the
+		// scan and the signature pin, never a tag someone could move in between.
+		metaFile := filepath.Join(meta, strconv.Itoa(i)+".json")
 		args := []string{"buildx", "build", "--push",
 			"--platform", strings.Join(im.Platforms, ","),
 			"--build-arg", "VERSION=" + next.String(),
+			"--sbom=true", "--provenance=mode=max",
+			"--metadata-file", metaFile,
 			"-f", im.Containerfile}
+		for _, l := range labels {
+			args = append(args, "--label", l)
+		}
 		if im.Target != "" {
 			args = append(args, "--target", im.Target)
 		}
@@ -238,8 +256,26 @@ func Run(root string, c *config.Config, o Options) error {
 		if err := run(root, o.DryRun, "docker", args...); err != nil {
 			return unclaim(fmt.Errorf("image %s: %w", name, err))
 		}
+		ref, err := digestRef(name, metaFile, o.DryRun)
+		if err != nil {
+			return unclaim(err)
+		}
 		images = append(images, fmt.Sprintf("`%s:%s`", name, next))
-		names = append(names, name)
+		names, refs = append(names, name), append(refs, ref)
+	}
+	// Every image scanned before any is signed: a signature vouches for a version that is released. A failed scan
+	// or signature gives the number back; the pushed fixed tags stay until the rerun overwrites them, the moving
+	// ones never point there.
+	for _, ref := range refs {
+		if err := run(root, o.DryRun, "docker", trivyArgs(ref)...); err != nil {
+			return unclaim(fmt.Errorf("trivy %s (HIGH/CRITICAL with a fix: bump the base image or dependency): %w", ref, err))
+		}
+	}
+	// Keyless: cosign takes the workflow's OIDC token (id-token: write) and pushes the signature next to the image.
+	for _, ref := range refs {
+		if err := run(root, o.DryRun, "cosign", "sign", "--yes", ref); err != nil {
+			return unclaim(fmt.Errorf("cosign sign %s: %w", ref, err))
+		}
 	}
 
 	notes := changes(root, prevCommit)

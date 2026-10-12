@@ -5,11 +5,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/trick77/ship/internal/config"
 	"github.com/trick77/ship/internal/gitx"
+	"github.com/trick77/ship/internal/pins"
 )
 
 // origin is a bare repo with master and tag 1.4.2 on master's parent; the clone's HEAD is origin/master, a main
@@ -91,15 +93,25 @@ func TestRun_whenDryRun_thenTagImagesReleaseMovingTags(t *testing.T) {
 		"gh api repos/Owner/Repo/git/refs -f ref=refs/tags/1.5.0",
 		"gh release create 1.5.0 --repo Owner/Repo",
 		"--notes **other**\n- two\n\nContainer images: `ghcr.io/owner/repo:1.5.0`",
+		"--sbom=true --provenance=mode=max --metadata-file ",
+		"--label org.opencontainers.image.version=1.5.0 --label org.opencontainers.image.revision=",
+		"--label org.opencontainers.image.source=https://github.com/Owner/Repo --label org.opencontainers.image.created=",
+		"aquasec/trivy:" + pins.Trivy + " image --no-progress --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed ghcr.io/owner/repo-dashboard@<digest>",
+		"+ cosign sign --yes ghcr.io/owner/repo@<digest>",
+		"+ cosign sign --yes ghcr.io/owner/repo-dashboard@<digest>",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
 	}
+	if !regexp.MustCompile(`image\.revision=[0-9a-f]{40} .*image\.created=\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ `).MatchString(out) {
+		t.Errorf("revision or created label malformed:\n%s", out)
+	}
 	tag, build, rel := strings.Index(out, "gh api"), strings.Index(out, "docker buildx build"), strings.Index(out, "gh release")
+	scan, sign := strings.Index(out, "+ docker run --rm"), strings.Index(out, "+ cosign sign")
 	retag := strings.Index(out, "docker buildx imagetools create -t ghcr.io/owner/repo:1.5 -t ghcr.io/owner/repo:1 -t ghcr.io/owner/repo:latest ghcr.io/owner/repo:1.5.0")
-	if tag < 0 || retag < 0 || tag > build || build > rel || rel > retag {
-		t.Errorf("want tag claim < build < release < moving tags, got %d %d %d %d", tag, build, rel, retag)
+	if tag < 0 || retag < 0 || tag > build || build > scan || scan > sign || sign > rel || rel > retag {
+		t.Errorf("want tag claim < build < scan < sign < release < moving tags, got %d %d %d %d %d %d", tag, build, scan, sign, rel, retag)
 	}
 	if strings.Contains(out[:rel], ":latest") {
 		t.Error(":latest pushed before the release exists")
@@ -171,7 +183,7 @@ func TestRun_whenNoImagesBuildFails_thenNothingTagged(t *testing.T) {
 		}
 	}
 	t.Setenv("GITHUB_REPOSITORY", "o/r")
-	log := fakeTools(t, 0)
+	log := fakeTools(t, "")
 	c, _ := config.Parse([]byte("tag_prefix: v\n"))
 	_, err := capture(t, func() error { return Run(work, c, Options{Bump: "patch"}) })
 	if err == nil || !strings.Contains(err.Error(), "go build (nothing tagged)") {
@@ -235,16 +247,23 @@ func TestRun_whenLocalOnlyTag_thenIgnored(t *testing.T) {
 	}
 }
 
-// fakeTools puts docker and gh scripts first on PATH: each logs its arguments, docker exits dockerRC. It poses as a
-// GitHub-hosted runner: images build nowhere else.
-func fakeTools(t *testing.T, dockerRC int) (log string) {
+// fakeTools puts docker, gh and cosign scripts first on PATH: each logs its arguments; docker buildx writes a digest
+// to its --metadata-file. A call whose "<tool> <args>" starts with failOn exits 1. It poses as a GitHub-hosted
+// runner: images build nowhere else.
+func fakeTools(t *testing.T, failOn string) (log string) {
 	t.Helper()
 	t.Setenv("RUNNER_ENVIRONMENT", "github-hosted")
 	bin := t.TempDir()
 	log = filepath.Join(bin, "calls.log")
-	for name, rc := range map[string]int{"docker": dockerRC, "gh": 0} {
-		script := fmt.Sprintf("#!/bin/sh\necho %s \"$@\" >> %s\nexit %d\n", name, log, rc)
-		if err := os.WriteFile(filepath.Join(bin, name), []byte(script), 0o755); err != nil {
+	for _, name := range []string{"docker", "gh", "cosign"} {
+		script := fmt.Sprintf("#!/bin/sh\necho %s \"$@\" >> %s\n", name, log) +
+			"prev=\nfor a in \"$@\"; do\n" +
+			"  if [ \"$prev\" = --metadata-file ]; then echo '{\"containerimage.digest\":\"sha256:feed\"}' > \"$a\"; fi\n" +
+			"  prev=$a\ndone\n"
+		if failOn != "" {
+			script += fmt.Sprintf("case \"%s $*\" in %q*) exit 1 ;; esac\n", name, failOn)
+		}
+		if err := os.WriteFile(filepath.Join(bin, name), []byte(script+"exit 0\n"), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -252,34 +271,67 @@ func fakeTools(t *testing.T, dockerRC int) (log string) {
 	return log
 }
 
-func TestRun_whenBuildFails_thenClaimedTagDeleted(t *testing.T) {
-	work := clone(t)
-	t.Setenv("GITHUB_REPOSITORY", "o/r")
-	log := fakeTools(t, 1)
-	c, _ := config.Parse([]byte("images:\n  - {}\n"))
-	_, err := capture(t, func() error { return Run(work, c, Options{Bump: "patch"}) })
-	if err == nil || !strings.Contains(err.Error(), "image ghcr.io/o/r") {
-		t.Fatalf("err = %v", err)
-	}
-	b, _ := os.ReadFile(log)
-	calls := string(b)
-	claim, del := strings.Index(calls, "gh api repos/o/r/git/refs -f ref=refs/tags/1.4.3"), strings.Index(calls, "gh api -X DELETE repos/o/r/git/refs/tags/1.4.3")
-	if claim < 0 || del < claim || strings.Contains(calls, "release create") {
-		t.Fatalf("want claim, failed build, delete, no release:\n%s", calls)
+func TestRun_whenBuildScanOrSignFails_thenClaimedTagDeleted(t *testing.T) {
+	for failOn, want := range map[string]string{
+		"docker buildx build": "image ghcr.io/o/r",
+		"docker run":          "trivy ghcr.io/o/r@sha256:feed",
+		"cosign sign":         "cosign sign ghcr.io/o/r@sha256:feed",
+	} {
+		t.Run(failOn, func(t *testing.T) {
+			work := clone(t)
+			t.Setenv("GITHUB_REPOSITORY", "o/r")
+			log := fakeTools(t, failOn)
+			c, _ := config.Parse([]byte("images:\n  - {}\n"))
+			_, err := capture(t, func() error { return Run(work, c, Options{Bump: "patch"}) })
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("err = %v", err)
+			}
+			b, _ := os.ReadFile(log)
+			calls := string(b)
+			claim, del := strings.Index(calls, "gh api repos/o/r/git/refs -f ref=refs/tags/1.4.3"), strings.Index(calls, "gh api -X DELETE repos/o/r/git/refs/tags/1.4.3")
+			if claim < 0 || del < claim || strings.Contains(calls, "release create") || strings.Contains(calls, "imagetools") {
+				t.Fatalf("want claim, failure, delete, no release:\n%s", calls)
+			}
+			if failOn != "cosign sign" && strings.Contains(calls, "cosign") {
+				t.Fatalf("signed after a failed build or scan:\n%s", calls)
+			}
+		})
 	}
 }
 
-func TestRun_whenAllSucceeds_thenNoDelete(t *testing.T) {
+func TestRun_whenAllSucceeds_thenScannedSignedNoDelete(t *testing.T) {
 	work := clone(t)
 	t.Setenv("GITHUB_REPOSITORY", "o/r")
-	log := fakeTools(t, 0)
-	c, _ := config.Parse([]byte("images:\n  - {}\n"))
+	log := fakeTools(t, "")
+	c, _ := config.Parse([]byte("images:\n  - {}\n  - suffix: -x\n"))
 	if _, err := capture(t, func() error { return Run(work, c, Options{Bump: "patch"}) }); err != nil {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(log)
-	if calls := string(b); strings.Contains(calls, "DELETE") || !strings.Contains(calls, "imagetools create") {
+	calls := string(b)
+	if strings.Contains(calls, "DELETE") || !strings.Contains(calls, "imagetools create") {
 		t.Fatalf("calls:\n%s", calls)
+	}
+	// Both scans before the first signature, the signatures before the release.
+	scan2, sign1 := strings.Index(calls, "image --no-progress --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed ghcr.io/o/r-x@sha256:feed"),
+		strings.Index(calls, "cosign sign --yes ghcr.io/o/r@sha256:feed")
+	sign2, rel := strings.Index(calls, "cosign sign --yes ghcr.io/o/r-x@sha256:feed"), strings.Index(calls, "gh release create")
+	if scan2 < 0 || sign1 < scan2 || sign2 < sign1 || rel < sign2 {
+		t.Fatalf("want scans < signatures < release:\n%s", calls)
+	}
+}
+
+func TestDigestRef_whenMetadataBroken_thenError(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := digestRef("i", filepath.Join(dir, "none.json"), false); err == nil {
+		t.Error("missing metadata file accepted")
+	}
+	bad := filepath.Join(dir, "bad.json")
+	if err := os.WriteFile(bad, []byte(`{"containerimage.digest":""}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := digestRef("i", bad, false); err == nil || !strings.Contains(err.Error(), "no digest") {
+		t.Errorf("empty digest accepted: %v", err)
 	}
 }
 
