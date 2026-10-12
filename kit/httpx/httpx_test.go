@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -100,7 +101,7 @@ func TestAccessLog(t *testing.T) {
 		}
 		_, _ = w.Write([]byte("ok"))
 	})
-	h := AccessLog(log, "/healthz")(mux)
+	h := AccessLog(log, AccessLogOptions{TrustRequestID: true, Quiet: []string{"/healthz"}})(mux)
 
 	type line struct {
 		Level, Msg, Method, Path, RequestID string
@@ -164,12 +165,155 @@ func TestAccessLog(t *testing.T) {
 	if l, _ = do("/healthz?fail=1", ""); l.Status != 503 {
 		t.Errorf("failing quiet path not logged: %+v", l)
 	}
-	_ = AccessLog(nil)
+	_ = AccessLog(nil, AccessLogOptions{})
+}
+
+// accessLine runs one request through h and decodes the single JSON line it logged (nil when none).
+func accessLine(t *testing.T, h http.Handler, logs *bytes.Buffer, req *http.Request) (map[string]any, *httptest.ResponseRecorder) {
+	t.Helper()
+	logs.Reset()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if logs.Len() == 0 {
+		return nil, rec
+	}
+	var m map[string]any
+	if err := json.Unmarshal(logs.Bytes(), &m); err != nil {
+		t.Fatalf("log: %v: %s", err, logs.String())
+	}
+	return m, rec
+}
+
+// A header named like a request id can carry a credential (lens's gateway TOTP rides X-Request-ID): untrusted, it
+// must reach neither the log, the response nor the handler's context.
+func TestAccessLogUntrustedRequestID(t *testing.T) {
+	const secret = "totp-123456"
+	var logs bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&logs, nil))
+	var seenID, seenHeader string
+	inner := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		seenID = RequestID(r.Context())
+		seenHeader = r.Header.Get("X-Request-ID")
+		for _, a := range logging.Bound(r.Context()) {
+			if strings.Contains(a.Value.String(), secret) {
+				t.Errorf("secret bound to the context as %s", a.Key)
+			}
+		}
+	})
+	for _, opts := range []AccessLogOptions{{}, {RequestIDHeader: "X-Request-ID"}, {NoRequestID: true}} {
+		req := httptest.NewRequest(http.MethodGet, "/x", nil)
+		req.Header.Set("X-Request-ID", secret)
+		logs.Reset()
+		rec := httptest.NewRecorder()
+		AccessLog(log, opts)(inner).ServeHTTP(rec, req)
+		if strings.Contains(logs.String(), secret) {
+			t.Errorf("%+v: secret logged: %s", opts, logs.String())
+		}
+		for k, vs := range rec.Header() {
+			if slices.ContainsFunc(vs, func(v string) bool { return strings.Contains(v, secret) }) {
+				t.Errorf("%+v: secret echoed in %s", opts, k)
+			}
+		}
+		if seenID == secret {
+			t.Errorf("%+v: secret bound as the request id", opts)
+		}
+		if seenHeader != secret {
+			t.Errorf("%+v: handler lost the header it validates: %q", opts, seenHeader)
+		}
+		if opts.NoRequestID {
+			if seenID != "" || rec.Header().Get("X-Request-ID") != "" || strings.Contains(logs.String(), "request_id") {
+				t.Errorf("NoRequestID still produced an id: ctx %q, header %q, log %s", seenID, rec.Header().Get("X-Request-ID"), logs.String())
+			}
+		} else if len(seenID) != 32 || rec.Header().Get("X-Request-ID") != seenID {
+			t.Errorf("%+v: own id not generated and echoed: ctx %q header %q", opts, seenID, rec.Header().Get("X-Request-ID"))
+		}
+	}
+}
+
+func TestAccessLogFieldsAndHooks(t *testing.T) {
+	var logs bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&logs, nil))
+	type record struct {
+		path   string
+		status int
+		dur    time.Duration
+	}
+	var records []record
+	h := AccessLog(log, AccessLogOptions{
+		RequestIDHeader: "X-Trace",
+		TrustRequestID:  true,
+		ClientIP:        func(r *http.Request) string { return ClientIP(r, 1) },
+		Skip:            func(r *http.Request, status int) bool { return r.URL.Path == "/metrics" && status == 200 },
+		Attrs:           func(_ *http.Request, status int) []slog.Attr { return []slog.Attr{slog.Bool("odd", status%2 == 1)} },
+		OnRecord: func(r *http.Request, status int, dur time.Duration) {
+			records = append(records, record{r.URL.Path, status, dur})
+		},
+	})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/missing" {
+			w.WriteHeader(404)
+		}
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/api?token=hunter2", nil)
+	req.Header.Set("X-Trace", "trace-1")
+	req.Header.Set("X-Forwarded-For", "6.6.6.6, 203.0.113.9")
+	req.Header.Set("User-Agent", "curl/8")
+	m, rec := accessLine(t, h, &logs, req)
+	want := map[string]any{"request_id": "trace-1", "ip": "203.0.113.9", "method": "POST", "path": "/api",
+		"proto": "HTTP/1.1", "status": float64(200), "user_agent": "curl/8", "odd": false, "msg": "http_request"}
+	for k, v := range want {
+		if m[k] != v {
+			t.Errorf("%s = %v, want %v (line %v)", k, m[k], v, m)
+		}
+	}
+	if _, ok := m["duration_ms"].(float64); !ok {
+		t.Errorf("duration_ms missing: %v", m)
+	}
+	if strings.Contains(logs.String(), "hunter2") {
+		t.Error("query logged")
+	}
+	if rec.Header().Get("X-Trace") != "trace-1" || rec.Header().Get(RequestIDHeader) != "" {
+		t.Errorf("id header = %v", rec.Header())
+	}
+
+	if m, _ = accessLine(t, h, &logs, httptest.NewRequest(http.MethodGet, "/metrics", nil)); m != nil {
+		t.Errorf("skipped request logged: %v", m)
+	}
+	if m, _ = accessLine(t, h, &logs, httptest.NewRequest(http.MethodGet, "/missing", nil)); m["status"] != float64(404) {
+		t.Errorf("404 line = %v", m)
+	}
+	if len(records) != 2 || records[0].path != "/api" || records[1].status != 404 || records[0].dur <= 0 {
+		t.Errorf("OnRecord = %+v, want /api and the 404, not the skipped /metrics", records)
+	}
+	// Default ClientIP is the TCP peer, never X-Forwarded-For.
+	req = httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("X-Forwarded-For", "6.6.6.6")
+	m, _ = accessLine(t, AccessLog(log, AccessLogOptions{})(http.NotFoundHandler()), &logs, req)
+	if m["ip"] != "192.0.2.1" {
+		t.Errorf("default ip = %v", m["ip"])
+	}
+}
+
+func TestChain(t *testing.T) {
+	var order []string
+	mw := func(name string) func(http.Handler) http.Handler {
+		return func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				order = append(order, name)
+				next.ServeHTTP(w, r)
+			})
+		}
+	}
+	h := Chain(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { order = append(order, "h") }), mw("a"), mw("b"))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+	if got := strings.Join(order, ","); got != "a,b,h" {
+		t.Errorf("order = %s", got)
+	}
 }
 
 // The status wrapper must not hide Flush from http.ResponseController, or SSE breaks behind AccessLog.
 func TestAccessLogKeepsFlush(t *testing.T) {
-	h := AccessLog(slog.New(slog.DiscardHandler))(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	h := AccessLog(slog.New(slog.DiscardHandler), AccessLogOptions{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if err := http.NewResponseController(w).Flush(); err != nil {
 			t.Errorf("Flush through AccessLog: %v", err)
 		}
