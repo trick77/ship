@@ -249,7 +249,7 @@ type SecurityOptions struct {
 	COOP string
 	// HSTS sends Strict-Transport-Security with this max-age (lens: two years); 0 sends none. Browsers ignore it over
 	// plain http, so it is safe behind a TLS-terminating proxy. Opt-in: once sent, a browser refuses http to the
-	// host for max-age.
+	// host for max-age. Whole seconds; a positive value below one second panics (it would be max-age=0).
 	HSTS time.Duration
 	// HSTSSubdomains adds includeSubDomains.
 	HSTSSubdomains bool
@@ -265,6 +265,10 @@ func SecurityHeadersWith(o SecurityOptions) func(http.Handler) http.Handler {
 		o.CSP = DefaultCSP
 	}
 	hsts := ""
+	if o.HSTS > 0 && o.HSTS < time.Second {
+		// max-age counts seconds: this would send max-age=0, which tells the browser to forget HSTS.
+		panic("httpx.SecurityHeadersWith: HSTS below one second (a unitless number is nanoseconds; use time.Hour*…)")
+	}
 	if o.HSTS > 0 {
 		hsts = "max-age=" + strconv.FormatInt(int64(o.HSTS/time.Second), 10)
 		if o.HSTSSubdomains {

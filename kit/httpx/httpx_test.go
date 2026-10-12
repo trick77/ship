@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -482,6 +483,15 @@ func TestSecurityHeadersWith(t *testing.T) {
 		rec.Header().Get("X-Robots-Tag") != "" {
 		t.Errorf("zero = %v", rec.Header())
 	}
+}
+
+func TestSecurityHeadersWith_whenHSTSBelowASecond_thenPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil || !strings.Contains(fmt.Sprint(r), "HSTS below one second") {
+			t.Errorf("recover = %v", r)
+		}
+	}()
+	SecurityHeadersWith(SecurityOptions{HSTS: 63072000}) // seconds meant, nanoseconds given
 }
 
 func TestSecurityHeadersWith_flushAndHijack(t *testing.T) {
