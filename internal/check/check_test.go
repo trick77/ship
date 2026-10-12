@@ -189,6 +189,20 @@ func TestLint_whenVersionDoesNotExist_thenFails(t *testing.T) {
 	}
 }
 
+func TestModVerify(t *testing.T) {
+	dir, c := fixture(t, "", "mode: set\n", "")
+	r := runner{root: dir, c: c}
+	if err := r.modVerify(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/m\n\nrequire\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.modVerify(); err == nil {
+		t.Fatal("broken go.mod verified")
+	}
+}
+
 func TestIgnoredByGo(t *testing.T) {
 	for p, want := range map[string]bool{
 		"a.go":                     false,

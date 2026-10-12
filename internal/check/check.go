@@ -43,6 +43,7 @@ func Run(root string, c *config.Config) error {
 		{"commit subjects", r.subjects},
 		{"ui build", r.uiBuild},
 		{"gofmt", r.gofmt},
+		{"go mod verify", r.modVerify},
 		{"go build", func() error { return r.goCmd("build", "./...") }},
 		{"golangci-lint " + c.Lint, r.lint},
 		{"ui lint", r.uiLint},
@@ -223,6 +224,10 @@ func ignoredByGo(path string) bool {
 	}
 	return false
 }
+
+// modVerify checks the module cache against go.sum: a dependency changed on disk after its download (a restored CI
+// cache, a hand edit) never reaches the build.
+func (r runner) modVerify() error { return r.goCmd("mod", "verify") }
 
 func (r runner) lint() error {
 	return r.goCmd("run", "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@"+r.c.Lint, "run")
