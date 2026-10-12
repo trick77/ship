@@ -198,7 +198,7 @@ A repo moving to ship, in one PR (its own subject already Go style: the new gate
 1. `ship.yaml` at the root: only the keys that differ from the defaults above.
 2. `ship init`: the workflow callers, dependabot, `.dockerignore` and `Makefile` blocks, the UI's ESLint config,
    tsconfig.node.json and .npmrc. Drop the repo's own gate scripts and hooks.
-3. `ship conform`: what init cannot write (Containerfile, package.json scripts and pins, vite config, kit, AGENTS.md)
+3. `ship conform`: what init cannot write (Containerfile, package.json scripts and devDependencies, vite config, kit, AGENTS.md)
    by hand, or an `allow` entry with its why. AGENTS.md, verbatim with the repo's own areas:
    ``- Commit subjects + PR titles: Go style `area: what` (`<area>: …`, `<area>: …`), gated by ship; release notes list them by area.``
 4. `ship hooks` in every clone.
