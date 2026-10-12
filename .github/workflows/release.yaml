@@ -76,7 +76,7 @@ jobs:
         uses: crazy-max/ghaction-github-runtime@v4
       # Signs each pushed image's digest. Version: internal/pins.Cosign (a test keeps them equal).
       - if: steps.shape.outputs.images == 'true'
-        uses: sigstore/cosign-installer@v4
+        uses: sigstore/cosign-installer@v4.1.2
         with:
           cosign-release: v3.1.3
       - working-directory: ${{ inputs.go-dir }}
