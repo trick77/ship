@@ -46,8 +46,11 @@ func digestRef(name, metaFile string, dry bool) (string, error) {
 	var m struct {
 		Digest string `json:"containerimage.digest"`
 	}
-	if err := json.Unmarshal(b, &m); err != nil || !strings.HasPrefix(m.Digest, "sha256:") {
-		return "", fmt.Errorf("image %s: no digest in buildx metadata %s (%v)", name, b, err)
+	if err := json.Unmarshal(b, &m); err != nil {
+		return "", fmt.Errorf("image %s: buildx metadata: %w", name, err)
+	}
+	if !strings.HasPrefix(m.Digest, "sha256:") {
+		return "", fmt.Errorf("image %s: no digest in buildx metadata %s", name, b)
 	}
 	return name + "@" + m.Digest, nil
 }

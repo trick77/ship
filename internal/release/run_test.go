@@ -327,11 +327,13 @@ func TestDigestRef_whenMetadataBroken_thenError(t *testing.T) {
 		t.Error("missing metadata file accepted")
 	}
 	bad := filepath.Join(dir, "bad.json")
-	if err := os.WriteFile(bad, []byte(`{"containerimage.digest":""}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := digestRef("i", bad, false); err == nil || !strings.Contains(err.Error(), "no digest") {
-		t.Errorf("empty digest accepted: %v", err)
+	for body, want := range map[string]string{`{"containerimage.digest":""}`: "no digest", `{`: "buildx metadata"} {
+		if err := os.WriteFile(bad, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := digestRef("i", bad, false); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s accepted: %v", body, err)
+		}
 	}
 }
 
