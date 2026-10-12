@@ -437,9 +437,10 @@ func (e *env) kit() result {
 var (
 	healthRoute = regexp.MustCompile(`"(?:[A-Z]+ )?/(?:api/(?:v1/)?)?` + `health"`)
 	signalWait  = regexp.MustCompile(`signal\.` + `Notify(?:Context)?\(`)
+	oidcImport  = regexp.MustCompile(`"github\.com/coreos/` + `go-oidc[/"]`)
 )
 
-// handrolled: version stamping, health routes and shutdown signals come from kit, never a copy.
+// handrolled: version stamping, health routes, shutdown signals and OIDC sign-in come from kit, never a copy.
 func (e *env) handrolled() result {
 	var fs []finding
 	var versionDirs []string
@@ -466,7 +467,10 @@ func (e *env) handrolled() result {
 			fs = append(fs, finding{what: "own health route: use kit's", file: f})
 		}
 		if signalWait.Match(b) {
-			fs = append(fs, finding{what: "own shutdown signal handling: use kit's", file: f})
+			fs = append(fs, finding{what: "own shutdown signal handling: use kit's (run.Context, httpx.Serve)", file: f})
+		}
+		if oidcImport.Match(b) {
+			fs = append(fs, finding{what: "own OIDC: use " + KitModule + "/auth", file: f})
 		}
 	}
 	return result{findings: fs}

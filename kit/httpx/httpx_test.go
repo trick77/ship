@@ -1,10 +1,13 @@
 package httpx
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -404,6 +407,197 @@ func TestSecurityHeaders(t *testing.T) {
 		if rec.Header().Get("X-Content-Type-Options") != "nosniff" || rec.Header().Get("X-Frame-Options") != "DENY" {
 			t.Errorf("headers = %v", rec.Header())
 		}
+	}
+}
+
+func TestSecurityHeadersWith(t *testing.T) {
+	mw := SecurityHeadersWith(SecurityOptions{
+		CSP: "default-src 'self'", HTMLOnly: true, COOP: "same-origin",
+		HSTS: 2 * 365 * 24 * time.Hour, HSTSSubdomains: true,
+		NoIndex: func(p string) bool { return strings.HasPrefix(p, "/api/") || p == "/healthz" },
+	})
+	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = w.Write([]byte("<html>"))
+		case "/api/denied":
+			w.Header().Set("X-Robots-Tag", "none")
+			w.WriteHeader(http.StatusUnauthorized)
+		case "/sniffed":
+			_, _ = w.Write([]byte("<!doctype html><p>no type set"))
+		case "/sniffed-text":
+			_, _ = w.Write([]byte("plain words"))
+		case "/untyped":
+			w.WriteHeader(http.StatusTeapot)
+		case "/icon.svg":
+			w.Header().Set("Content-Type", "image/svg+xml")
+			_, _ = w.Write([]byte("<svg/>"))
+		case "/page.xhtml":
+			w.Header().Set("Content-Type", "Application/XHTML+XML; charset=utf-8")
+			_, _ = w.Write([]byte("<html/>"))
+		case "/photo.png":
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write([]byte("png"))
+		default:
+			WriteJSON(w, http.StatusOK, map[string]string{})
+		}
+	}))
+	get := func(p string) http.Header {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, p, nil))
+		return rec.Header()
+	}
+	page := get("/")
+	if page.Get("Content-Security-Policy") != "default-src 'self'" || page.Get("X-Frame-Options") != "DENY" ||
+		page.Get("Cross-Origin-Opener-Policy") != "same-origin" || page.Get("X-Robots-Tag") != "" {
+		t.Errorf("html = %v", page)
+	}
+	if got := page.Get("Strict-Transport-Security"); got != "max-age=63072000; includeSubDomains" {
+		t.Errorf("HSTS = %q", got)
+	}
+	api := get("/api/x")
+	if api.Get("Content-Security-Policy") != "" || api.Get("X-Frame-Options") != "" ||
+		api.Get("X-Robots-Tag") != "noindex, nofollow" || api.Get("X-Content-Type-Options") != "nosniff" {
+		t.Errorf("json = %v", api)
+	}
+	if got := get("/api/denied").Get("X-Robots-Tag"); got != "none" {
+		t.Errorf("handler's X-Robots-Tag = %q", got)
+	}
+	if got := get("/healthz").Get("X-Robots-Tag"); got != "noindex, nofollow" {
+		t.Errorf("probe X-Robots-Tag = %q", got)
+	}
+	// No Content-Type set: the sniffed type decides, and with nothing to sniff the page default holds.
+	// SVG and XHTML run script like HTML; a raster image does not.
+	for p, html := range map[string]bool{"/sniffed": true, "/sniffed-text": false, "/untyped": true,
+		"/icon.svg": true, "/page.xhtml": true, "/photo.png": false} {
+		if got := get(p).Get("Content-Security-Policy") != ""; got != html {
+			t.Errorf("%s: CSP sent %v, want %v", p, got, html)
+		}
+	}
+
+	// The zero value is SecurityHeaders(""): every response, no HSTS.
+	rec := httptest.NewRecorder()
+	SecurityHeadersWith(SecurityOptions{})(http.NotFoundHandler()).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rec.Header().Get("Content-Security-Policy") != DefaultCSP || rec.Header().Get("Strict-Transport-Security") != "" ||
+		rec.Header().Get("X-Robots-Tag") != "" {
+		t.Errorf("zero = %v", rec.Header())
+	}
+}
+
+func TestAccessLog_flushAndHijack(t *testing.T) {
+	release := make(chan struct{})
+	log := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	srv := httptest.NewServer(Chain(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/events":
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: one\n\n"))
+			w.(http.Flusher).Flush()
+			<-release
+		case "/raw":
+			conn, rw, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			defer func() { _ = conn.Close() }()
+			_, _ = rw.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nhi")
+			_ = rw.Flush()
+		}
+	}), AccessLog(log, AccessLogOptions{}), Recover(log)))
+	defer srv.Close()
+	defer close(release)
+
+	res, err := http.Get(srv.URL + "/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	line, err := bufio.NewReader(res.Body).ReadString('\n')
+	if err != nil || line != "data: one\n" {
+		t.Errorf("event = %q %v", line, err)
+	}
+	_ = res.Body.Close()
+
+	res, err = http.Get(srv.URL + "/raw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	_ = res.Body.Close()
+	if string(body) != "hi" {
+		t.Errorf("hijacked body = %q", body)
+	}
+}
+
+func TestSecurityHeadersWith_whenHSTSBelowASecond_thenPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil || !strings.Contains(fmt.Sprint(r), "HSTS below one second") {
+			t.Errorf("recover = %v", r)
+		}
+	}()
+	SecurityHeadersWith(SecurityOptions{HSTS: 63072000}) // seconds meant, nanoseconds given
+}
+
+func TestSecurityHeadersWith_flushAndHijack(t *testing.T) {
+	release := make(chan struct{})
+	mw := SecurityHeadersWith(SecurityOptions{HTMLOnly: true})
+	srv := httptest.NewServer(mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/events":
+			// Server-sent events: the client must see the event while the handler still runs.
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: one\n\n"))
+			w.(http.Flusher).Flush()
+			<-release
+		case "/page":
+			// A flush before any write sends the header: the hook must have run by then.
+			w.Header().Set("Content-Type", "text/html")
+			if err := http.NewResponseController(w).Flush(); err != nil {
+				t.Error(err)
+			}
+			<-release
+		case "/raw":
+			conn, buf, err := http.NewResponseController(w).Hijack()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			defer func() { _ = conn.Close() }()
+			_, _ = buf.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nhi")
+			_ = buf.Flush()
+		}
+	})))
+	defer srv.Close()
+	defer close(release)
+
+	res, err := http.Get(srv.URL + "/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	line, err := bufio.NewReader(res.Body).ReadString('\n')
+	if err != nil || line != "data: one\n" || res.Header.Get("Content-Security-Policy") != "" {
+		t.Errorf("events = %q %v %v", line, err, res.Header)
+	}
+	_ = res.Body.Close()
+
+	res, err = http.Get(srv.URL + "/page")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Header.Get("Content-Security-Policy") != DefaultCSP {
+		t.Errorf("flushed page headers = %v", res.Header)
+	}
+	_ = res.Body.Close()
+
+	res, err = http.Get(srv.URL + "/raw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	_ = res.Body.Close()
+	if string(body) != "hi" {
+		t.Errorf("hijacked body = %q", body)
 	}
 }
 

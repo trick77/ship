@@ -1,15 +1,19 @@
 package httpx
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"log/slog"
 	"math"
+	"net"
 	"net/http"
 	"regexp"
 	"runtime/debug"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/trick77/ship/kit/logging"
@@ -36,8 +40,8 @@ func newRequestID() string {
 	return hex.EncodeToString(b[:])
 }
 
-// statusWriter records the status a handler sent. Unwrap keeps http.ResponseController working through it, or
-// Flush (server-sent events) and deadline control would stop at this wrapper.
+// statusWriter records the status a handler sent. Flush and Hijack keep the http.Flusher and http.Hijacker
+// assertions working through it; Unwrap keeps the rest of http.ResponseController (deadlines).
 type statusWriter struct {
 	http.ResponseWriter
 	status int
@@ -58,6 +62,22 @@ func (w *statusWriter) Write(b []byte) (int, error) {
 }
 
 func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+// FlushError is what http.ResponseController.Flush calls. A flush sends the header: 200 unless one was written.
+func (w *statusWriter) FlushError() error {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	return http.NewResponseController(w.ResponseWriter).Flush()
+}
+
+// Flush serves the http.Flusher assertion SSE handlers make (relume-tv, netra).
+func (w *statusWriter) Flush() { _ = w.FlushError() }
+
+// Hijack serves the http.Hijacker assertion (websockets).
+func (w *statusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return http.NewResponseController(w.ResponseWriter).Hijack()
+}
 
 // AccessLogOptions shapes AccessLog. The zero value logs every request under a freshly generated request id.
 type AccessLogOptions struct {
@@ -226,19 +246,145 @@ const DefaultCSP = "default-src 'self'; img-src 'self' data:; style-src 'self' '
 	"frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
 
 // SecurityHeaders sets the baseline headers on every response: no sniffing, same-origin referrers, no framing, and
-// csp as the Content-Security-Policy ("" means DefaultCSP).
+// csp as the Content-Security-Policy ("" means DefaultCSP). SecurityHeadersWith takes the rest.
 func SecurityHeaders(csp string) func(http.Handler) http.Handler {
-	if csp == "" {
-		csp = DefaultCSP
+	return SecurityHeadersWith(SecurityOptions{CSP: csp})
+}
+
+// SecurityOptions shapes SecurityHeadersWith. The zero value is SecurityHeaders(""): DefaultCSP and no framing on
+// every response.
+type SecurityOptions struct {
+	// CSP is the Content-Security-Policy, "" means DefaultCSP.
+	CSP string
+	// HTMLOnly sends CSP, X-Frame-Options and COOP only on active content: text/html, application/xhtml+xml and
+	// image/svg+xml (an SVG opened directly runs its script). The type is the Content-Type the handler set, else the
+	// one net/http sniffs from the first write; a header sent with no type and no body yet counts as HTML. JSON or
+	// a raster image renders nothing a policy could restrict.
+	HTMLOnly bool
+	// COOP is the Cross-Origin-Opener-Policy ("same-origin"), none when empty.
+	COOP string
+	// HSTS sends Strict-Transport-Security with this max-age (lens: two years); 0 sends none. Browsers ignore it over
+	// plain http, so it is safe behind a TLS-terminating proxy. Opt-in: once sent, a browser refuses http to the
+	// host for max-age. Whole seconds; a positive value below one second panics (it would be max-age=0).
+	HSTS time.Duration
+	// HSTSSubdomains adds includeSubDomains.
+	HSTSSubdomains bool
+	// NoIndex marks the paths it matches X-Robots-Tag "noindex, nofollow" (an API prefix, the probes); a handler
+	// setting its own X-Robots-Tag replaces it.
+	NoIndex func(path string) bool
+}
+
+// SecurityHeadersWith sets the headers o describes. HTMLOnly's are added when the handler writes its header, so they
+// see the Content-Type it set.
+func SecurityHeadersWith(o SecurityOptions) func(http.Handler) http.Handler {
+	if o.CSP == "" {
+		o.CSP = DefaultCSP
+	}
+	hsts := ""
+	if o.HSTS > 0 && o.HSTS < time.Second {
+		// max-age counts seconds: this would send max-age=0, which tells the browser to forget HSTS.
+		panic("httpx.SecurityHeadersWith: HSTS below one second (a unitless number is nanoseconds; use time.Hour*…)")
+	}
+	if o.HSTS > 0 {
+		hsts = "max-age=" + strconv.FormatInt(int64(o.HSTS/time.Second), 10)
+		if o.HSTSSubdomains {
+			hsts += "; includeSubDomains"
+		}
+	}
+	html := func(h http.Header) {
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Content-Security-Policy", o.CSP)
+		if o.COOP != "" {
+			h.Set("Cross-Origin-Opener-Policy", o.COOP)
+		}
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			h := w.Header()
 			h.Set("X-Content-Type-Options", "nosniff")
 			h.Set("Referrer-Policy", "same-origin")
-			h.Set("X-Frame-Options", "DENY")
-			h.Set("Content-Security-Policy", csp)
-			next.ServeHTTP(w, r)
+			if hsts != "" {
+				h.Set("Strict-Transport-Security", hsts)
+			}
+			// Set up front, so a handler's own (stricter) X-Robots-Tag replaces it.
+			if o.NoIndex != nil && o.NoIndex(r.URL.Path) {
+				h.Set("X-Robots-Tag", "noindex, nofollow")
+			}
+			if !o.HTMLOnly {
+				html(h)
+				next.ServeHTTP(w, r)
+				return
+			}
+			next.ServeHTTP(&headerHook{ResponseWriter: w, hook: func(h http.Header, body []byte) {
+				ct := h.Get("Content-Type")
+				switch {
+				// net/http sniffs an unset type from the first write; decide on the same bytes.
+				case ct == "" && body != nil:
+					ct = http.DetectContentType(body)
+				// Headers sent with nothing to sniff yet: the type is unknown, so assume a page.
+				case ct == "":
+					html(h)
+					return
+				}
+				if active(ct) {
+					html(h)
+				}
+			}}, r)
 		})
 	}
 }
+
+// active reports whether a browser runs script in a document of this type: HTML, XHTML and SVG opened directly.
+func active(contentType string) bool {
+	mt, _, _ := strings.Cut(contentType, ";")
+	switch strings.ToLower(strings.TrimSpace(mt)) {
+	case "text/html", "application/xhtml+xml", "image/svg+xml":
+		return true
+	}
+	return false
+}
+
+// headerHook runs hook once, just before the header is sent, with the first write's bytes when a write sends it.
+// Flush sends the header too, so it fires the hook first: http.ResponseController and an http.Flusher assertion
+// (server-sent events) both land there. Hijack passes through: the connection leaves HTTP, no header is sent.
+// Unwrap keeps the rest of http.ResponseController (deadlines) working.
+type headerHook struct {
+	http.ResponseWriter
+	hook func(h http.Header, body []byte)
+	done bool
+}
+
+func (w *headerHook) fire(body []byte) {
+	if !w.done {
+		w.done = true
+		w.hook(w.Header(), body)
+	}
+}
+
+func (w *headerHook) WriteHeader(code int) {
+	w.fire(nil)
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *headerHook) Write(b []byte) (int, error) {
+	if b == nil {
+		b = []byte{}
+	}
+	w.fire(b)
+	return w.ResponseWriter.Write(b)
+}
+
+// FlushError is what http.ResponseController.Flush calls.
+func (w *headerHook) FlushError() error {
+	w.fire(nil)
+	return http.NewResponseController(w.ResponseWriter).Flush()
+}
+
+// Flush serves the http.Flusher assertion.
+func (w *headerHook) Flush() { _ = w.FlushError() }
+
+func (w *headerHook) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return http.NewResponseController(w.ResponseWriter).Hijack()
+}
+
+func (w *headerHook) Unwrap() http.ResponseWriter { return w.ResponseWriter }

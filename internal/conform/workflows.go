@@ -200,7 +200,7 @@ func (e *env) visibilityRule() result {
 				fs = append(fs, finding{what: fmt.Sprintf("%s %s: open-pull-requests-limit %d, at most 5",
 					u.Ecosystem, u.Directory, *u.Limit), file: scaffold.Dependabot})
 			}
-			if (u.Ecosystem == "npm" || u.Ecosystem == "docker") && !u.groupsAll() {
+			if (u.Ecosystem == "npm" || u.Ecosystem == "docker" || u.Ecosystem == "docker-compose") && !u.groupsAll() {
 				fs = append(fs, finding{what: fmt.Sprintf("%s %s: not every update grouped (a \"*\" group per "+
 					"update type)", u.Ecosystem, u.Directory), file: scaffold.Dependabot})
 			}
@@ -287,6 +287,9 @@ func (e *env) dependabot() result {
 	}
 	for _, dir := range e.dockerDirs() {
 		want = append(want, struct{ eco, dir string }{"docker", dir})
+	}
+	if e.compose {
+		want = append(want, struct{ eco, dir string }{"docker-compose", "/"})
 	}
 	for _, w := range want {
 		if !slices.ContainsFunc(d.Updates, func(u update) bool {

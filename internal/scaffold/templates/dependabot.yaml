@@ -77,6 +77,15 @@ updates:
     groups:
 [[- template "split" "docker" ]]
 [[- end ]]
+[[- if .Compose ]]
+
+  # Images the compose files pin by tag.
+  - package-ecosystem: docker-compose
+    directory: /
+[[- template "head" ]]
+    groups:
+[[- template "split" "compose" ]]
+[[- end ]]
 
   - package-ecosystem: github-actions
     directory: /

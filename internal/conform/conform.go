@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -130,6 +131,8 @@ type env struct {
 	kitErr  error
 	// renderErr: the owned files could not be rendered at all.
 	renderErr error
+	// compose: composePins, read once for the render and the dependabot rule alike.
+	compose bool
 }
 
 func newEnv(root string, c *config.Config, o Options) *env {
@@ -141,6 +144,7 @@ func newEnv(root string, c *config.Config, o Options) *env {
 		e.visNote = fmt.Sprintf("GitHub lookup failed (%v); ship.yaml's visibility: %s used", e.visErr, c.Visibility)
 		e.vis, e.visErr = c.Visibility, nil
 	}
+	e.compose = e.composePins()
 	e.render()
 	return e
 }
@@ -148,7 +152,7 @@ func newEnv(root string, c *config.Config, o Options) *env {
 // render renders the owned files with the visibility ship.yaml names, else GitHub's.
 func (e *env) render() {
 	f := scaffold.Facts{Repo: e.repo, Visibility: e.c.Visibility, DockerDirs: e.dockerDirs(),
-		NodeVersion: e.nodeVersion()}
+		Compose: e.compose, NodeVersion: e.nodeVersion()}
 	if f.Visibility == "" {
 		f.Visibility = e.vis
 	}
@@ -318,6 +322,43 @@ func (e *env) dockerDirs() []string {
 		}
 	}
 	return dirs
+}
+
+var (
+	// composeFile: the names Dependabot's docker-compose ecosystem reads at a directory (compose.yaml,
+	// compose.dev.yaml, docker-compose.override.yml).
+	composeFile = regexp.MustCompile(`^(?:docker-)?compose(?:[.-][\w.-]+)?\.ya?ml$`)
+	composeImg  = regexp.MustCompile(`(?m)^\s*image:\s*["']?([^\s"'#]+)`)
+)
+
+// composePins: a compose file at the root (tracked or untracked, not ignored) names an image by a version tag or a
+// digest. An untagged, ${VAR} or digit-free tag (latest, alpine, stable, lts) is not one Dependabot could bump.
+func (e *env) composePins() bool {
+	for f := range e.listed() {
+		if strings.Contains(f, "/") || !composeFile.MatchString(f) {
+			continue
+		}
+		b, err := e.read(f)
+		if err != nil {
+			continue
+		}
+		for _, m := range composeImg.FindAllSubmatch(b, -1) {
+			if strings.Contains(string(m[1]), "$") {
+				continue
+			}
+			ref, digest, _ := strings.Cut(string(m[1]), "@")
+			// A digest is a pin Dependabot moves, tag or not.
+			if strings.HasPrefix(digest, "sha256:") {
+				return true
+			}
+			// A version names a number (17-alpine, 2.29.1-pg17, 4.1.3-r0-ls360); a channel name does not.
+			if i := strings.LastIndexByte(ref, ':'); i > strings.LastIndexByte(ref, '/') &&
+				strings.ContainsAny(ref[i+1:], "0123456789") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // kitTags lists the kit/v* tags of ship on GitHub.

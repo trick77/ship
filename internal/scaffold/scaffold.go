@@ -57,6 +57,9 @@ type Facts struct {
 	Visibility string
 	// DockerDirs are the repo-absolute directories of the images' Containerfiles that exist.
 	DockerDirs []string
+	// Compose: a compose file at the root names an image by a version tag (a pinned third-party image), which only
+	// Dependabot's docker-compose ecosystem bumps.
+	Compose bool
 	// NodeVersion is the Node major the CI caller sets up for a UI: the Containerfile's node builder's, so CI and
 	// the image build alike; pins.NodeMin when there is none.
 	NodeVersion string
@@ -78,6 +81,7 @@ func (f File) Differs() bool { return f.Manual != "" || !bytes.Equal(f.Have, f.W
 
 type data struct {
 	Private, UI, Images, GoDirSet, UIDirSet    bool
+	Compose                                    bool
 	Branches, GoDir, GoDirAbs, UIDir, UIDirAbs string
 	DependabotOnly, NodeVersion, Packages      string
 	DockerDirs, GoModules                      []string
@@ -90,6 +94,7 @@ func Files(root string, c *config.Config, f Facts) ([]File, error) {
 		Private: f.Visibility == "private", Images: len(c.Images) > 0, UI: c.UI != nil,
 		Branches: "[" + c.Base + "]", GoDir: c.Go.Dir, GoDirSet: path.Clean(c.Go.Dir) != ".",
 		GoDirAbs: abs(c.Go.Dir), DependabotOnly: DependabotOnly, NodeVersion: f.NodeVersion, DockerDirs: f.DockerDirs,
+		Compose: f.Compose,
 	}
 	for _, m := range c.Go.Modules {
 		d.GoModules = append(d.GoModules, abs(m))

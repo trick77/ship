@@ -170,8 +170,8 @@ builder, `ship init` moves CI after it.
 |---|---|---|
 | `scaffold` | every owned file equals ship's template | per `path` |
 | `workflows` | ci/release/cleanup callers use `trick77/ship/.github/workflows/<x>.yaml@master`; release: `packages: write` ⇔ images, bump options include `auto`; no other image cleanup action | yes |
-| `visibility` | GitHub's visibility (Actions event, else the API unauthenticated, cached a day in the git dir) matches `visibility:`; a failed lookup: `visibility:` stands (a note), unset = FAIL; public: CI on every PR (no `if:`); private: Dependabot-only `if:`, every npm/docker update grouped, ≤ 5 open PRs, cleanup caller with images | yes |
-| `dependabot` | `commit-message: { prefix: deps }` everywhere; gomod, github-actions, npm (UI), docker (Containerfile) present | yes |
+| `visibility` | GitHub's visibility (Actions event, else the API unauthenticated, cached a day in the git dir) matches `visibility:`; a failed lookup: `visibility:` stands (a note), unset = FAIL; public: CI on every PR (no `if:`); private: Dependabot-only `if:`, every npm/docker/docker-compose update grouped, ≤ 5 open PRs, cleanup caller with images | yes |
+| `dependabot` | `commit-message: { prefix: deps }` everywhere; gomod, github-actions, npm (UI), docker (Containerfile), docker-compose `/` (a root `compose*.yaml` naming an image by a version tag) present | yes |
 | `containerfile` | per image: `ARG VERSION` into `-X github.com/trick77/ship/kit/version.Version=${VERSION}`, `-trimpath`, non-root final stage, builder `golang:X.Y` = go.mod's and ≥ ship's Go floor (1.27), builder `node:N` ≥ ship's Node floor (26) | per `image` |
 | `distroless` | final stage on `gcr.io/distroless/` | per `image` |
 | `dockerignore` | exists with images; excludes `<ui.dir>/node_modules` and `<ui.dir>/dist` | yes |
@@ -179,7 +179,7 @@ builder, `ship init` moves CI after it.
 | `golangci` | no `.golangci.yaml`/`.yml` in the repo: ship's config is the family's | per `path` |
 | `gomod` | `go x.y.z` ≥ 1.27.0 in go.dir and every go.modules module; a required `github.com/trick77/ship/kit` is the newest `kit/v*` tag | yes |
 | `kit` | a repo with images requires kit | yes |
-| `handrolled` | no `internal/version` package, health route strings, `signal.Notify`/`NotifyContext` outside tests: kit has them | per `path` |
+| `handrolled` | no `internal/version` package, health route strings, `signal.Notify`/`NotifyContext`, `github.com/coreos/go-oidc` import outside tests: kit (kit/auth) has them | per `path` |
 | `agents` | AGENTS.md has the commit-subject line | yes |
 
 An exception lives in `ship.yaml`, its why required (an entry without one fails the parse):
