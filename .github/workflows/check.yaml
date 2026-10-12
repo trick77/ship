@@ -1,6 +1,15 @@
 name: Check
 
-# Reusable: `ship check` on a GitHub runner, the same gate the pre-push hook runs locally. A caller's ci.yaml:
+# Reusable: `ship check` on a GitHub runner, the same gate the pre-push hook runs locally. A caller's ci.yaml, head
+# comment included. Private repo:
+#
+#   # Dependabot PRs only (Actions minutes): own pushes are gated by the pre-push hook, a bot PR has none.
+#   # By hand: gh workflow run CI --ref <branch>
+#
+# Public repo, this head comment instead and no `if:` (nor its comment) below:
+#
+#   # Every pull request, fork PRs included (read-only token, no secrets): Dependabot and outside contributors have
+#   # no pre-push hook. Own pushes are gated by the hook already. By hand: gh workflow run CI --ref <branch>
 #
 #   on:
 #     pull_request:
