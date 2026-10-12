@@ -4,6 +4,8 @@
 //
 //	ship check                     everything CI checks, locally
 //	ship lint                      golangci-lint alone, at the version check runs
+//	ship conform [-fix]            the repo against ship's canon
+//	ship init [-diff]              write the files ship owns
 //	ship hooks                     install the pre-push hook
 //	ship pre-push                  the hook's gate (git runs it)
 //	ship release [patch|minor|major|auto] [-cache gha] [-dry-run] [-dir kit]
@@ -16,6 +18,7 @@ import (
 
 	"github.com/trick77/ship/internal/check"
 	"github.com/trick77/ship/internal/config"
+	"github.com/trick77/ship/internal/conform"
 	"github.com/trick77/ship/internal/gitx"
 	"github.com/trick77/ship/internal/hook"
 	"github.com/trick77/ship/internal/release"
@@ -25,7 +28,9 @@ const usage = `usage: ship <command>
 
   check                                       run the gate: everything CI checks, locally
   lint                                        golangci-lint alone, at the version check runs
-  hooks                                       install the pre-push hook running the gate
+  conform [-fix]                              the repo against ship's canon (check's first step); -fix: init first
+  init [-diff]                                write the files ship owns; -diff: print, write nothing, exit 1 if any
+  hooks                                      install the pre-push hook running the gate
   pre-push                                    the hook's gate (git runs it)
   release [patch|minor|major|auto] [flags]    tag, build and push images, GitHub release; auto: patch, or what
                                               the commits since the last tag ask for (Release: minor|major)
@@ -73,6 +78,8 @@ func run(args []string) error {
 			return err
 		}
 		return check.Lint(root, c)
+	case "conform", "init":
+		return conformCmd(root, args[0], args[1:])
 	case "hooks":
 		p, err := hook.Install(root)
 		if err != nil {
@@ -113,6 +120,30 @@ func run(args []string) error {
 	}
 	fmt.Fprint(os.Stderr, usage)
 	return fmt.Errorf("unknown command %q", args[0])
+}
+
+// conformCmd runs `conform [-fix]` or `init [-diff]`.
+func conformCmd(root, name string, args []string) error {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fix := fs.Bool("fix", false, "write the files ship owns, then conform: what is left is by hand")
+	diff := fs.Bool("diff", false, "print what init would write, write nothing; exit 1 when anything differs")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() > 0 || name == "conform" && *diff || name == "init" && *fix {
+		return fmt.Errorf("%s: unexpected arguments %v", name, args)
+	}
+	c, err := config.Load(root)
+	if err != nil {
+		return err
+	}
+	switch {
+	case name == "init":
+		return conform.Init(root, c, conform.Options{}, *diff)
+	case *fix:
+		return conform.Fix(root, c, conform.Options{})
+	}
+	return conform.Run(root, c, conform.Options{})
 }
 
 // releaseOptions parses `release [bump] [flags] [bump]`: the bump may come before or after the flags (default

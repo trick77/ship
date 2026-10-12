@@ -41,13 +41,19 @@ func TestRun_whenNoShipYaml_thenCheckAndReleaseRefuse(t *testing.T) {
 	if out, err := gitInit(dir); err != nil {
 		t.Fatalf("%v %s", err, out)
 	}
-	for _, args := range [][]string{{"check"}, {"lint"}, {"release", "minor", "-dry-run"}} {
+	for _, args := range [][]string{{"check"}, {"lint"}, {"release", "minor", "-dry-run"}, {"conform"}, {"conform", "-fix"},
+		{"init"}, {"init", "-diff"}} {
 		if err := run(args); err == nil || !strings.Contains(err.Error(), "ship.yaml") {
 			t.Errorf("%v: %v", args, err)
 		}
 	}
 	if err := run([]string{"release", "-bogus"}); err == nil {
 		t.Error("bad flag accepted")
+	}
+	for _, args := range [][]string{{"conform", "-diff"}, {"init", "-fix"}, {"init", "x"}, {"conform", "-bogus"}} {
+		if err := run(args); err == nil || strings.Contains(err.Error(), "ship.yaml") {
+			t.Errorf("%v: %v", args, err)
+		}
 	}
 }
 

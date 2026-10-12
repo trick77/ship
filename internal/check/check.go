@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/trick77/ship/internal/config"
+	"github.com/trick77/ship/internal/conform"
 	"github.com/trick77/ship/internal/cover"
 	"github.com/trick77/ship/internal/gitx"
 	"github.com/trick77/ship/internal/pins"
@@ -43,6 +44,8 @@ func Run(root string, c *config.Config) error {
 		name string
 		fn   func() error
 	}{
+		// First: a drifted copy or a forgotten adoption step fails before anything slow runs.
+		{"conform", func() error { return conform.Run(root, c, conform.Options{}) }},
 		// ship's own git calls keep git's repo variables (a --git-dir/--work-tree repo needs them); only the
 		// tests and steps check runs lose them.
 		{"fetch origin/" + c.Base, func() error { return r.runGit(root, "fetch", "-q", "origin", c.Base) }},
