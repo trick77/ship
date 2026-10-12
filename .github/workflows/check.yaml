@@ -2,9 +2,16 @@ name: Check
 
 # Reusable: `ship check` on a GitHub runner, the same gate the pre-push hook runs locally. A caller's ci.yaml:
 #
-#   on: workflow_dispatch
+#   on:
+#     pull_request:
+#       branches: [master]
+#     workflow_dispatch:
+#   permissions:
+#     contents: read
 #   jobs:
 #     check:
+#       # Private repo only (Actions minutes): Dependabot PRs alone, own pushes are gated by the hook.
+#       if: github.event_name != 'pull_request' || github.event.pull_request.user.login == 'dependabot[bot]'
 #       uses: trick77/ship/.github/workflows/check.yaml@master
 #       with: { node-version: "22" }   # only with a UI
 on:
