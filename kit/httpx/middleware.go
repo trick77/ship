@@ -94,7 +94,8 @@ type AccessLogOptions struct {
 	NoRequestID bool
 	// ClientIP resolves the logged ip; nil means ClientIP(r, 0), the TCP peer.
 	ClientIP func(*http.Request) string
-	// Quiet paths are not logged while they succeed (probes, polled endpoints); a failing one still is.
+	// Quiet paths are never logged, whatever the status, and run no OnRecord: probes and polled endpoints, hit every
+	// few seconds. A 503 from /readyz is no news either: Health logs readiness when it changes.
 	Quiet []string
 	// Skip drops a request's line, and its OnRecord, when it returns true. Quiet is the common case of it.
 	Skip func(r *http.Request, status int) bool
@@ -161,7 +162,7 @@ func AccessLog(log *slog.Logger, opts AccessLogOptions) func(http.Handler) http.
 				if status == 0 {
 					status = http.StatusOK
 				}
-				if (quiet[r.URL.Path] && status < 400) || (opts.Skip != nil && opts.Skip(r, status)) {
+				if quiet[r.URL.Path] || (opts.Skip != nil && opts.Skip(r, status)) {
 					return
 				}
 				lvl := routine.Level() // per request: a *slog.LevelVar may change at runtime
