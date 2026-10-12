@@ -198,7 +198,7 @@ func (e *env) viteConfig() []finding {
 }
 
 // testSetup: setup.ts is the repo's (stubs jsdom lacks go there), its first statement is ship's. A leading comment
-// is no statement.
+// (line or block) is no statement.
 func (e *env) testSetup() []finding {
 	f := e.uiPath("src/test/setup.ts")
 	b, err := e.read(f)
@@ -208,15 +208,21 @@ func (e *env) testSetup() []finding {
 	case b == nil:
 		return []finding{{what: "missing (first statement " + SetupImport + ")", file: f}}
 	}
-	for _, l := range strings.Split(string(b), "\n") {
-		l = strings.TrimSpace(l)
-		if l == "" || strings.HasPrefix(l, "//") {
+	s := string(b)
+	for {
+		s = strings.TrimSpace(s)
+		switch {
+		case strings.HasPrefix(s, "//"):
+			_, s, _ = strings.Cut(s, "\n")
+			continue
+		case strings.HasPrefix(s, "/*"):
+			_, s, _ = strings.Cut(s[2:], "*/")
 			continue
 		}
-		if l == SetupImport {
-			return nil
-		}
 		break
+	}
+	if first, _, _ := strings.Cut(s, "\n"); strings.TrimSpace(first) == SetupImport {
+		return nil
 	}
 	return []finding{{what: "first statement is not " + SetupImport, file: f}}
 }

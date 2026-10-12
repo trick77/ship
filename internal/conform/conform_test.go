@@ -583,6 +583,19 @@ func TestRun_whenVisibilityUnknown_thenScaffoldAndVisibilityFail(t *testing.T) {
 	}
 }
 
+func TestRun_whenSetupHasBlockComment_thenSkipped(t *testing.T) {
+	r := app(t)
+	r.write("ui/src/test/setup.ts", "/**\n * License header.\n */\n// and a line\n/* one */ "+appSetup)
+	if out, err := r.run(appShip); err != nil || !strings.Contains(out, "ok ui\n") {
+		t.Errorf("block comment: %v\n%s", err, out)
+	}
+	// The import inside the comment is no statement.
+	r.write("ui/src/test/setup.ts", "/*\nimport \"@testing-library/jest-dom/vitest\";\n*/\nimport { vi } from \"vitest\";\n")
+	if out, _ := r.run(appShip); !strings.Contains(out, "FAIL ui: first statement is not") {
+		t.Errorf("commented import:\n%s", out)
+	}
+}
+
 func TestRun_whenRateLimited_thenDeclaredVisibilityStands(t *testing.T) {
 	status := http.StatusForbidden
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(status) }))
