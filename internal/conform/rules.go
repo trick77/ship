@@ -224,7 +224,13 @@ func (e *env) gomod() result {
 
 // latestKit is the newest kit/v* tag as a module version, "" when there is none.
 func (e *env) latestKit() (string, error) {
-	tags, err := e.o.KitTags()
+	if e.kitTags == nil && e.kitErr == nil {
+		e.kitTags, e.kitErr = e.o.KitTags() // once per run: gomod and kit both ask
+		if e.kitTags == nil {
+			e.kitTags = []string{}
+		}
+	}
+	tags, err := e.kitTags, e.kitErr
 	if err != nil {
 		return "", err
 	}
@@ -269,10 +275,17 @@ func (e *env) kit() result {
 	if err != nil || m == nil {
 		return result{} // reported by gomod
 	}
-	if m.kit == "" {
-		return result{findings: []finding{{what: "a service (images) requires " + KitModule, file: e.goPath("go.mod")}}}
+	if m.kit != "" {
+		return result{}
 	}
-	return result{}
+	// Before kit's first tag there is nothing to require.
+	switch latest, err := e.latestKit(); {
+	case err != nil:
+		return result{findings: []finding{{what: err.Error(), file: e.goPath("go.mod")}}}
+	case latest == "":
+		return result{note: "no kit/v* tag yet"}
+	}
+	return result{findings: []finding{{what: "a service (images) requires " + KitModule, file: e.goPath("go.mod")}}}
 }
 
 // The hand-rolled code kit replaces. Built from parts: ship's own source must not match its own rule.

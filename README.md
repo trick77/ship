@@ -50,6 +50,9 @@ steps:                # repo-specific checks, run after lint
   - { name: openapi lint, run: npx spectral lint api.yaml }
 images:               # release builds these; none = tag + GitHub release only
   - { suffix: "", target: "", containerfile: Containerfile, platforms: [linux/amd64] }
+visibility: private   # conform checks it against GitHub's; unset = GitHub's
+allow:                # conform exceptions, why required (see Conform)
+  - { rule: distroless, image: -agent, why: smartctl needs root }
 ```
 
 A platform other than amd64 builds under QEMU on the amd64 runner: every `RUN` in its stages is emulated, several

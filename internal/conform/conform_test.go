@@ -379,6 +379,20 @@ func TestRun_whenKitTagsAbsentOrUnreachable_thenNoteOrFail(t *testing.T) {
 	if out, err := r.run(appShip); err == nil || !strings.Contains(out, "FAIL gomod: ls-remote: offline (backend/go.mod)") {
 		t.Errorf("offline: %v\n%s", err, out)
 	}
+	// A service without kit: nothing to require before kit's first tag.
+	r.edit("backend/go.mod", "github.com/trick77/ship/kit", "example.com/other")
+	calls := 0
+	r.opts.KitTags = func() ([]string, error) { calls++; return nil, nil }
+	if out, err := r.run(appShip); err != nil || !strings.Contains(out, "ok kit: no kit/v* tag yet\n") {
+		t.Errorf("no tags, no kit: %v\n%s", err, out)
+	}
+	r.opts.KitTags = func() ([]string, error) { calls++; return nil, errors.New("ls-remote: offline") }
+	if out, err := r.run(appShip); err == nil || !strings.Contains(out, "FAIL kit: ls-remote: offline (backend/go.mod)") {
+		t.Errorf("offline, no kit: %v\n%s", err, out)
+	}
+	if calls != 2 {
+		t.Errorf("%d ls-remotes, want one per run", calls)
+	}
 }
 
 func TestVisibility_whenAPI_thenAnsweredAndCached(t *testing.T) {

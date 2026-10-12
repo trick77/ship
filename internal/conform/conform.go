@@ -123,6 +123,9 @@ type env struct {
 	visErr error
 	files  []scaffold.File
 	git    map[string]bool
+	// kitTags, kitErr: KitTags' answer, asked once.
+	kitTags []string
+	kitErr  error
 	// renderErr: the owned files could not be rendered at all.
 	renderErr error
 }
