@@ -427,6 +427,15 @@ func TestSecurityHeadersWith(t *testing.T) {
 			_, _ = w.Write([]byte("plain words"))
 		case "/untyped":
 			w.WriteHeader(http.StatusTeapot)
+		case "/icon.svg":
+			w.Header().Set("Content-Type", "image/svg+xml")
+			_, _ = w.Write([]byte("<svg/>"))
+		case "/page.xhtml":
+			w.Header().Set("Content-Type", "Application/XHTML+XML; charset=utf-8")
+			_, _ = w.Write([]byte("<html/>"))
+		case "/photo.png":
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write([]byte("png"))
 		default:
 			WriteJSON(w, http.StatusOK, map[string]string{})
 		}
@@ -456,7 +465,9 @@ func TestSecurityHeadersWith(t *testing.T) {
 		t.Errorf("probe X-Robots-Tag = %q", got)
 	}
 	// No Content-Type set: the sniffed type decides, and with nothing to sniff the page default holds.
-	for p, html := range map[string]bool{"/sniffed": true, "/sniffed-text": false, "/untyped": true} {
+	// SVG and XHTML run script like HTML; a raster image does not.
+	for p, html := range map[string]bool{"/sniffed": true, "/sniffed-text": false, "/untyped": true,
+		"/icon.svg": true, "/page.xhtml": true, "/photo.png": false} {
 		if got := get(p).Get("Content-Security-Policy") != ""; got != html {
 			t.Errorf("%s: CSP sent %v, want %v", p, got, html)
 		}

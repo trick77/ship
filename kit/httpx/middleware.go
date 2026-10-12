@@ -238,9 +238,10 @@ func SecurityHeaders(csp string) func(http.Handler) http.Handler {
 type SecurityOptions struct {
 	// CSP is the Content-Security-Policy, "" means DefaultCSP.
 	CSP string
-	// HTMLOnly sends CSP, X-Frame-Options and COOP only on text/html responses, judged by the Content-Type the
-	// handler set, else the one net/http sniffs from the first write; a header sent with no type and no body yet
-	// counts as HTML. A JSON or image answer renders nothing a policy could restrict.
+	// HTMLOnly sends CSP, X-Frame-Options and COOP only on active content: text/html, application/xhtml+xml and
+	// image/svg+xml (an SVG opened directly runs its script). The type is the Content-Type the handler set, else the
+	// one net/http sniffs from the first write; a header sent with no type and no body yet counts as HTML. JSON or
+	// a raster image renders nothing a policy could restrict.
 	HTMLOnly bool
 	// COOP is the Cross-Origin-Opener-Policy ("same-origin"), none when empty.
 	COOP string
@@ -303,12 +304,22 @@ func SecurityHeadersWith(o SecurityOptions) func(http.Handler) http.Handler {
 					html(h)
 					return
 				}
-				if strings.Contains(ct, "text/html") {
+				if active(ct) {
 					html(h)
 				}
 			}}, r)
 		})
 	}
+}
+
+// active reports whether a browser runs script in a document of this type: HTML, XHTML and SVG opened directly.
+func active(contentType string) bool {
+	mt, _, _ := strings.Cut(contentType, ";")
+	switch strings.ToLower(strings.TrimSpace(mt)) {
+	case "text/html", "application/xhtml+xml", "image/svg+xml":
+		return true
+	}
+	return false
 }
 
 // headerHook runs hook once, just before the header is sent, with the first write's bytes when a write sends it.
