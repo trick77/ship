@@ -66,7 +66,7 @@ coverage output.
 | `ship check` | fetch, commit subjects, secret scan, prettier pin, ui embed, ui build, gofmt, go mod verify, go mod tidy, build, govulncheck, golangci-lint (incl. govet), ui lint, shellcheck, steps, postgres, go test (-race, coverage), ui test, floors, patch gate |
 | `ship lint` | golangci-lint alone, at the version `ship check` runs: a Makefile's quick lint, no version of its own |
 | `ship hooks` | install the pre-push hook (respects core.hooksPath, never overwrites a foreign hook) |
-| `ship release [patch\|minor\|major\|auto] [-cache gha] [-dry-run]` | next version from tags, notes from the subjects since the last tag (grouped by area), images pushed (version + sha), tag (API), GitHub release, then :MAJOR.MINOR, :MAJOR, :latest. No `images:` and no `ui:`: `go build ./...` before the tag (in `-dry-run` too). With `images:` only on a GitHub-hosted runner (the Release workflow); elsewhere `-dry-run` only. The Release workflow inherits the caller's permissions: `packages: write` only with `images:` |
+| `ship release [patch\|minor\|major\|auto] [-cache gha] [-dry-run] [-dir <module>]` | next version from tags, notes from the subjects since the last tag (grouped by area), tag (API), images pushed (version + sha), scanned and signed, GitHub release, then :MAJOR.MINOR, :MAJOR, :latest. No `images:` and no `ui:`: `go build ./...` before the tag (in `-dry-run` too). With `images:` only on a GitHub-hosted runner (the Release workflow); elsewhere `-dry-run` only. The Release workflow inherits the caller's permissions: `packages: write` and `id-token: write` only with `images:`. `-dir`: a nested Go module, below |
 
 Gates beyond the build and tests, all hard failures:
 
@@ -101,6 +101,20 @@ too). The gate checks these lines on the branch: a typo fails the push, never a 
 newer push's run releases both. No previous tag: refused, the first one is cut by hand. ship releases itself this
 way from CI on every master push.
 
+Images: OCI labels (`org.opencontainers.image.version`, `.revision` = HEAD, `.source`, `.created` = HEAD's commit
+time, so a rebuild labels the same), an SBOM and `mode=max` provenance as attestations. After the push, trivy (pinned,
+`internal/pins`) scans each image by digest: a HIGH or CRITICAL with a fix available fails the release and gives the
+tag back (the pushed version + sha tags stay until the rerun overwrites them; the moving ones never move). Then
+cosign signs each digest keyless, with the workflow's OIDC token: the caller grants `id-token: write` along with
+`packages: write`. Verify: `cosign verify --certificate-identity-regexp 'https://github.com/<owner>/<repo>/' --certificate-oidc-issuer https://token.actions.githubusercontent.com ghcr.io/<owner>/<repo>:<version>`.
+
+Nested Go modules (`-dir kit`; the Release workflow's `dir` input): tags `<dir>/vX.Y.Z` (`tag_prefix: v` required),
+`go build` in the dir, notes and `Release:` lines from the commits touching it, `release auto` counts only its
+changes, never those of a module nested below it (kit's release ignores `kit/auth/`); the root's release ignores
+its nested modules too, unless it has `images:` (a build context may copy them). No images, not the repo's
+"Latest" release. No go.mod in the dir: auto skips (CI can list a module before it merges). No previous tag: auto
+cuts 0.1.0, nothing to confuse a nested module's prefix with. ship's CI releases `kit` and `kit/auth` this way.
+
 Patch gate: changed lines (committed, staged, unstaged, untracked) against the merge-base with origin/<base>,
 intersected with the coverage reports; comment and blank lines never count. `[skip patch-coverage]` in a commit
 message skips it (floors still apply). A report path that names no file of the repo, exactly spelled, fails the
@@ -120,7 +134,7 @@ jobs:
   check:
     uses: trick77/ship/.github/workflows/check.yaml@master      # inputs: go-dir, node-version, ui-dir, postgres
   release:
-    uses: trick77/ship/.github/workflows/release.yaml@master    # inputs: bump, go-dir
+    uses: trick77/ship/.github/workflows/release.yaml@master    # inputs: bump, go-dir, dir
   cleanup:
     uses: trick77/ship/.github/workflows/cleanup-images.yaml@master   # inputs: packages (JSON), keep, dry-run
 ```
