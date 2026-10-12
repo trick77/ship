@@ -34,7 +34,7 @@ RUN CGO_ENABLED=0 go build -trimpath \
       -ldflags="-s -w -X github.com/trick77/ship/kit/version.Version=${VERSION}" \
       -o /out/app ./cmd/app
 
-FROM gcr.io/distroless/static-debian13 AS core-ui
+FROM gcr.io/distroless/static-debian13:debug-nonroot AS core-ui
 COPY --from=build /out/app /app
 USER 65532:65532
 
@@ -317,6 +317,14 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 			`FAIL containerfile: image "-ui": no ARG VERSION`, `FAIL containerfile: image "-ui": go build ldflags lack -X`,
 			`FAIL containerfile: image "-ui": go build without -trimpath`,
 			`FAIL containerfile: image "-ui": builder golang:1.26`}},
+		// Untagged is a floating :latest; scratch, a stage and an ARG's base are not refs to pin.
+		{"containerfile untagged base", appShip, func(r *repo) {
+			r.edit("Containerfile", "static-debian13:debug-nonroot AS core-ui", "static-debian13 AS core-ui")
+			r.edit("Containerfile", "FROM node:26-alpine AS ui", "FROM scratch AS empty\nARG BASE=x\nFROM ${BASE} AS arg\n"+
+				"FROM empty AS again\nFROM node:26-alpine AS ui")
+			r.edit("Containerfile", "COPY --from=ui /ui/dist ./web/dist",
+				"COPY --from=ui /ui/dist ./web/dist\nCOPY --from=arg / /\nCOPY --from=again / /")
+		}, []string{`FAIL containerfile: image "-ui": base gcr.io/distroless/static-debian13 has no tag or digest`}},
 		{"containerfile no build", appShip, func(r *repo) { r.write("Containerfile", "FROM gcr.io/distroless/static:nonroot\n") },
 			[]string{`FAIL containerfile: image "": no RUN go build`, `FAIL containerfile: image "-ui": no stage "core-ui"`}},
 		// A global ARG reaches no stage that does not redeclare it: ${VERSION} would build empty.
@@ -527,7 +535,7 @@ func TestPostgres_whenComposeOrAllowed_thenOK(t *testing.T) {
 func TestRun_whenAllowed_thenWhyPrinted(t *testing.T) {
 	r := app(t)
 	r.edit("Containerfile", "USER 65532:65532", "USER 0")
-	r.edit("Containerfile", "FROM gcr.io/distroless/static-debian13 AS core-ui", "FROM alpine:3.24 AS core-ui")
+	r.edit("Containerfile", "FROM gcr.io/distroless/static-debian13:debug-nonroot AS core-ui", "FROM alpine:3.24 AS core-ui")
 	r.write("backend/.golangci.yaml", "")
 	r.edit(scaffold.CI, "cancel-in-progress: true", "cancel-in-progress: false")
 	ship := appShip + "allow:\n" +
