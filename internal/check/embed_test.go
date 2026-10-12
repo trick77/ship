@@ -8,38 +8,7 @@ import (
 
 	"github.com/trick77/ship/internal/config"
 	"github.com/trick77/ship/internal/gitx"
-	"github.com/trick77/ship/internal/pins"
 )
-
-func TestPrettier(t *testing.T) {
-	dir, c := fixture(t, "ui: {}\n", "mode: set\n", "")
-	r := runner{root: dir, c: c}
-	pkg := filepath.Join(dir, "ui", "package.json")
-	for body, want := range map[string]string{
-		`{"devDependencies": {"prettier": "` + pins.Prettier + `"}}`:  "",
-		`{"devDependencies": {"prettier": "^` + pins.Prettier + `"}}`: "prettier ^" + pins.Prettier + ", ship pins " + pins.Prettier,
-		`{"dependencies": {}}`: "prettier (none), ship pins",
-		`{`:                    "package.json",
-	} {
-		if err := os.WriteFile(pkg, []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		err := r.prettier()
-		if want == "" && err != nil || want != "" && (err == nil || !strings.Contains(err.Error(), want)) {
-			t.Errorf("%s: err = %v", body, err)
-		}
-	}
-	if err := os.Remove(pkg); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.prettier(); err == nil {
-		t.Fatal("missing package.json passed")
-	}
-	r.c.UI = nil
-	if err := r.prettier(); err != nil {
-		t.Fatal(err)
-	}
-}
 
 func TestCleanEmbed(t *testing.T) {
 	dir, c := fixture(t, "ui:\n  embed: web/dist\n", "mode: set\n", "")

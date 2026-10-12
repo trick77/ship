@@ -6,9 +6,6 @@ const (
 	Golangci = "v2.14.0"
 	// Govulncheck is the govulncheck version check runs, built by go run.
 	Govulncheck = "v1.9.0"
-	// Prettier is the exact devDependencies.prettier a UI's package.json must pin: one formatter version, one
-	// formatting, in every repo.
-	Prettier = "3.9.9"
 	// Trivy is the ghcr.io/aquasecurity/trivy image tag release scans pushed images with.
 	Trivy = "0.75.0"
 	// Cosign is the cosign release the Release workflow installs (cosign-installer's cosign-release); a test keeps

@@ -16,7 +16,7 @@ deliberately.
 - Dependencies stay minimal (stdlib + yaml): `go run ...@master` builds them on every machine. `go 1.24` floor.
 - golangci-lint runs via `go run ...@<ship.yaml lint>`, never the action's release binary (built with an older Go
   than consumers' go.mod: v2.14.0 binary = go1.27.0).
-- Tool versions ship runs or demands (golangci-lint default, govulncheck, prettier, trivy, cosign) live in
+- Tool versions ship runs or demands (golangci-lint default, govulncheck, trivy, cosign) live in
   `internal/pins`, nowhere else (cosign also in release.yaml's installer, a test keeps them equal).
   npm versions never: Dependabot moves them per repo, an equality pin turns every bump PR red. conform wants the
   UI tools present at an exact version (save-exact), typescript < 7 (typescript-eslint).

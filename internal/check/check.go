@@ -53,7 +53,6 @@ func Run(root string, c *config.Config) error {
 		{"fetch origin/" + c.Base, func() error { return r.runGit(root, "fetch", "-q", "origin", c.Base) }},
 		{"commit subjects", r.subjects},
 		{"secret scan", r.secrets},
-		{"prettier pin", r.prettier},
 		{"ui embed", r.cleanEmbed},
 		{"ui build", r.uiBuild},
 		{"go modules", r.goModules},

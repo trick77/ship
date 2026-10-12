@@ -1,7 +1,6 @@
 package check
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -10,38 +9,7 @@ import (
 	"slices"
 
 	"github.com/trick77/ship/internal/gitx"
-	"github.com/trick77/ship/internal/pins"
 )
-
-// prettier checks that the UI pins prettier at ship's version exactly: a caret range lets two clones format the
-// same file two ways, and every repo formats alike.
-func (r runner) prettier() error {
-	if r.c.UI == nil {
-		fmt.Println("(no ui)")
-		return nil
-	}
-	p := filepath.Join(r.root, r.c.UI.Dir, "package.json")
-	b, err := os.ReadFile(p) //nolint:gosec // the repo's own package.json
-	if err != nil {
-		return err
-	}
-	var pkg struct {
-		DevDependencies map[string]string `json:"devDependencies"`
-	}
-	if err := json.Unmarshal(b, &pkg); err != nil {
-		return fmt.Errorf("%s: %w", p, err)
-	}
-	v, ok := pkg.DevDependencies["prettier"]
-	if !ok {
-		v = "(none)"
-	}
-	if v != pins.Prettier {
-		return fmt.Errorf("prettier %s, ship pins %s: devDependencies.prettier in %s/package.json must be exactly %s",
-			v, pins.Prettier, r.c.UI.Dir, pins.Prettier)
-	}
-	fmt.Println("ship: prettier", v)
-	return nil
-}
 
 // cleanEmbed empties ui.embed but for .gitkeep (which keeps the dir, and go:embed's pattern, in a fresh clone):
 // a file an older build left there would otherwise ship in the binary. Refused: a dir outside the repo (symlinks

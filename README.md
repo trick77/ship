@@ -73,7 +73,7 @@ coverage output.
 
 | | |
 |---|---|
-| `ship check` | conform, fetch, commit subjects, secret scan, prettier pin, ui embed, ui build, go modules, gofmt, go mod verify, go mod tidy, build, govulncheck, golangci-lint (incl. govet), ui lint, shellcheck, steps, postgres, go test (-race, coverage), ui test, floors, patch gate |
+| `ship check` | conform, fetch, commit subjects, secret scan, ui embed, ui build, go modules, gofmt, go mod verify, go mod tidy, build, govulncheck, golangci-lint (incl. govet), ui lint, shellcheck, steps, postgres, go test (-race, coverage), ui test, floors, patch gate |
 | `ship conform [-fix]` / `ship init [-diff]` | the repo against ship's canon / write the files ship owns (see Conform) |
 | `ship lint` | golangci-lint alone, at the version `ship check` runs: a Makefile's quick lint, no version of its own |
 | `ship hooks` | install the pre-push hook (respects core.hooksPath, never overwrites a foreign hook) |
@@ -89,7 +89,6 @@ Gates beyond the build and tests, all hard failures:
   (`sk-`, `tp-`, GitHub tokens, AWS key ids) and `.env` files. A fixture line carrying `ship:allow-secret` passes.
 - shellcheck -x on `*.sh`, sh/bash shebang files and `shell:`; needs `shellcheck` on PATH (GitHub's ubuntu runners
   have it).
-- Prettier pin: with a UI, `devDependencies.prettier` in `<ui.dir>/package.json` is exactly ship's pin (3.9.9).
 - `postgres:`: `SHIP_TEST_DSN` set already (a server of one's own) is used as is; else check starts the container
   (docker, loopback, free port), waits for it and removes it after go test, on failure and on Ctrl-C too.
 
