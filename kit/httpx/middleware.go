@@ -71,7 +71,7 @@ func (w *statusWriter) FlushError() error {
 	return http.NewResponseController(w.ResponseWriter).Flush()
 }
 
-// Flush serves the http.Flusher assertion SSE handlers make (relume-tv, netra).
+// Flush serves the http.Flusher assertion an SSE handler makes behind the access log.
 func (w *statusWriter) Flush() { _ = w.FlushError() }
 
 // Hijack serves the http.Hijacker assertion (websockets).
