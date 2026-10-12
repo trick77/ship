@@ -91,8 +91,8 @@ func (e *env) workflows() result {
 	return result{findings: fs}
 }
 
-// releaseCaller: packages: write exactly when ship.yaml has images (the release job inherits the caller's grant),
-// and auto among the bumps.
+// releaseCaller: packages: write and id-token: write exactly when ship.yaml has images (the release job inherits
+// the caller's grant), and auto among the bumps.
 func (e *env) releaseCaller(w *workflow, j job) []finding {
 	var fs []finding
 	perms, _ := j.Permissions.(map[string]any)
@@ -103,6 +103,14 @@ func (e *env) releaseCaller(w *workflow, j job) []finding {
 			file: scaffold.Release})
 	case !images && pkgs:
 		fs = append(fs, finding{what: "packages: write without images in ship.yaml: drop it", file: scaffold.Release})
+	}
+	// cosign signs keyless with the job's OIDC token: without it every image release fails after the push.
+	switch oidc := perms["id-token"] == "write"; {
+	case images && !oidc:
+		fs = append(fs, finding{what: "ship.yaml has images: the release job needs permissions id-token: write (cosign)",
+			file: scaffold.Release})
+	case !images && oidc:
+		fs = append(fs, finding{what: "id-token: write without images in ship.yaml: drop it", file: scaffold.Release})
 	}
 	var on struct {
 		WorkflowDispatch struct {

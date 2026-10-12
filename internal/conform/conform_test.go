@@ -250,6 +250,13 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 			r.edit(scaffold.Release, ", auto]", "]")
 		}, []string{"FAIL workflows: ship.yaml has images: the release job needs permissions packages: write",
 			"FAIL workflows: workflow_dispatch bump options lack auto"}},
+		// An allowed scaffold diff still needs the grant cosign signs with.
+		{"release without id-token", appShip + "allow:\n  - { rule: scaffold, path: .github/workflows/release.yaml, why: own }\n",
+			func(r *repo) { r.edit(scaffold.Release, "      id-token: write\n", "") },
+			[]string{"FAIL workflows: ship.yaml has images: the release job needs permissions id-token: write (cosign)"}},
+		{"release id-token without images", "go:\n  dir: backend\nui:\n  lint: npm run lint\n", func(*repo) {},
+			[]string{"FAIL workflows: id-token: write without images in ship.yaml: drop it",
+				"FAIL workflows: packages: write without images in ship.yaml: drop it"}},
 		{"foreign cleanup", appShip, func(r *repo) {
 			r.write(".github/workflows/prune.yml", "on: push\njobs:\n  x:\n    steps:\n      - uses: dataaxiom/ghcr-cleanup-action@v1\n")
 		}, []string{"FAIL workflows: image cleanup by dataaxiom/ghcr-cleanup-action: use the cleanup-images caller (.github/workflows/prune.yml)"}},
