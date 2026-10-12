@@ -203,6 +203,21 @@ func TestModVerify(t *testing.T) {
 	}
 }
 
+func TestModTidy(t *testing.T) {
+	dir, c := fixture(t, "", "mode: set\n", "")
+	r := runner{root: dir, c: c}
+	if err := r.modTidy(); err != nil {
+		t.Fatal(err)
+	}
+	// A requirement nothing imports: tidy would drop it.
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/m\n\ngo 1.24\n\nrequire golang.org/x/mod v0.20.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.modTidy(); err == nil || !strings.Contains(err.Error(), "run go mod tidy") {
+		t.Fatalf("untidy go.mod passed: %v", err)
+	}
+}
+
 func TestIgnoredByGo(t *testing.T) {
 	for p, want := range map[string]bool{
 		"a.go":                     false,

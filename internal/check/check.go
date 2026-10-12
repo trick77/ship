@@ -44,6 +44,7 @@ func Run(root string, c *config.Config) error {
 		{"ui build", r.uiBuild},
 		{"gofmt", r.gofmt},
 		{"go mod verify", r.modVerify},
+		{"go mod tidy", r.modTidy},
 		{"go build", func() error { return r.goCmd("build", "./...") }},
 		{"golangci-lint " + c.Lint, r.lint},
 		{"ui lint", r.uiLint},
@@ -228,6 +229,15 @@ func ignoredByGo(path string) bool {
 // modVerify checks the module cache against go.sum: a dependency changed on disk after its download (a restored CI
 // cache, a hand edit) never reaches the build.
 func (r runner) modVerify() error { return r.goCmd("mod", "verify") }
+
+// modTidy fails on a go.mod or go.sum that go mod tidy would change: a missing or stale requirement builds here
+// from the module cache and breaks the next clean build. -diff (go 1.23+) prints the change, writes nothing.
+func (r runner) modTidy() error {
+	if err := r.goCmd("mod", "tidy", "-diff"); err != nil {
+		return fmt.Errorf("%w: go.mod/go.sum not tidy, run go mod tidy in %s", err, r.c.Go.Dir)
+	}
+	return nil
+}
 
 func (r runner) lint() error {
 	return r.goCmd("run", "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@"+r.c.Lint, "run")
