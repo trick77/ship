@@ -74,7 +74,8 @@ func TestRun_whenDryRun_thenTagImagesReleaseMovingTags(t *testing.T) {
 	t.Setenv("GITHUB_REPOSITORY", "Owner/Repo")
 	// Off a GitHub-hosted runner: a dry run with images is allowed anywhere.
 	t.Setenv("RUNNER_ENVIRONMENT", "")
-	c, err := config.Parse([]byte("images:\n  - {}\n  - suffix: -dashboard\n    target: dashboard\n"))
+	c, err := config.Parse([]byte("images:\n  - {}\n  - suffix: -dashboard\n    target: dashboard\n" +
+		"    platforms: [linux/amd64, linux/arm64]\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +97,11 @@ func TestRun_whenDryRun_thenTagImagesReleaseMovingTags(t *testing.T) {
 		"--sbom=true --provenance=mode=max --metadata-file ",
 		"--label org.opencontainers.image.version=1.5.0 --label org.opencontainers.image.revision=",
 		"--label org.opencontainers.image.source=https://github.com/Owner/Repo --label org.opencontainers.image.created=",
-		" ghcr.io/aquasecurity/trivy:" + pins.Trivy + " image --scanners vuln --no-progress --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed ghcr.io/owner/repo-dashboard@<digest>",
+		" ghcr.io/aquasecurity/trivy:" + pins.Trivy + " image --scanners vuln --no-progress --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed --platform linux/amd64 ghcr.io/owner/repo-dashboard@<digest>",
+		"--platform linux/amd64,linux/arm64",
+		// Every platform of an index scanned, not only the one trivy picks.
+		"--ignore-unfixed --platform linux/amd64 ghcr.io/owner/repo@<digest>",
+		"--ignore-unfixed --platform linux/arm64 ghcr.io/owner/repo-dashboard@<digest>",
 		"+ cosign sign --yes ghcr.io/owner/repo@<digest>",
 		"+ cosign sign --yes ghcr.io/owner/repo-dashboard@<digest>",
 	} {
@@ -313,7 +318,7 @@ func TestRun_whenAllSucceeds_thenScannedSignedNoDelete(t *testing.T) {
 		t.Fatalf("calls:\n%s", calls)
 	}
 	// Both scans before the first signature, the signatures before the release.
-	scan2, sign1 := strings.Index(calls, "image --scanners vuln --no-progress --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed ghcr.io/o/r-x@sha256:feed"),
+	scan2, sign1 := strings.Index(calls, "image --scanners vuln --no-progress --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed --platform linux/amd64 ghcr.io/o/r-x@sha256:feed"),
 		strings.Index(calls, "cosign sign --yes ghcr.io/o/r@sha256:feed")
 	sign2, rel := strings.Index(calls, "cosign sign --yes ghcr.io/o/r-x@sha256:feed"), strings.Index(calls, "gh release create")
 	if scan2 < 0 || sign1 < scan2 || sign2 < sign1 || rel < sign2 {

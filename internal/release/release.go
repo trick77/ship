@@ -241,7 +241,8 @@ func Run(root string, c *config.Config, o Options) error {
 	}
 
 	var images, names, refs, labels []string
-	var meta string // buildx metadata files, outside the tree
+	var platforms [][]string // per ref: the platforms its index holds
+	var meta string          // buildx metadata files, outside the tree
 	if len(c.Images) > 0 {
 		if labels, err = ociLabels(root, head, repo, next); err != nil {
 			return unclaim(err)
@@ -285,14 +286,17 @@ func Run(root string, c *config.Config, o Options) error {
 			return unclaim(err)
 		}
 		images = append(images, fmt.Sprintf("`%s:%s`", name, next))
-		names, refs = append(names, name), append(refs, ref)
+		names, refs, platforms = append(names, name), append(refs, ref), append(platforms, im.Platforms)
 	}
 	// Every image scanned before any is signed: a signature vouches for a version that is released. A failed scan
 	// or signature gives the number back; the pushed fixed tags stay until the rerun overwrites them, the moving
-	// ones never point there.
-	for _, ref := range refs {
-		if err := run(root, o.DryRun, "docker", trivyArgs(ref)...); err != nil {
-			return unclaim(fmt.Errorf("trivy %s (HIGH/CRITICAL with a fix: bump the base image or dependency): %w", ref, err))
+	// ones never point there. trivy scans one platform of an index: every one built is scanned.
+	for i, ref := range refs {
+		for _, p := range platforms[i] {
+			if err := run(root, o.DryRun, "docker", trivyArgs(ref, p)...); err != nil {
+				return unclaim(fmt.Errorf("trivy %s %s (HIGH/CRITICAL with a fix: bump the base image or dependency): %w",
+					ref, p, err))
+			}
 		}
 	}
 	// Keyless: cosign takes the workflow's OIDC token (id-token: write) and pushes the signature next to the image.
