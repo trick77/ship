@@ -57,6 +57,12 @@ func Run(root string, c *config.Config) error {
 	return nil
 }
 
+// Lint runs golangci-lint alone, at the version check runs: a repo's quick lint while editing, with no version of
+// its own to keep in step.
+func Lint(root string, c *config.Config) error {
+	return runner{root: root, c: c}.lint()
+}
+
 type runner struct {
 	root string
 	c    *config.Config

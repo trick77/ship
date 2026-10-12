@@ -182,6 +182,13 @@ func TestGofmtAndSteps(t *testing.T) {
 	}
 }
 
+func TestLint_whenVersionDoesNotExist_thenFails(t *testing.T) {
+	dir, c := fixture(t, "lint: v0.0.0-ship-test\n", "mode: set\n", "")
+	if err := Lint(dir, c); err == nil {
+		t.Fatal("lint at a version that does not exist passed")
+	}
+}
+
 func TestIgnoredByGo(t *testing.T) {
 	for p, want := range map[string]bool{
 		"a.go":                     false,

@@ -40,7 +40,7 @@ func TestRun_whenNoShipYaml_thenCheckAndReleaseRefuse(t *testing.T) {
 	if out, err := gitInit(dir); err != nil {
 		t.Fatalf("%v %s", err, out)
 	}
-	for _, args := range [][]string{{"check"}, {"release", "minor", "-dry-run"}} {
+	for _, args := range [][]string{{"check"}, {"lint"}, {"release", "minor", "-dry-run"}} {
 		if err := run(args); err == nil || !strings.Contains(err.Error(), "ship.yaml") {
 			t.Errorf("%v: %v", args, err)
 		}
