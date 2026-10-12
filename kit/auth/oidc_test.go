@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -209,9 +210,17 @@ func TestOIDCFailures(t *testing.T) {
 					}
 				}
 			}
-			_, err := o.Callback(httptest.NewRecorder(), req)
+			c, err := o.Callback(httptest.NewRecorder(), req)
 			if err == nil {
 				t.Fatal("Callback succeeded")
+			}
+			// Only a refused group returns the identity, for the app's log and its no-access page.
+			if errors.Is(err, ErrNotInGroup) {
+				if c.Subject != "user-1" || !slices.Equal(c.Groups, []string{"users"}) {
+					t.Errorf("ErrNotInGroup claims = %+v", c)
+				}
+			} else if c.Subject != "" || c.Groups != nil {
+				t.Errorf("claims with %v = %+v", err, c)
 			}
 			if tt.want != nil && !errors.Is(err, tt.want) {
 				t.Errorf("err = %v, want %v", err, tt.want)
