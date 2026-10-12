@@ -3,6 +3,7 @@ package check
 
 import (
 	"bufio"
+	_ "embed"
 	"errors"
 	"fmt"
 	"os"
@@ -239,8 +240,89 @@ func (r runner) modTidy() error {
 	return nil
 }
 
+// golangciConfig is the family's golangci-lint config, byte for byte the copy the repos kept before ship owned it:
+// one set of linters everywhere, no copy to drift.
+//
+//go:embed golangci.yaml
+var golangciConfig string
+
+// golangciNames are the config files golangci-lint looks up itself, in its working dir and each parent.
+var golangciNames = []string{".golangci.yml", ".golangci.yaml", ".golangci.toml", ".golangci.json"}
+
+// lint runs golangci-lint with the repo's own config when one sits between go.dir and the repo root (golangci's own
+// lookup; conform decides whether a repo may keep one), else with the embedded family config.
 func (r runner) lint() error {
-	return r.goCmd("run", "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@"+r.c.Lint, "run")
+	args := []string{"run", "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@" + r.c.Lint, "run"}
+	if own := r.ownGolangci(); own != "" {
+		fmt.Println("ship: golangci-lint config of the repo:", own)
+	} else {
+		p, err := r.writeGolangci()
+		if err != nil {
+			return err
+		}
+		args = append(args, "--config", p)
+	}
+	return r.goCmd(args...)
+}
+
+// ownGolangci is the repo's golangci-lint config golangci would find from go.dir, "" for none. Above the repo root
+// is not looked at: a stray ~/.golangci.yaml must not replace the family's.
+func (r runner) ownGolangci() string {
+	root := filepath.Clean(r.root)
+	for d := filepath.Clean(r.goDir()); ; d = filepath.Dir(d) {
+		for _, n := range golangciNames {
+			if p := filepath.Join(d, n); fileExists(p) {
+				return p
+			}
+		}
+		if d == root || filepath.Dir(d) == d {
+			return ""
+		}
+	}
+}
+
+// writeGolangci writes the embedded config into the git dir (never an untracked file in the tree), with paths
+// relative to go.mod: golangci's default, relative to the config file, would print every issue as ../../x.go.
+func (r runner) writeGolangci() (string, error) {
+	cfg, err := withPathMode(golangciConfig)
+	if err != nil {
+		return "", err
+	}
+	p, err := r.gitPath("ship/golangci.yaml")
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
+		return "", err
+	}
+	return p, os.WriteFile(p, []byte(cfg), 0o600)
+}
+
+// withPathMode adds relative-path-mode: gomod to the config's run: section, leaving the embed itself byte-identical
+// to the family's copy.
+func withPathMode(cfg string) (string, error) {
+	out := strings.Replace(cfg, "\nrun:\n", "\nrun:\n  relative-path-mode: gomod\n", 1)
+	if out == cfg {
+		return "", errors.New("golangci config has no run: section to set relative-path-mode in")
+	}
+	return out, nil
+}
+
+// gitPath is p inside the git dir (per worktree), absolute.
+func (r runner) gitPath(p string) (string, error) {
+	p, err := gitx.Git(r.root, "rev-parse", "--git-path", p)
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(r.root, p)
+	}
+	return p, nil
+}
+
+func fileExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }
 
 func (r runner) extra() error {
@@ -281,14 +363,7 @@ func (r runner) goTest() error {
 // profile is the Go coverage report path, inside the git dir (per worktree): never an untracked file in the tree,
 // which the pre-push hook would refuse as uncommitted.
 func (r runner) profile() (string, error) {
-	p, err := gitx.Git(r.root, "rev-parse", "--git-path", "ship/go.out")
-	if err != nil {
-		return "", err
-	}
-	if !filepath.IsAbs(p) {
-		p = filepath.Join(r.root, p)
-	}
-	return p, nil
+	return r.gitPath("ship/go.out")
 }
 
 func (r runner) uiTest() error {
