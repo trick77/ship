@@ -96,7 +96,7 @@ func TestRun_whenDryRun_thenTagImagesReleaseMovingTags(t *testing.T) {
 		"--sbom=true --provenance=mode=max --metadata-file ",
 		"--label org.opencontainers.image.version=1.5.0 --label org.opencontainers.image.revision=",
 		"--label org.opencontainers.image.source=https://github.com/Owner/Repo --label org.opencontainers.image.created=",
-		"aquasec/trivy:" + pins.Trivy + " image --scanners vuln --no-progress --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed ghcr.io/owner/repo-dashboard@<digest>",
+		" ghcr.io/aquasecurity/trivy:" + pins.Trivy + " image --scanners vuln --no-progress --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed ghcr.io/owner/repo-dashboard@<digest>",
 		"+ cosign sign --yes ghcr.io/owner/repo@<digest>",
 		"+ cosign sign --yes ghcr.io/owner/repo-dashboard@<digest>",
 	} {

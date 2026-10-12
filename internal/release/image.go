@@ -56,7 +56,8 @@ func digestRef(name, metaFile string, dry bool) (string, error) {
 }
 
 // trivyArgs is the docker run of the pinned trivy image scanning ref: HIGH and CRITICAL with a fix available fail.
-// The runner's docker login (ghcr, a private package) is mounted read-only: the container has none of its own.
+// The image comes from ghcr, which the runner is logged in to already (no anonymous Docker Hub pull limit). The
+// runner's docker login (ghcr, a private package) is mounted read-only: the container has none of its own.
 // A named volume keeps the vulnerability DB across the images of one release.
 func trivyArgs(ref string) []string {
 	args := []string{"run", "--rm", "-v", "ship-trivy-cache:/root/.cache/trivy"}
@@ -65,7 +66,7 @@ func trivyArgs(ref string) []string {
 			args = append(args, "-v", cfg+":/root/.docker/config.json:ro")
 		}
 	}
-	return append(args, "aquasec/trivy:"+pins.Trivy, "image", "--scanners", "vuln", "--no-progress", "--exit-code", "1",
+	return append(args, "ghcr.io/aquasecurity/trivy:"+pins.Trivy, "image", "--scanners", "vuln", "--no-progress", "--exit-code", "1",
 		"--severity", "HIGH,CRITICAL", "--ignore-unfixed", ref)
 }
 

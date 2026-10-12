@@ -9,7 +9,7 @@ const (
 	// Prettier is the exact devDependencies.prettier a UI's package.json must pin: one formatter version, one
 	// formatting, in every repo.
 	Prettier = "3.9.9"
-	// Trivy is the aquasec/trivy image tag release scans pushed images with.
+	// Trivy is the ghcr.io/aquasecurity/trivy image tag release scans pushed images with.
 	Trivy = "0.75.0"
 	// Cosign is the cosign release the Release workflow installs (cosign-installer's cosign-release); a test keeps
 	// the workflow on it.
