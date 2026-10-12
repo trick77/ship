@@ -271,6 +271,25 @@ func TestSubjects(t *testing.T) {
 	if err := r.subjects(); err != nil {
 		t.Fatal(err)
 	}
+	git("commit", "-q", "--allow-empty", "-m", "Fix typo")
+	if err := r.subjects(); err == nil || !strings.Contains(err.Error(), "Fix typo") {
+		t.Fatalf("branch subject not checked off a fork: %v", err)
+	}
+	t.Setenv(PRFork, "true")
+	if err := r.subjects(); err != nil {
+		t.Fatalf("fork PR: branch subject checked, not only the title: %v", err)
+	}
+	t.Setenv(PRTitle, "Fix typo")
+	if err := r.subjects(); err == nil || !strings.Contains(err.Error(), "PR title Fix typo") {
+		t.Fatalf("fork PR: title not checked: %v", err)
+	}
+	t.Setenv(PRTitle, "")
+	if err := r.subjects(); err == nil || !strings.Contains(err.Error(), "Fix typo") {
+		t.Fatalf("fork without a title: branch subjects not checked: %v", err)
+	}
+	t.Setenv(PRFork, "")
+	t.Setenv(PRTitle, "lib: add B")
+	git("commit", "-q", "--amend", "--allow-empty", "-m", "lib: fix typo")
 	git("commit", "-q", "--allow-empty", "-m", "lib: drop A\n\nRelease: minr")
 	if err := r.subjects(); err == nil || !strings.Contains(err.Error(), "release lines") {
 		t.Fatalf("Release typo passed the gate: %v", err)
