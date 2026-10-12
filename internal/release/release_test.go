@@ -18,6 +18,13 @@ func TestLatest(t *testing.T) {
 	if v := Latest([]string{"9.9.9", "v0.2.0", "v0.10.1", "vx"}, "v"); v != (Version{0, 10, 1}) {
 		t.Fatal(v)
 	}
+	// Nested modules' tags never count for each other or the root.
+	nested := []string{"v1.0.0", "kit/v0.3.0", "kit/auth/v0.7.0", "kit/vx"}
+	for prefix, want := range map[string]Version{"v": {1, 0, 0}, "kit/v": {0, 3, 0}, "kit/auth/v": {0, 7, 0}, "": {}} {
+		if v := Latest(nested, prefix); v != want {
+			t.Errorf("%q: %v", prefix, v)
+		}
+	}
 }
 
 func TestNext(t *testing.T) {

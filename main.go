@@ -6,7 +6,7 @@
 //	ship lint                      golangci-lint alone, at the version check runs
 //	ship hooks                     install the pre-push hook
 //	ship pre-push                  the hook's gate (git runs it)
-//	ship release [patch|minor|major|auto] [-cache gha] [-dry-run]
+//	ship release [patch|minor|major|auto] [-cache gha] [-dry-run] [-dir kit]
 package main
 
 import (
@@ -121,6 +121,7 @@ func releaseOptions(args []string) (release.Options, error) {
 	fs := flag.NewFlagSet("release", flag.ContinueOnError)
 	cache := fs.String("cache", "", "buildx cache backend type, e.g. gha")
 	dry := fs.Bool("dry-run", false, "print the commands, run none")
+	dir := fs.String("dir", "", "release the nested Go module at this repo-relative dir (tags <dir>/vX.Y.Z)")
 	bump := ""
 	if len(args) > 0 && args[0] != "" && args[0][0] != '-' {
 		bump, args = args[0], args[1:]
@@ -136,5 +137,5 @@ func releaseOptions(args []string) (release.Options, error) {
 	case bump == "":
 		bump = "patch"
 	}
-	return release.Options{Bump: bump, Cache: *cache, DryRun: *dry}, nil
+	return release.Options{Bump: bump, Cache: *cache, DryRun: *dry, Dir: *dir}, nil
 }

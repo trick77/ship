@@ -24,10 +24,11 @@ func Shipped(p string) bool {
 	return true
 }
 
-// shippedSince reports whether a file consumers get changed between prev and HEAD. --no-renames: a shipped file
+// shippedSince reports whether a file consumers get changed between prev and HEAD, within paths (scope; none: the
+// whole repo). --no-renames: a shipped file
 // moved into testdata/ is a deletion of a shipped path, which a rename would hide behind its new name.
-func shippedSince(root, prev string) (bool, error) {
-	files, err := gitx.GitZ(root, "diff", "--name-only", "--no-renames", "-z", prev, "HEAD")
+func shippedSince(root, prev string, paths []string) (bool, error) {
+	files, err := gitx.GitZ(root, append([]string{"diff", "--name-only", "--no-renames", "-z", prev, "HEAD", "--"}, paths...)...)
 	if err != nil {
 		return false, err
 	}

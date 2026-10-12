@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/trick77/ship/internal/gitx"
+	"github.com/trick77/ship/internal/release"
 )
 
 func TestRun_whenNoOrUnknownCommand_thenError(t *testing.T) {
@@ -52,18 +53,17 @@ func TestRun_whenNoShipYaml_thenCheckAndReleaseRefuse(t *testing.T) {
 
 func TestReleaseOptions(t *testing.T) {
 	for _, tc := range []struct {
-		args        []string
-		bump, cache string
-		dry         bool
+		args []string
+		want release.Options
 	}{
-		{nil, "patch", "", false},
-		{[]string{"minor"}, "minor", "", false},
-		{[]string{"-dry-run", "minor"}, "minor", "", true},
-		{[]string{"major", "-cache", "gha", "-dry-run"}, "major", "gha", true},
-		{[]string{"-cache", "gha", "major"}, "major", "gha", false},
+		{nil, release.Options{Bump: "patch"}},
+		{[]string{"minor"}, release.Options{Bump: "minor"}},
+		{[]string{"-dry-run", "minor"}, release.Options{Bump: "minor", DryRun: true}},
+		{[]string{"major", "-cache", "gha", "-dry-run"}, release.Options{Bump: "major", Cache: "gha", DryRun: true}},
+		{[]string{"-cache", "gha", "major"}, release.Options{Bump: "major", Cache: "gha"}},
+		{[]string{"auto", "-dir", "kit/auth"}, release.Options{Bump: "auto", Dir: "kit/auth"}},
 	} {
-		o, err := releaseOptions(tc.args)
-		if err != nil || o.Bump != tc.bump || o.Cache != tc.cache || o.DryRun != tc.dry {
+		if o, err := releaseOptions(tc.args); err != nil || o != tc.want {
 			t.Errorf("%v: %+v %v", tc.args, o, err)
 		}
 	}

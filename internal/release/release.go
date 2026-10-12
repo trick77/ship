@@ -29,6 +29,9 @@ type Options struct {
 	// Cache is passed to buildx as cache backend type, e.g. "gha" in GitHub Actions; empty = no cache flags.
 	Cache  string
 	DryRun bool
+	// Dir is a nested Go module's repo-relative dir: tags <Dir>/<tag_prefix>X.Y.Z, only its changes count, no
+	// images. Empty: the repo itself.
+	Dir string
 }
 
 // Version is a semver triple.
@@ -100,6 +103,10 @@ func Moving(image string, v Version) []string {
 
 // Run releases HEAD. HEAD must be origin/<base> and the tree clean: a release is what master holds, nothing local.
 func Run(root string, c *config.Config, o Options) error {
+	c, dir, err := nested(c, o.Dir)
+	if err != nil {
+		return err
+	}
 	// ghcr images are built on GitHub-hosted runners only, never on a laptop or a self-hosted runner. An accident
 	// guard, not a security boundary: anyone can export RUNNER_ENVIRONMENT. Checked before anything, the tag claim
 	// included.
@@ -133,6 +140,17 @@ func Run(root string, c *config.Config, o Options) error {
 	} else if dirty != "" {
 		return fmt.Errorf("uncommitted changes:\n%s", dirty)
 	}
+	// CI releases every module on each push, one not merged yet included.
+	if dir != "" && !fileExists(filepath.Join(root, dir, "go.mod")) {
+		if o.Bump == Auto {
+			return skipped("no module at %s", dir)
+		}
+		return fmt.Errorf("-dir %s: no go.mod there", dir)
+	}
+	paths, err := scope(root, c, dir)
+	if err != nil {
+		return err
+	}
 	// Tags as origin has them: a local-only or since-deleted tag must neither burn a number nor block a release.
 	tags, atHead, tagCommit, err := remoteTags(root, head)
 	if err != nil {
@@ -149,11 +167,18 @@ func Run(root string, c *config.Config, o Options) error {
 	}
 	prev := Latest(tags, c.TagPrefix)
 	prevCommit := tagCommit[c.TagPrefix+prev.String()]
+	bump, releaseNotes := o.Bump, []string(nil)
 	if o.Bump == Auto && prevCommit == "" {
-		return fmt.Errorf("release auto needs a previous tag on origin: cut the first one by hand")
+		// The repo's first tag is cut by hand: without one, auto cannot tell a first release from tags it does not
+		// see (another prefix, history from before ship). A nested module's prefix is its dir, no such doubt; it
+		// arrives by a merge and no go get resolves it until tagged, so its first auto run cuts 0.1.0.
+		if dir == "" {
+			return fmt.Errorf("release auto needs a previous tag on origin: cut the first one by hand")
+		}
+		bump = "minor"
 	}
-	if o.Bump == Auto {
-		if shipped, err := shippedSince(root, prevCommit); err != nil {
+	if o.Bump == Auto && prevCommit != "" {
+		if shipped, err := shippedSince(root, prevCommit, paths); err != nil {
 			return err
 		} else if !shipped {
 			return skipped("only docs, tests or fixtures changed since %s", shortSHA(prevCommit))
@@ -161,9 +186,8 @@ func Run(root string, c *config.Config, o Options) error {
 	}
 	// The Release-note lines go into every release, a bump by hand included: the fallback for a failed auto run
 	// must not drop the breaking change's note. Their errors stop auto only; a bump by hand is the way past them.
-	bump, releaseNotes := o.Bump, []string(nil)
 	if prevCommit != "" {
-		messages, err := gitx.Messages(root, prevCommit+"..HEAD")
+		messages, err := gitx.Messages(root, prevCommit+"..HEAD", paths...)
 		if err != nil && o.Bump == Auto {
 			return err
 		}
@@ -278,7 +302,7 @@ func Run(root string, c *config.Config, o Options) error {
 		}
 	}
 
-	notes := changes(root, prevCommit)
+	notes := changes(root, prevCommit, paths)
 	if notes == "" {
 		notes = "Release " + next.String()
 	}
@@ -289,6 +313,10 @@ func Run(root string, c *config.Config, o Options) error {
 		notes += "\n\nContainer images: " + strings.Join(images, ", ")
 	}
 	relArgs := []string{"release", "create", tag, "--repo", repo, "--title", tag, "--notes", notes}
+	if dir != "" {
+		// The repo page's Latest badge stays on the repo's own release, not a library's inside it.
+		relArgs = append(relArgs, "--latest=false")
+	}
 	if err := run(root, o.DryRun, "gh", relArgs...); err != nil {
 		return fmt.Errorf("github release (tag %s exists; finish by hand: gh %s, then the moving tags): %w",
 			tag, strings.Join(relArgs, " "), err)
@@ -339,11 +367,11 @@ func remoteTags(root, head string) (all, atHead []string, commit map[string]stri
 
 // changes is Notes of the commits since prev, the previous release's commit. Empty without one (a first release)
 // or when its commit is not here (a shallow clone): the notes then fall back to the version alone.
-func changes(root, prev string) string {
+func changes(root, prev string, paths []string) string {
 	if prev == "" {
 		return ""
 	}
-	cs, err := gitx.Commits(root, prev+"..HEAD")
+	cs, err := gitx.Commits(root, prev+"..HEAD", paths...)
 	if err != nil {
 		fmt.Printf("ship: no notes, commits since %s unreadable: %v\n", shortSHA(prev), err)
 		return ""
