@@ -239,7 +239,8 @@ type SecurityOptions struct {
 	// CSP is the Content-Security-Policy, "" means DefaultCSP.
 	CSP string
 	// HTMLOnly sends CSP, X-Frame-Options and COOP only on text/html responses, judged by the Content-Type the
-	// handler set: a JSON or image answer renders nothing a policy could restrict.
+	// handler set, else the one net/http sniffs from the first write; a header sent with no type and no body yet
+	// counts as HTML. A JSON or image answer renders nothing a policy could restrict.
 	HTMLOnly bool
 	// COOP is the Cross-Origin-Opener-Policy ("same-origin"), none when empty.
 	COOP string
@@ -291,8 +292,18 @@ func SecurityHeadersWith(o SecurityOptions) func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			next.ServeHTTP(&headerHook{ResponseWriter: w, hook: func(h http.Header) {
-				if strings.Contains(h.Get("Content-Type"), "text/html") {
+			next.ServeHTTP(&headerHook{ResponseWriter: w, hook: func(h http.Header, body []byte) {
+				ct := h.Get("Content-Type")
+				switch {
+				// net/http sniffs an unset type from the first write; decide on the same bytes.
+				case ct == "" && body != nil:
+					ct = http.DetectContentType(body)
+				// Headers sent with nothing to sniff yet: the type is unknown, so assume a page.
+				case ct == "":
+					html(h)
+					return
+				}
+				if strings.Contains(ct, "text/html") {
 					html(h)
 				}
 			}}, r)
@@ -300,27 +311,31 @@ func SecurityHeadersWith(o SecurityOptions) func(http.Handler) http.Handler {
 	}
 }
 
-// headerHook runs hook once, just before the header is sent. Unwrap keeps http.ResponseController working.
+// headerHook runs hook once, just before the header is sent, with the first write's bytes when a write sends it.
+// Unwrap keeps http.ResponseController working.
 type headerHook struct {
 	http.ResponseWriter
-	hook func(http.Header)
+	hook func(h http.Header, body []byte)
 	done bool
 }
 
-func (w *headerHook) fire() {
+func (w *headerHook) fire(body []byte) {
 	if !w.done {
 		w.done = true
-		w.hook(w.Header())
+		w.hook(w.Header(), body)
 	}
 }
 
 func (w *headerHook) WriteHeader(code int) {
-	w.fire()
+	w.fire(nil)
 	w.ResponseWriter.WriteHeader(code)
 }
 
 func (w *headerHook) Write(b []byte) (int, error) {
-	w.fire()
+	if b == nil {
+		b = []byte{}
+	}
+	w.fire(b)
 	return w.ResponseWriter.Write(b)
 }
 

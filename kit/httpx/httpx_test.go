@@ -421,6 +421,12 @@ func TestSecurityHeadersWith(t *testing.T) {
 		case "/api/denied":
 			w.Header().Set("X-Robots-Tag", "none")
 			w.WriteHeader(http.StatusUnauthorized)
+		case "/sniffed":
+			_, _ = w.Write([]byte("<!doctype html><p>no type set"))
+		case "/sniffed-text":
+			_, _ = w.Write([]byte("plain words"))
+		case "/untyped":
+			w.WriteHeader(http.StatusTeapot)
 		default:
 			WriteJSON(w, http.StatusOK, map[string]string{})
 		}
@@ -448,6 +454,12 @@ func TestSecurityHeadersWith(t *testing.T) {
 	}
 	if got := get("/healthz").Get("X-Robots-Tag"); got != "noindex, nofollow" {
 		t.Errorf("probe X-Robots-Tag = %q", got)
+	}
+	// No Content-Type set: the sniffed type decides, and with nothing to sniff the page default holds.
+	for p, html := range map[string]bool{"/sniffed": true, "/sniffed-text": false, "/untyped": true} {
+		if got := get(p).Get("Content-Security-Policy") != ""; got != html {
+			t.Errorf("%s: CSP sent %v, want %v", p, got, html)
+		}
 	}
 
 	// The zero value is SecurityHeaders(""): every response, no HSTS.
