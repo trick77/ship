@@ -45,7 +45,7 @@ func (e *env) loadWorkflow(p string) (*workflow, error) {
 }
 
 // caller finds the job calling ship's reusable workflow name (any ref), sorted by job name for a stable pick.
-func (w *workflow) caller(name string) (string, job, bool) {
+func (w *workflow) caller(name string) (job, bool) {
 	names := make([]string, 0, len(w.Jobs))
 	for n := range w.Jobs {
 		names = append(names, n)
@@ -53,10 +53,10 @@ func (w *workflow) caller(name string) (string, job, bool) {
 	slices.Sort(names)
 	for _, n := range names {
 		if j := w.Jobs[n]; strings.HasPrefix(j.Uses, reusable+name+"@") {
-			return n, j, true
+			return j, true
 		}
 	}
-	return "", job{}, false
+	return job{}, false
 }
 
 func (e *env) workflows() result {
@@ -75,7 +75,7 @@ func (e *env) workflows() result {
 			fs = append(fs, finding{what: "missing (ship init)", file: c.file})
 			continue
 		}
-		_, j, ok := w.caller(c.name)
+		j, ok := w.caller(c.name)
 		switch {
 		case !ok:
 			fs = append(fs, finding{what: "no job calls " + reusable + c.name + "@master", file: c.file})
@@ -170,7 +170,7 @@ func (e *env) visibilityRule() result {
 	if err != nil {
 		fs = append(fs, finding{what: err.Error(), file: scaffold.CI})
 	} else if w != nil {
-		if _, j, ok := w.caller("check.yaml"); ok {
+		if j, ok := w.caller("check.yaml"); ok {
 			switch {
 			case e.vis == "public" && j.If != "":
 				fs = append(fs, finding{what: "public repo: every PR runs CI, drop the check job's if:", file: scaffold.CI})
