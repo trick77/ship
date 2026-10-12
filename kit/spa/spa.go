@@ -17,6 +17,7 @@ import (
 	"io/fs"
 	"mime"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 )
@@ -41,8 +42,8 @@ type Options struct {
 	// Placeholder is the page an unbuilt dist/ serves on app routes. Defaults to a generic "UI not built" page.
 	Placeholder []byte
 	// Gate runs before the shell is served, on every app route: false means it has answered the request itself (a
-	// redirect to the login page), so an anonymous visitor never gets the app's layout. nil serves everyone. Real
-	// files and /assets/ are not gated: a login page needs them.
+	// redirect to the login page), so an anonymous visitor never gets the app's layout. It also guards every other
+	// .html file in dist. nil serves everyone. The other files and /assets/ are not gated: a login page needs them.
 	Gate func(w http.ResponseWriter, r *http.Request) bool
 	// Index rewrites index.html per request (a base path the bundle cannot infer from its URL). It must not modify
 	// its argument. The ETag follows the rewritten bytes.
@@ -75,6 +76,11 @@ func Handler(dist fs.FS, o Options) http.Handler {
 		name := strings.TrimPrefix(p, "/")
 		if shellErr == nil && name != "" && name != "index.html" {
 			if st, err := fs.Stat(dist, name); err == nil && !st.IsDir() {
+				// Another page of the build (admin.html) is as privileged as the shell.
+				if ext := strings.ToLower(path.Ext(name)); (ext == ".html" || ext == ".htm") && o.Gate != nil &&
+					!o.Gate(w, r) {
+					return
+				}
 				if strings.HasPrefix(name, "assets/") {
 					w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 				}

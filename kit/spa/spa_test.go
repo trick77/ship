@@ -15,6 +15,8 @@ var built = fstest.MapFS{
 	"icon.svg":             {Data: []byte("<svg/>")},
 	"site.webmanifest":     {Data: []byte("{}")},
 	"sub/nested.txt":       {Data: []byte("n")},
+	"sub/Report.HTM":       {Data: []byte("<p>report")},
+	"admin.html":           {Data: []byte("<!doctype html>admin")},
 	".gitkeep":             {},
 	"assets/style-def.css": {Data: []byte("body{}")},
 }
@@ -176,7 +178,7 @@ func TestGate(t *testing.T) {
 		}
 		return true
 	}})
-	for _, p := range []string{"/", "/index.html", "/deep/link"} {
+	for _, p := range []string{"/", "/index.html", "/deep/link", "/admin.html", "/sub/Report.HTM"} {
 		if rec := serve(h, p); rec.Code != http.StatusFound || rec.Header().Get("Location") != "/login" ||
 			rec.Header().Get("ETag") != "" {
 			t.Errorf("%s anonymous = %d %v", p, rec.Code, rec.Header())
@@ -194,6 +196,13 @@ func TestGate(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "shell") {
 		t.Errorf("signed in = %d %q", rec.Code, rec.Body.String())
+	}
+	req = httptest.NewRequest(http.MethodGet, "/admin.html", nil)
+	req.Header.Set("Cookie", "s=1")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "admin") {
+		t.Errorf("signed-in admin.html = %d %q", rec.Code, rec.Body.String())
 	}
 }
 
