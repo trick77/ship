@@ -90,7 +90,34 @@ func Install(root string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
 		return "", err
 	}
-	return p, os.WriteFile(p, []byte(script), 0o755) //nolint:gosec // a git hook must be executable
+	// A new file renamed over the old, never written in place: sh reads a running hook as it goes, and the hook
+	// running this very ship (Refresh) would read on into the new script's bytes.
+	tmp, err := os.CreateTemp(filepath.Dir(p), ".pre-push-*")
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	if _, err := tmp.WriteString(script); err != nil {
+		_ = tmp.Close()
+		return "", err
+	}
+	if err := tmp.Close(); err != nil {
+		return "", err
+	}
+	if err := os.Chmod(tmp.Name(), 0o755); err != nil { //nolint:gosec // a git hook must be executable
+		return "", err
+	}
+	return p, os.Rename(tmp.Name(), p)
+}
+
+// Refresh reinstalls a stale hook (Stale) with this ship's script, as Install does, and reports whether it did. A
+// hook ship did not install is never touched.
+func Refresh(root string) (string, bool, error) {
+	if !Stale(root) {
+		return "", false, nil
+	}
+	p, err := Install(root)
+	return p, err == nil, err
 }
 
 func ours(s string) bool { return strings.Contains(s, marker) }

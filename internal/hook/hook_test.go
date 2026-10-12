@@ -1,6 +1,7 @@
 package hook
 
 import (
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -141,6 +142,53 @@ func TestStale(t *testing.T) {
 		if got := Stale(dir); got != want {
 			t.Errorf("%q: stale = %v, want %v", s, got, want)
 		}
+	}
+}
+
+// A stale hook of ship's is rewritten, by rename (a running sh keeps the old file); a current or foreign one is not.
+func TestRefresh(t *testing.T) {
+	dir := repo(t)
+	if _, ok, err := Refresh(dir); ok || err != nil {
+		t.Fatalf("no hook: %v %v", ok, err)
+	}
+	p, err := Install(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := Refresh(dir); ok || err != nil {
+		t.Fatalf("current hook: %v %v", ok, err)
+	}
+	old := "#!/bin/sh\n# " + marker + "\ngo run github.com/trick77/ship@latest pre-push\n"
+	if err := os.WriteFile(p, []byte(old), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	running, err := os.Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = running.Close() }()
+	got, ok, err := Refresh(dir)
+	if !ok || err != nil || got != p || Stale(dir) {
+		t.Fatalf("stale hook: %q %v %v", got, ok, err)
+	}
+	if fi, err := os.Stat(p); err != nil || fi.Mode().Perm() != 0o755 {
+		t.Fatalf("mode: %v %v", fi, err)
+	}
+	if b, err := io.ReadAll(running); err != nil || string(b) != old {
+		t.Fatalf("running hook's file changed under it: %q %v", b, err)
+	}
+	if left, _ := filepath.Glob(filepath.Join(filepath.Dir(p), ".pre-push-*")); len(left) != 0 {
+		t.Fatalf("leftovers: %v", left)
+	}
+	foreign := "#!/bin/sh\necho mine\n"
+	if err := os.WriteFile(p, []byte(foreign), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := Refresh(dir); ok || err != nil {
+		t.Fatalf("foreign hook: %v %v", ok, err)
+	}
+	if b, _ := os.ReadFile(p); string(b) != foreign {
+		t.Fatalf("foreign hook touched: %q", b)
 	}
 }
 
