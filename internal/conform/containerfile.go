@@ -134,6 +134,9 @@ func chain(stages []stage, final int) []int {
 var (
 	golangTag = regexp.MustCompile(`^(?:docker\.io/)?(?:library/)?golang:(\d+)\.(\d+)`)
 	nodeTag   = regexp.MustCompile(`^(?:docker\.io/)?(?:library/)?node:(\d+)`)
+	// toolchain matches any golang or node base, numbered or not: node:lts or golang:alpine would slip past the
+	// floors and the go.mod match unseen.
+	toolchain = regexp.MustCompile(`^(?:docker\.io/)?(?:library/)?(golang|node)(?::|@|$)`)
 )
 
 // nodeMajors are the node builder majors of the stages x is built from.
@@ -227,6 +230,8 @@ func (e *env) containerfile() result {
 			if stageIndex(x.stages[:i], s.base) < 0 {
 				if m := golangTag.FindStringSubmatch(s.base); m != nil {
 					golang = append(golang, m[1]+"."+m[2])
+				} else if t := toolchain.FindStringSubmatch(s.base); t != nil && !nodeTag.MatchString(s.base) {
+					add(fmt.Sprintf("builder %s names no %s version", s.base, t[1]))
 				}
 			}
 			for _, in := range s.instrs {

@@ -376,6 +376,14 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 		// Dependabot moved the node builder up: the CI caller follows it (ship init), never a hand edit.
 		{"node bumped", appShip, func(r *repo) { r.edit("Containerfile", "node:26-alpine", "node:27-alpine") },
 			[]string{"FAIL scaffold: differs from ship's template (ship init -diff) (.github/workflows/ci.yaml)"}},
+		// An unnumbered tag would pass every floor unseen.
+		{"builders unnumbered", appShip, func(r *repo) {
+			r.edit("Containerfile", "node:26-alpine", "node:lts-alpine")
+			r.edit("Containerfile", "golang:1.27-alpine", "golang:alpine")
+		}, []string{`FAIL containerfile: image "": builder node:lts-alpine names no node version`,
+			`FAIL containerfile: image "": builder golang:alpine names no golang version`,
+			`FAIL containerfile: image "-ui": builder node:lts-alpine names no node version`,
+			`FAIL containerfile: image "-ui": builder golang:alpine names no golang version`}},
 		{"go.mod missing", appShip, func(r *repo) { r.remove("backend/go.mod") },
 			[]string{"FAIL gomod: missing (backend/go.mod)"}},
 		{"handrolled", appShip, func(r *repo) {
