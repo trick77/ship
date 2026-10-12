@@ -138,6 +138,36 @@ func TestShellETag(t *testing.T) {
 	}
 }
 
+func TestShellValidation(t *testing.T) {
+	h := Handler(built, Options{})
+	tag := serve(h, "/").Header().Get("ETag")
+	for _, tt := range []struct {
+		name, method string
+		header       map[string]string
+		want         int
+	}{
+		{"range ignored", http.MethodGet, map[string]string{"Range": "bytes=0-3"}, 200},
+		{"if-match ignored", http.MethodGet, map[string]string{"If-Match": `"other"`}, 200},
+		{"post never 304", http.MethodPost, map[string]string{"If-None-Match": tag}, 200},
+		{"head 304", http.MethodHead, map[string]string{"If-None-Match": tag}, 304},
+		{"list and weak", http.MethodGet, map[string]string{"If-None-Match": `"x", W/` + tag}, 304},
+		{"star", http.MethodGet, map[string]string{"If-None-Match": "*"}, 304},
+	} {
+		req := httptest.NewRequest(tt.method, "/deep", nil)
+		for k, v := range tt.header {
+			req.Header.Set(k, v)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != tt.want {
+			t.Errorf("%s: %d, want %d", tt.name, rec.Code, tt.want)
+		}
+		if tt.want == 200 && tt.method != http.MethodHead && rec.Body.String() != "<!doctype html>shell" {
+			t.Errorf("%s: body %q, want the whole shell", tt.name, rec.Body.String())
+		}
+	}
+}
+
 func TestGate(t *testing.T) {
 	h := Handler(built, Options{Gate: func(w http.ResponseWriter, r *http.Request) bool {
 		if r.Header.Get("Cookie") == "" {
