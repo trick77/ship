@@ -67,7 +67,8 @@ counted). Every non-merge commit on origin/<base>..HEAD is checked, `[bot]` auth
 (`SHIP_PR_TITLE`): a squash merge makes it master's subject. Release notes group by the first area.
 
 `release auto`: patch, unless a commit message since the last tag has a line `Release: minor` or `Release: major`
-(highest wins; a minor or major also needs a `Release-note: …` line, which goes above the notes). Nothing but
+(highest wins; a minor or major also needs a `Release-note: …` line, which goes above the notes, a bump by hand
+too). The gate checks these lines on the branch: a typo fails the push, never a release after the merge. Nothing but
 `*.md`, `LICENSE`, `*_test.go` and `testdata/` changed: no release, exit 0. HEAD behind origin/<base>: skipped, the
 newer push's run releases both. No previous tag: refused, the first one is cut by hand. ship releases itself this
 way from CI on every master push.

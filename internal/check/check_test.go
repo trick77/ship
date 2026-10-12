@@ -271,4 +271,12 @@ func TestSubjects(t *testing.T) {
 	if err := r.subjects(); err != nil {
 		t.Fatal(err)
 	}
+	git("commit", "-q", "--allow-empty", "-m", "lib: drop A\n\nRelease: minr")
+	if err := r.subjects(); err == nil || !strings.Contains(err.Error(), "release lines") {
+		t.Fatalf("Release typo passed the gate: %v", err)
+	}
+	git("commit", "-q", "--amend", "--allow-empty", "-m", "lib: drop A\n\nRelease: minor\nRelease-note: A is gone.")
+	if err := r.subjects(); err != nil {
+		t.Fatal(err)
+	}
 }

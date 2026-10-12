@@ -3,47 +3,12 @@ package release
 import (
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
 	"github.com/trick77/ship/internal/config"
 	"github.com/trick77/ship/internal/gitx"
 )
-
-func TestPlanOf(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		messages []string
-		bump     string
-		notes    []string
-		err      string
-	}{
-		{"none", []string{"hook: x\n\nbody\n", "gate: y\n"}, "patch", nil, ""},
-		{"minor", []string{"hook: x\n\nRelease: minor\nRelease-note: hooks moved\n"}, "minor", []string{"hooks moved"}, ""},
-		{"highest wins, notes in order", []string{
-			"a: x\n\nRelease: major\nRelease-note: one\n",
-			"b: y\n\nRelease: minor\nRelease-note: two\n",
-		}, "major", []string{"one", "two"}, ""},
-		{"note alone keeps patch", []string{"a: x\n\nRelease-note: fyi\n"}, "patch", []string{"fyi"}, ""},
-		{"inside a line is no trailer", []string{"a: x\n\nsee Release: minor in docs\n"}, "patch", nil, ""},
-		{"minor without note", []string{"a: x\n\nRelease: minor\n"}, "", nil, "without a `Release-note"},
-		{"typo", []string{"a: x\n\nRelease: minr\n"}, "", nil, "want minor or major"},
-		{"patch spelled out", []string{"a: x\n\nRelease: patch\n"}, "", nil, "patch is the default"},
-	} {
-		p, err := PlanOf(tc.messages)
-		switch {
-		case tc.err != "":
-			if err == nil || !strings.Contains(err.Error(), tc.err) {
-				t.Errorf("%s: got %v, want error with %q", tc.name, err, tc.err)
-			}
-		case err != nil:
-			t.Errorf("%s: %v", tc.name, err)
-		case p.Bump != tc.bump || !slices.Equal(p.Notes, tc.notes):
-			t.Errorf("%s: got %+v, want %s %v", tc.name, p, tc.bump, tc.notes)
-		}
-	}
-}
 
 func TestShipped(t *testing.T) {
 	for p, want := range map[string]bool{
@@ -135,5 +100,55 @@ func TestRunAuto_whenNoPreviousTag_thenRefused(t *testing.T) {
 	t.Setenv("GITHUB_REPOSITORY", "o/r")
 	if _, err := runAuto(t, work); err == nil || !strings.Contains(err.Error(), "needs a previous tag") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+// shipTagged is autoClone's lib.go tagged v1.1.0 and pushed, for a change on top.
+func shipTagged(t *testing.T, msg string) (work string, git func(...string)) {
+	t.Helper()
+	work = autoClone(t, "lib.go", msg)
+	git = func(args ...string) {
+		t.Helper()
+		if _, err := gitx.Git(work, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git("tag", "v1.1.0")
+	git("push", "-q", "--no-verify", "origin", "v1.1.0")
+	return work, git
+}
+
+func TestRunAuto_whenShippedFileMovedIntoTestdata_thenReleased(t *testing.T) {
+	work, git := shipTagged(t, "lib: add")
+	if err := os.Mkdir(filepath.Join(work, "testdata"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git("mv", "lib.go", "testdata/lib.go")
+	git("commit", "-q", "-m", "lib: move to testdata")
+	git("push", "-q", "--no-verify", "origin", "master")
+	out, err := runAuto(t, work)
+	if err != nil || !strings.Contains(out, "1.1.0 -> 1.1.1 (auto: patch)") {
+		t.Fatalf("a rename hid the removed shipped file: %v\n%s", err, out)
+	}
+}
+
+func TestRunAuto_whenAheadOfOrigin_thenRefused(t *testing.T) {
+	work, git := shipTagged(t, "lib: add")
+	git("commit", "-q", "--allow-empty", "-m", "lib: local only")
+	if out, err := runAuto(t, work); err == nil || !strings.Contains(err.Error(), "is not origin/master") {
+		t.Fatalf("ahead skipped as behind: %v\n%s", err, out)
+	}
+}
+
+func TestRun_whenBumpByHand_thenReleaseNotesKept(t *testing.T) {
+	// A typo stops auto; the fallback by hand still carries the note.
+	work := autoClone(t, "lib.go", "lib: drop Old\n\nRelease: minr\nRelease-note: Old is gone.")
+	if _, err := runAuto(t, work); err == nil || !strings.Contains(err.Error(), "nothing tagged") {
+		t.Fatalf("auto passed a typo: %v", err)
+	}
+	c, _ := config.Parse([]byte("tag_prefix: v\n"))
+	out, err := capture(t, func() error { return Run(work, c, Options{Bump: "minor", DryRun: true}) })
+	if err != nil || !strings.Contains(out, "(minor)") || !strings.Contains(out, "--notes Old is gone.\n\n**lib**") {
+		t.Fatalf("%v\n%s", err, out)
 	}
 }

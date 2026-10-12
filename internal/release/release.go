@@ -8,7 +8,6 @@
 package release
 
 import (
-	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -120,9 +119,11 @@ func Run(root string, c *config.Config, o Options) error {
 		return err
 	}
 	if head != tip && o.Bump == Auto {
-		// A newer push is on its way; its own run releases this commit with it.
-		fmt.Printf("ship: release auto SKIPPED: HEAD %s is behind origin/%s %s\n", head[:12], c.Base, tip[:12])
-		return nil
+		// Behind: a newer push is on its way, and its own run releases this commit with it. Ahead or diverged is
+		// local work, refused below as for any bump.
+		if _, err := gitx.Git(root, "merge-base", "--is-ancestor", head, tip); err == nil {
+			return skipped("HEAD %s is behind origin/%s %s, whose run releases both", shortSHA(head), c.Base, shortSHA(tip))
+		}
 	}
 	if head != tip {
 		return fmt.Errorf("HEAD %s is not origin/%s %s: release only what %s holds", head[:12], c.Base, tip[:12], c.Base)
@@ -148,16 +149,32 @@ func Run(root string, c *config.Config, o Options) error {
 	}
 	prev := Latest(tags, c.TagPrefix)
 	prevCommit := tagCommit[c.TagPrefix+prev.String()]
-	bump, plan := o.Bump, Plan{}
+	if o.Bump == Auto && prevCommit == "" {
+		return fmt.Errorf("release auto needs a previous tag on origin: cut the first one by hand")
+	}
 	if o.Bump == Auto {
-		plan, err = auto(root, prevCommit)
-		if errors.Is(err, errSkip) {
-			return nil
+		if shipped, err := shippedSince(root, prevCommit); err != nil {
+			return err
+		} else if !shipped {
+			return skipped("only docs, tests or fixtures changed since %s", shortSHA(prevCommit))
 		}
-		if err != nil {
+	}
+	// The Release-note lines go into every release, a bump by hand included: the fallback for a failed auto run
+	// must not drop the breaking change's note. Their errors stop auto only; a bump by hand is the way past them.
+	bump, releaseNotes := o.Bump, []string(nil)
+	if prevCommit != "" {
+		messages, err := gitx.Messages(root, prevCommit+"..HEAD")
+		if err != nil && o.Bump == Auto {
 			return err
 		}
-		bump = plan.Bump
+		asked, n, err := subject.Release(messages)
+		if err != nil && o.Bump == Auto {
+			return fmt.Errorf("release auto (nothing tagged; fix by hand: go run . release minor|major): %w", err)
+		}
+		releaseNotes = n
+		if o.Bump == Auto {
+			bump = asked
+		}
 	}
 	next, err := Next(prev, bump)
 	if err != nil {
@@ -229,8 +246,8 @@ func Run(root string, c *config.Config, o Options) error {
 	if notes == "" {
 		notes = "Release " + next.String()
 	}
-	if len(plan.Notes) > 0 {
-		notes = strings.Join(plan.Notes, "\n\n") + "\n\n" + notes
+	if len(releaseNotes) > 0 {
+		notes = strings.Join(releaseNotes, "\n\n") + "\n\n" + notes
 	}
 	if len(images) > 0 {
 		notes += "\n\nContainer images: " + strings.Join(images, ", ")
@@ -292,7 +309,7 @@ func changes(root, prev string) string {
 	}
 	cs, err := gitx.Commits(root, prev+"..HEAD")
 	if err != nil {
-		fmt.Printf("ship: no notes, commits since %s unreadable: %v\n", prev[:min(12, len(prev))], err)
+		fmt.Printf("ship: no notes, commits since %s unreadable: %v\n", shortSHA(prev), err)
 		return ""
 	}
 	return Notes(cs)
