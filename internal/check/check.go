@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -54,10 +56,13 @@ func Run(root string, c *config.Config) error {
 		{"prettier pin", r.prettier},
 		{"ui embed", r.cleanEmbed},
 		{"ui build", r.uiBuild},
+		{"go modules", r.goModules},
 		{"gofmt", r.gofmt},
 		{"go mod verify", r.modVerify},
 		{"go mod tidy", r.modTidy},
-		{"go build", func() error { return r.goCmd("build", "./...") }},
+		{"go build", func() error {
+			return r.eachModule(func(dir string) error { return r.goIn(dir, "build", "./...") })
+		}},
 		// After the build, so a compile error reads as go's, not govulncheck's; before lint and tests, so a
 		// known-vulnerable dependency fails in seconds, not after the test minutes.
 		{"govulncheck " + pins.Govulncheck, r.vuln},
@@ -166,7 +171,70 @@ func (r runner) runGit(dir string, args ...string) error {
 	return cmd.Run()
 }
 
-func (r runner) goCmd(args ...string) error { return r.run(r.goDir(), nil, "go", args...) }
+// goIn runs go in the module at dir (repo-relative).
+func (r runner) goIn(dir string, args ...string) error {
+	return r.run(filepath.Join(r.root, dir), nil, "go", args...)
+}
+
+// modules is go.dir, then go.modules: every Go module the gate runs on.
+func (r runner) modules() []string { return append([]string{r.c.Go.Dir}, r.c.Go.Modules...) }
+
+// nested reports whether dir is one of go.modules, not go.dir.
+func (r runner) nested(dir string) bool { return cleanSlash(dir) != cleanSlash(r.c.Go.Dir) }
+
+func cleanSlash(p string) string { return path.Clean(filepath.ToSlash(p)) }
+
+// eachModule runs fn for every module, a nested one under its own heading and named in its error.
+func (r runner) eachModule(fn func(dir string) error) error {
+	for _, m := range r.modules() {
+		if !r.nested(m) {
+			if err := fn(m); err != nil {
+				return err
+			}
+			continue
+		}
+		fmt.Printf("-- %s --\n", m)
+		if err := fn(m); err != nil {
+			return fmt.Errorf("%s: %w", m, err)
+		}
+	}
+	return nil
+}
+
+// goModules fails on a listed module without a go.mod and on a nested go.mod not listed: a module the gate does not
+// know is never built, linted or tested, and nothing would say so. Untracked ones count: they are about to be added.
+func (r runner) goModules() error {
+	listed := map[string]bool{}
+	for _, m := range r.c.Go.Modules {
+		if !fileExists(filepath.Join(r.root, m, "go.mod")) {
+			return fmt.Errorf("go.modules: no go.mod in %s", m)
+		}
+		listed[cleanSlash(m)] = true
+	}
+	// A pathspec's * crosses /: */go.mod finds every go.mod below the root.
+	files, err := gitx.Files(r.root, "*/go.mod")
+	if err != nil {
+		return err
+	}
+	var unlisted []string
+	for f := range files {
+		d := path.Dir(f)
+		if ignoredByGo(f) || d == cleanSlash(r.c.Go.Dir) || listed[d] || !fileExists(filepath.Join(r.root, f)) {
+			continue
+		}
+		unlisted = append(unlisted, d)
+	}
+	if len(unlisted) > 0 {
+		slices.Sort(unlisted)
+		return fmt.Errorf("nested Go module %s not gated: list it in go.modules", strings.Join(unlisted, ", "))
+	}
+	if len(r.c.Go.Modules) == 0 {
+		fmt.Println("(none nested)")
+		return nil
+	}
+	fmt.Println("ship: go modules:", strings.Join(r.modules(), ", "))
+	return nil
+}
 
 func (r runner) uiBuild() error {
 	if r.c.UI == nil {
@@ -251,21 +319,27 @@ func ignoredByGo(path string) bool {
 
 // modVerify checks the module cache against go.sum: a dependency changed on disk after its download (a restored CI
 // cache, a hand edit) never reaches the build.
-func (r runner) modVerify() error { return r.goCmd("mod", "verify") }
+func (r runner) modVerify() error {
+	return r.eachModule(func(dir string) error { return r.goIn(dir, "mod", "verify") })
+}
 
 // modTidy fails on a go.mod or go.sum that go mod tidy would change: a missing or stale requirement builds here
 // from the module cache and breaks the next clean build. -diff (go 1.23+) prints the change, writes nothing.
 func (r runner) modTidy() error {
-	if err := r.goCmd("mod", "tidy", "-diff"); err != nil {
-		return fmt.Errorf("%w: go.mod/go.sum not tidy, run go mod tidy in %s", err, r.c.Go.Dir)
-	}
-	return nil
+	return r.eachModule(func(dir string) error {
+		if err := r.goIn(dir, "mod", "tidy", "-diff"); err != nil {
+			return fmt.Errorf("%w: go.mod/go.sum not tidy, run go mod tidy in %s", err, dir)
+		}
+		return nil
+	})
 }
 
 // vuln fails on a known vulnerability the module's code reaches (govulncheck's call-graph mode: an unreached one in
 // a dependency is reported, never fatal).
 func (r runner) vuln() error {
-	return r.goCmd("run", "golang.org/x/vuln/cmd/govulncheck@"+pins.Govulncheck, "./...")
+	return r.eachModule(func(dir string) error {
+		return r.goIn(dir, "run", "golang.org/x/vuln/cmd/govulncheck@"+pins.Govulncheck, "./...")
+	})
 }
 
 // golangciConfig is the family's golangci-lint config, byte for byte the copy the repos kept before ship owned it:
@@ -277,27 +351,29 @@ var golangciConfig string
 // golangciNames are the config files golangci-lint looks up itself, in its working dir and each parent.
 var golangciNames = []string{".golangci.yml", ".golangci.yaml", ".golangci.toml", ".golangci.json"}
 
-// lint runs golangci-lint with the repo's own config when one sits between go.dir and the repo root (golangci's own
-// lookup; conform decides whether a repo may keep one), else with the embedded family config.
+// lint runs golangci-lint in every module with the repo's own config when one sits between the module and the repo
+// root (golangci's own lookup; conform decides whether a repo may keep one), else with the embedded family config.
 func (r runner) lint() error {
-	args := []string{"run", "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@" + r.c.Lint, "run"}
-	if own := r.ownGolangci(); own != "" {
-		fmt.Println("ship: golangci-lint config of the repo:", own)
-	} else {
-		p, err := r.writeGolangci()
-		if err != nil {
-			return err
+	return r.eachModule(func(dir string) error {
+		args := []string{"run", "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@" + r.c.Lint, "run"}
+		if own := r.ownGolangci(dir); own != "" {
+			fmt.Println("ship: golangci-lint config of the repo:", own)
+		} else {
+			p, err := r.writeGolangci()
+			if err != nil {
+				return err
+			}
+			args = append(args, "--config", p)
 		}
-		args = append(args, "--config", p)
-	}
-	return r.goCmd(args...)
+		return r.goIn(dir, args...)
+	})
 }
 
-// ownGolangci is the repo's golangci-lint config golangci would find from go.dir, "" for none. Above the repo root
-// is not looked at: a stray ~/.golangci.yaml must not replace the family's.
-func (r runner) ownGolangci() string {
+// ownGolangci is the repo's golangci-lint config golangci would find from the module at dir, "" for none. Above the
+// repo root is not looked at: a stray ~/.golangci.yaml must not replace the family's.
+func (r runner) ownGolangci(dir string) string {
 	root := filepath.Clean(r.root)
-	for d := filepath.Clean(r.goDir()); ; d = filepath.Dir(d) {
+	for d := filepath.Join(root, dir); ; d = filepath.Dir(d) {
 		for _, n := range golangciNames {
 			if p := filepath.Join(d, n); fileExists(p) {
 				return p
@@ -368,28 +444,36 @@ func (r runner) extra() error {
 
 // goTest always runs uncached (-count=1): a cached result carries the coverage counters of the file set it was
 // recorded against. env goes to the tests on top of ship's own (the postgres DSN).
+// go.coverpkg is go.dir's alone: its patterns (./internal/...) are that module's paths.
 func (r runner) goTest(env ...string) error {
-	profile, err := r.profile()
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(profile), 0o750); err != nil {
-		return err
-	}
-	args := []string{"test", "-count=1", "-covermode=atomic", "-coverprofile=" + profile}
 	if r.c.Go.RaceOn() {
-		args = append(args, "-race")
 		env = append(env, "CGO_ENABLED=1")
 	}
-	if r.c.Go.Coverpkg != "" {
-		args = append(args, "-coverpkg="+r.c.Go.Coverpkg)
-	}
-	return r.run(r.goDir(), env, "go", append(args, "./...")...)
+	return r.eachModule(func(dir string) error {
+		profile, err := r.profile(dir)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(profile), 0o750); err != nil {
+			return err
+		}
+		args := []string{"test", "-count=1", "-covermode=atomic", "-coverprofile=" + profile}
+		if r.c.Go.RaceOn() {
+			args = append(args, "-race")
+		}
+		if r.c.Go.Coverpkg != "" && !r.nested(dir) {
+			args = append(args, "-coverpkg="+r.c.Go.Coverpkg)
+		}
+		return r.run(filepath.Join(r.root, dir), env, "go", append(args, "./...")...)
+	})
 }
 
-// profile is the Go coverage report path, inside the git dir (per worktree): never an untracked file in the tree,
-// which the pre-push hook would refuse as uncommitted.
-func (r runner) profile() (string, error) {
+// profile is the module's Go coverage report path, inside the git dir (per worktree): never an untracked file in the
+// tree, which the pre-push hook would refuse as uncommitted. A nested module's sits under ship/modules/<dir>/.
+func (r runner) profile(dir string) (string, error) {
+	if r.nested(dir) {
+		return r.gitPath("ship/modules/" + cleanSlash(dir) + "/go.out")
+	}
 	return r.gitPath("ship/go.out")
 }
 
@@ -426,9 +510,17 @@ func (r runner) gates() error {
 		errs = append(errs, cover.Floor(name, l, floor))
 		all.Merge(l)
 	}
-	goLines, err := r.goLines()
-	side("go", "check go.dir and the module path in go.mod; a replace'd module in go.coverpkg lives outside "+
-		"go.dir: narrow go.coverpkg", goLines, err, r.c.Go.Floor)
+	// A floor per module, not one over all: each is released and imported on its own, and the root's lines must not
+	// carry a thin nested library.
+	for _, m := range r.modules() {
+		name, hint := "go", "check go.dir and the module path in go.mod; a replace'd module in go.coverpkg lives "+
+			"outside go.dir: narrow go.coverpkg"
+		if r.nested(m) {
+			name, hint = "go "+m, "check go.modules and the module path in "+m+"/go.mod"
+		}
+		l, err := r.goLines(m)
+		side(name, hint, l, err, r.c.Go.Floor)
+	}
 	if r.c.UI != nil {
 		uiLines, err := r.uiLines()
 		side("ui", "check ui.dir, ui.lcov and the test runner's root (vitest root, coverage.reportsDirectory)",
@@ -458,12 +550,12 @@ func (r runner) uiLines() (cover.Lines, error) {
 	return l, nil
 }
 
-func (r runner) goLines() (cover.Lines, error) {
-	modPath, err := modulePath(filepath.Join(r.goDir(), "go.mod"))
+func (r runner) goLines(dir string) (cover.Lines, error) {
+	modPath, err := modulePath(filepath.Join(r.root, dir, "go.mod"))
 	if err != nil {
 		return nil, err
 	}
-	profile, err := r.profile()
+	profile, err := r.profile(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -472,7 +564,7 @@ func (r runner) goLines() (cover.Lines, error) {
 		return nil, err
 	}
 	defer func() { _ = f.Close() }()
-	l, err := cover.GoProfile(f, modPath, r.c.Go.Dir, r.root)
+	l, err := cover.GoProfile(f, modPath, dir, r.root)
 	if err != nil {
 		return nil, err
 	}

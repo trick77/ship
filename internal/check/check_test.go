@@ -335,3 +335,96 @@ func TestSubjects(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func writeFile(t *testing.T, dir, p, s string) {
+	t.Helper()
+	full := filepath.Join(dir, p)
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(full, []byte(s), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGoModules_whenNestedUnlisted_thenFail(t *testing.T) {
+	dir, c := fixture(t, "", "mode: set\n", "")
+	r := runner{root: dir, c: c}
+	if err := r.goModules(); err != nil {
+		t.Fatal(err)
+	}
+	// A fixture module under testdata is no module of the repo's.
+	writeFile(t, dir, "lib/testdata/m/go.mod", "module example.com/fixture\n")
+	writeFile(t, dir, "sub/go.mod", "module example.com/m/sub\n\ngo 1.24\n")
+	if err := r.goModules(); err == nil || err.Error() != "nested Go module sub not gated: list it in go.modules" {
+		t.Fatalf("unlisted module passed: %v", err)
+	}
+	c.Go.Modules = []string{"sub"}
+	if err := r.goModules(); err != nil {
+		t.Fatal(err)
+	}
+	c.Go.Modules = []string{"sub", "gone"}
+	if err := r.goModules(); err == nil || !strings.Contains(err.Error(), "no go.mod in gone") {
+		t.Fatalf("listed module without go.mod passed: %v", err)
+	}
+}
+
+// nestedFixture adds module example.com/m/sub at sub/ (untracked: changed lines of the branch) with sub's profile.
+func nestedFixture(t *testing.T, cfg, subProfile string) (string, *config.Config) {
+	t.Helper()
+	prof := "mode: atomic\nexample.com/m/lib/a.go:3.14,5.2 1 1\nexample.com/m/lib/b.go:3.20,4.11 1 1\n" +
+		"example.com/m/lib/b.go:4.11,6.3 1 1\nexample.com/m/lib/b.go:7.2,7.10 1 1\n"
+	dir, c := fixture(t, cfg, prof, "")
+	writeFile(t, dir, "sub/go.mod", "module example.com/m/sub\n\ngo 1.24\n")
+	writeFile(t, dir, "sub/s.go", "package sub\n\nfunc S() int {\n\treturn 1\n}\n")
+	writeFile(t, dir, ".git/ship/modules/sub/go.out", subProfile)
+	return dir, c
+}
+
+func TestGates_whenNestedModuleTested_thenItsFloorPasses(t *testing.T) {
+	dir, c := nestedFixture(t, "go:\n  modules: [sub]\n", "mode: atomic\nexample.com/m/sub/s.go:3.14,5.2 1 1\n")
+	if err := (runner{root: dir, c: c}).gates(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The root's fully covered lines must not carry the nested module: its own floor fails, and its changed lines
+// fail the patch gate.
+func TestGates_whenNestedModuleUntested_thenItsFloorAndPatchFail(t *testing.T) {
+	dir, c := nestedFixture(t, "patch: 90\ngo:\n  modules: [sub]\n", "mode: atomic\nexample.com/m/sub/s.go:3.14,5.2 1 0\n")
+	err := (runner{root: dir, c: c}).gates()
+	if err == nil || !strings.Contains(err.Error(), "go sub coverage 0.0%") ||
+		!strings.Contains(err.Error(), "sub/s.go: missing lines") {
+		t.Fatalf("untested nested module passed: %v", err)
+	}
+}
+
+func TestGates_whenNestedProfileForeign_thenFail(t *testing.T) {
+	dir, c := nestedFixture(t, "go:\n  modules: [sub]\n", "mode: atomic\nexample.com/m/lib/a.go:3.14,5.2 1 1\n")
+	err := (runner{root: dir, c: c}).gates()
+	if err == nil || !strings.Contains(err.Error(), "no lines of module example.com/m/sub") {
+		t.Fatalf("foreign nested profile passed: %v", err)
+	}
+}
+
+func TestModTidy_whenNestedModuleUntidy_thenFailNamesIt(t *testing.T) {
+	dir, c := nestedFixture(t, "go:\n  modules: [sub]\n", "mode: set\n")
+	r := runner{root: dir, c: c}
+	if err := r.modTidy(); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, "sub/go.mod", "module example.com/m/sub\n\ngo 1.24\n\nrequire golang.org/x/mod v0.20.0\n")
+	if err := r.modTidy(); err == nil || !strings.HasPrefix(err.Error(), "sub: ") ||
+		!strings.Contains(err.Error(), "run go mod tidy in sub") {
+		t.Fatalf("untidy nested go.mod passed: %v", err)
+	}
+}
+
+func TestGofmt_whenNestedModuleFileUnformatted_thenFail(t *testing.T) {
+	dir, c := fixture(t, "", "mode: set\n", "")
+	writeFile(t, dir, "sub/go.mod", "module example.com/m/sub\n")
+	writeFile(t, dir, "sub/s.go", "package sub\nfunc  S() {}\n")
+	if err := (runner{root: dir, c: c}).gofmt(); err == nil || !strings.Contains(err.Error(), "sub/s.go") {
+		t.Fatalf("nested module's file not gofmt'd: %v", err)
+	}
+}
