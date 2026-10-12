@@ -485,6 +485,51 @@ func TestSecurityHeadersWith(t *testing.T) {
 	}
 }
 
+func TestAccessLog_flushAndHijack(t *testing.T) {
+	release := make(chan struct{})
+	log := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	srv := httptest.NewServer(Chain(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/events":
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: one\n\n"))
+			w.(http.Flusher).Flush()
+			<-release
+		case "/raw":
+			conn, rw, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			defer func() { _ = conn.Close() }()
+			_, _ = rw.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nhi")
+			_ = rw.Flush()
+		}
+	}), AccessLog(log, AccessLogOptions{}), Recover(log)))
+	defer srv.Close()
+	defer close(release)
+
+	res, err := http.Get(srv.URL + "/events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	line, err := bufio.NewReader(res.Body).ReadString('\n')
+	if err != nil || line != "data: one\n" {
+		t.Errorf("event = %q %v", line, err)
+	}
+	_ = res.Body.Close()
+
+	res, err = http.Get(srv.URL + "/raw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	_ = res.Body.Close()
+	if string(body) != "hi" {
+		t.Errorf("hijacked body = %q", body)
+	}
+}
+
 func TestSecurityHeadersWith_whenHSTSBelowASecond_thenPanics(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil || !strings.Contains(fmt.Sprint(r), "HSTS below one second") {

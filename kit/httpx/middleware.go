@@ -40,8 +40,8 @@ func newRequestID() string {
 	return hex.EncodeToString(b[:])
 }
 
-// statusWriter records the status a handler sent. Unwrap keeps http.ResponseController working through it, or
-// Flush (server-sent events) and deadline control would stop at this wrapper.
+// statusWriter records the status a handler sent. Flush and Hijack keep the http.Flusher and http.Hijacker
+// assertions working through it; Unwrap keeps the rest of http.ResponseController (deadlines).
 type statusWriter struct {
 	http.ResponseWriter
 	status int
@@ -62,6 +62,22 @@ func (w *statusWriter) Write(b []byte) (int, error) {
 }
 
 func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+// FlushError is what http.ResponseController.Flush calls. A flush sends the header: 200 unless one was written.
+func (w *statusWriter) FlushError() error {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	return http.NewResponseController(w.ResponseWriter).Flush()
+}
+
+// Flush serves the http.Flusher assertion SSE handlers make (relume-tv, netra).
+func (w *statusWriter) Flush() { _ = w.FlushError() }
+
+// Hijack serves the http.Hijacker assertion (websockets).
+func (w *statusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return http.NewResponseController(w.ResponseWriter).Hijack()
+}
 
 // AccessLogOptions shapes AccessLog. The zero value logs every request under a freshly generated request id.
 type AccessLogOptions struct {
