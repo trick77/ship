@@ -20,4 +20,6 @@ deliberately.
   `internal/pins`, nowhere else (cosign also in release.yaml's installer, a test keeps them equal).
   `internal/check/golangci.yaml` is the family's golangci config, byte-identical to the repos' old copies.
 - Commit subjects + PR titles: Go style `area: what` (`hook: …`, `release: …`), gated, and the release notes.
+- Conform (`ship conform`, check's first step) is the canon gate: a consumer's owned files are byte-equal to
+  internal/scaffold's templates; change the canon there, never in a consumer. Exceptions: ship.yaml `allow` + why.
 - Coverage: comment/blank lines never count (go/scanner, not a regex). Floors and patch share one line model.

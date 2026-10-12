@@ -63,7 +63,8 @@ coverage output.
 
 | | |
 |---|---|
-| `ship check` | fetch, commit subjects, secret scan, prettier pin, ui embed, ui build, gofmt, go mod verify, go mod tidy, build, govulncheck, golangci-lint (incl. govet), ui lint, shellcheck, steps, postgres, go test (-race, coverage), ui test, floors, patch gate |
+| `ship check` | conform, fetch, commit subjects, secret scan, prettier pin, ui embed, ui build, gofmt, go mod verify, go mod tidy, build, govulncheck, golangci-lint (incl. govet), ui lint, shellcheck, steps, postgres, go test (-race, coverage), ui test, floors, patch gate |
+| `ship conform [-fix]` / `ship init [-diff]` | the repo against ship's canon / write the files ship owns (see Conform) |
 | `ship lint` | golangci-lint alone, at the version `ship check` runs: a Makefile's quick lint, no version of its own |
 | `ship hooks` | install the pre-push hook (respects core.hooksPath, never overwrites a foreign hook) |
 | `ship release [patch\|minor\|major\|auto] [-cache gha] [-dry-run] [-dir <module>]` | next version from tags, notes from the subjects since the last tag (grouped by area), tag (API), images pushed (version + sha), scanned and signed, GitHub release, then :MAJOR.MINOR, :MAJOR, :latest. No `images:` and no `ui:`: `go build ./...` before the tag (in `-dry-run` too). With `images:` only on a GitHub-hosted runner (the Release workflow); elsewhere `-dry-run` only. The Release workflow inherits the caller's permissions: `packages: write` and `id-token: write` only with `images:`. `-dir`: a nested Go module, below |
@@ -139,19 +140,54 @@ jobs:
     uses: trick77/ship/.github/workflows/cleanup-images.yaml@master   # inputs: packages (JSON), keep, dry-run
 ```
 
+## Conform
+
+`ship conform` checks the repo against ship's canon, first in every `ship check` (so on every push): every
+divergence the consumer audit found was a copied file that drifted or an adoption step forgotten. Hard fail, no warn
+mode. One line per rule: `ok`, `FAIL <rule>: <what> (<file>)`, `allowed <rule>: <why>`, `skip <rule>: <why>` (a
+library without images or UI skips what does not apply). `ship conform -fix` runs `ship init`, then conforms:
+what is left is by hand.
+
+`ship init` writes the files ship owns, rendered from `ship.yaml` and the repo (origin, visibility, package.json):
+`.github/workflows/ci.yaml`, `release.yaml`, `cleanup-images.yaml` (images), `.github/dependabot.yaml`,
+`<ui.dir>/eslint.config.js` (UI), and in `.dockerignore` (images) and `Makefile` (apps, or one that exists) only the
+block between `# ship:begin` and `# ship:end`; the rest of those two is the repo's. Owned means byte-equal.
+`ship init -diff` prints the difference, writes nothing, exits 1 when anything differs.
+
+| rule | what | allowable |
+|---|---|---|
+| `scaffold` | every owned file equals ship's template | per `path` |
+| `workflows` | ci/release/cleanup callers use `trick77/ship/.github/workflows/<x>.yaml@master`; release: `packages: write` ⇔ images, bump options include `auto`; no other image cleanup action | yes |
+| `visibility` | GitHub's visibility (Actions event, else the API unauthenticated, cached a day in the git dir; unknown = FAIL) matches `visibility:`; public: CI on every PR (no `if:`); private: Dependabot-only `if:`, every npm/docker update grouped, ≤ 5 open PRs, cleanup caller with images | yes |
+| `dependabot` | `commit-message: { prefix: deps }` everywhere; gomod, github-actions, npm (UI), docker (Containerfile) present | yes |
+| `containerfile` | per image: `ARG VERSION` into `-X github.com/trick77/ship/kit/version.Version=${VERSION}`, `-trimpath`, non-root final stage, builder `golang:X.Y` = go.mod's | per `image` |
+| `distroless` | final stage on `gcr.io/distroless/` | per `image` |
+| `dockerignore` | exists with images; excludes `<ui.dir>/node_modules` and `<ui.dir>/dist` | yes |
+| `ui` | `ui.lint: npm run lint`; scripts `lint` = `eslint . --max-warnings 0 && npm run format:check`, `format:check` = `prettier --check 'src/**/*.{ts,tsx,css}' '*.ts'`, `build` starts `tsc -b && vite build`; `prettier` pinned at ship's version; eslint.config.js | yes |
+| `golangci` | no `.golangci.yaml`/`.yml` in the repo: ship's config is the family's | per `path` |
+| `gomod` | `go x.y.z`; a required `github.com/trick77/ship/kit` is the newest `kit/v*` tag | yes |
+| `kit` | a repo with images requires kit | yes |
+| `handrolled` | no `internal/version` package, health route strings, `signal.Notify`/`NotifyContext` outside tests: kit has them | per `path` |
+| `agents` | AGENTS.md has the commit-subject line | yes |
+
+An exception lives in `ship.yaml`, its why required (an entry without one fails the parse):
+
+```yaml
+visibility: private   # optional: checked against GitHub's
+allow:
+  - { rule: distroless, image: -agent, why: smartctl's passthrough ioctls need root and busybox }
+  - { rule: scaffold, path: ui/eslint.config.js, why: the thin-space number rule }
+```
+
 ## Adopting ship
 
 A repo moving to ship, in one PR (its own subject already Go style: the new gate checks it):
 
 1. `ship.yaml` at the root: only the keys that differ from the defaults above.
-2. `ship hooks` in every clone; drop the repo's own gate scripts and hooks.
-3. `.github/workflows/ci.yaml` and `release.yaml` calling the reusable ones: copy the caller from the head comment
-   of `check.yaml` / `release.yaml`. `release.yaml`: `workflow_dispatch` only. `ci.yaml`: `pull_request` +
-   `workflow_dispatch`, since Dependabot and fork PRs never pass the hook. Public repo: every PR, forks included
-   (read-only token, no secrets). Private repo: Dependabot PRs only (the caller's `if:`), Actions minutes are billed
-   and own pushes are gated by the hook already.
-4. `ship check` green locally, then push: the hook runs it.
-5. AGENTS.md, verbatim with the repo's own areas:
+2. `ship init`: the workflow callers, dependabot, `.dockerignore` and `Makefile` blocks, the ESLint config. Drop the
+   repo's own gate scripts and hooks.
+3. `ship conform`: what init cannot write (Containerfile, package.json scripts, kit, AGENTS.md) by hand, or an
+   `allow` entry with its why. AGENTS.md, verbatim with the repo's own areas:
    ``- Commit subjects + PR titles: Go style `area: what` (`<area>: …`, `<area>: …`), gated by ship; release notes list them by area.``
-6. `.github/dependabot.yaml`: `commit-message: { prefix: deps }` on every ecosystem (`deps: bump …`). The gate
-   skips bots either way; the prefix keeps them out of "other" in the release notes.
+4. `ship hooks` in every clone.
+5. `ship check` green locally, then push: the hook runs it.
