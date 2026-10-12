@@ -65,7 +65,7 @@ func trivyArgs(ref string) []string {
 			args = append(args, "-v", cfg+":/root/.docker/config.json:ro")
 		}
 	}
-	return append(args, "aquasec/trivy:"+pins.Trivy, "image", "--no-progress", "--exit-code", "1",
+	return append(args, "aquasec/trivy:"+pins.Trivy, "image", "--scanners", "vuln", "--no-progress", "--exit-code", "1",
 		"--severity", "HIGH,CRITICAL", "--ignore-unfixed", ref)
 }
 
