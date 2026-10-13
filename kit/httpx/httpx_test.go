@@ -37,6 +37,24 @@ func TestWriteJSONAndError(t *testing.T) {
 	}
 }
 
+func TestTooManyRequests(t *testing.T) {
+	for d, want := range map[time.Duration]string{
+		179500 * time.Millisecond: "180", // rounded up: 179 sends an obedient client back early
+		time.Second:               "1",
+		0:                         "1", // never "Retry-After: 0", which reads as retry now
+		-time.Minute:              "1",
+	} {
+		rec := httptest.NewRecorder()
+		TooManyRequests(rec, d)
+		if rec.Code != http.StatusTooManyRequests || rec.Header().Get("Retry-After") != want {
+			t.Errorf("%s: %d Retry-After %q, want 429 %q", d, rec.Code, rec.Header().Get("Retry-After"), want)
+		}
+		if !strings.Contains(rec.Body.String(), `"rate limited"`) {
+			t.Errorf("%s: body = %s", d, rec.Body.String())
+		}
+	}
+}
+
 func TestAccessLog(t *testing.T) {
 	var logs bytes.Buffer
 	log := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -423,7 +441,7 @@ func TestSecurityHeaders(t *testing.T) {
 
 func TestSecurityHeadersWith(t *testing.T) {
 	mw := SecurityHeadersWith(SecurityOptions{
-		CSP: "default-src 'self'", HTMLOnly: true, COOP: "same-origin",
+		CSP: "default-src 'self'", HTMLOnly: true, COOP: "same-origin", PermissionsPolicy: "camera=()",
 		HSTS: 2 * 365 * 24 * time.Hour, HSTSSubdomains: true,
 		NoIndex: func(p string) bool { return strings.HasPrefix(p, "/api/") || p == "/healthz" },
 	})
@@ -461,14 +479,15 @@ func TestSecurityHeadersWith(t *testing.T) {
 	}
 	page := get("/")
 	if page.Get("Content-Security-Policy") != "default-src 'self'" || page.Get("X-Frame-Options") != "DENY" ||
-		page.Get("Cross-Origin-Opener-Policy") != "same-origin" || page.Get("X-Robots-Tag") != "" {
+		page.Get("Cross-Origin-Opener-Policy") != "same-origin" || page.Get("Permissions-Policy") != "camera=()" ||
+		page.Get("X-Robots-Tag") != "" {
 		t.Errorf("html = %v", page)
 	}
 	if got := page.Get("Strict-Transport-Security"); got != "max-age=63072000; includeSubDomains" {
 		t.Errorf("HSTS = %q", got)
 	}
 	api := get("/api/x")
-	if api.Get("Content-Security-Policy") != "" || api.Get("X-Frame-Options") != "" ||
+	if api.Get("Content-Security-Policy") != "" || api.Get("X-Frame-Options") != "" || api.Get("Permissions-Policy") != "" ||
 		api.Get("X-Robots-Tag") != "noindex, nofollow" || api.Get("X-Content-Type-Options") != "nosniff" {
 		t.Errorf("json = %v", api)
 	}
