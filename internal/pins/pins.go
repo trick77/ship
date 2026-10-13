@@ -16,4 +16,8 @@ const (
 	GoMin = "1.27"
 	// NodeMin is the lowest Node major a UI's node builder and CI caller may name, and the caller's default.
 	NodeMin = "26"
+	// TypescriptCap (major.minor) is the typescript a UI stays below: typescript-eslint's peer dependency takes
+	// nothing newer, npm ci fails on ERESOLVE. Rendered into dependabot.yaml's ignore and checked by conform; lift it
+	// once typescript-eslint supports newer TypeScript.
+	TypescriptCap = "6.1"
 )

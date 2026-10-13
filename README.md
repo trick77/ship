@@ -189,7 +189,7 @@ builder, `ship init` moves CI after it.
 | `dockerignore` | exists with images; excludes `<ui.dir>/node_modules` and `<ui.dir>/dist` | yes |
 | `ui` | `ui.lint: npm run lint`; scripts exactly `build` = `tsc -b && vite build`, `lint` = `eslint . --max-warnings 0 && npm run format:check`, `format` = `prettier --write 'src/**/*.{ts,tsx,css}' '*.ts'`, `format:check` = `prettier --check …` (same globs), `test` = `vitest run`; devDependencies `typescript`, `prettier`, `eslint`, `typescript-eslint`, `eslint-config-prettier`, `@eslint/js`, `eslint-plugin-react-hooks` present at an exact version (no range; the version is the repo's), typescript below 6.1 (typescript-eslint); eslint.config.js; tsconfig.json references `./tsconfig.node.json`; vite.config.ts: `defineConfig` from `vitest/config`, `globals: true`, `setupFiles: ["./src/test/setup.ts"]`, `reportsDirectory: "../coverage/ui"`; `src/test/setup.ts`'s first statement `import "@testing-library/jest-dom/vitest";` | yes |
 | `golangci` | no `.golangci.yaml`/`.yml` in the repo: ship's config is the family's | per `path` |
-| `gomod` | `go x.y.z` ≥ 1.27.0 in go.dir and every go.modules module; a required `github.com/trick77/ship/kit` is the newest `kit/v*` tag | yes |
+| `gomod` | `go x.y.z` ≥ 1.27.0 in go.dir and every go.modules module; kit's version is Dependabot's to move | yes |
 | `kit` | a repo with images requires kit | yes |
 | `handrolled` | no `internal/version` package, health route strings, `signal.Notify`/`NotifyContext`, `github.com/coreos/go-oidc` import outside tests: kit (kit/auth) has them | per `path` |
 | `agents` | AGENTS.md has the commit-subject line | yes |

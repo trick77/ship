@@ -84,7 +84,7 @@ updates:
       # one, minor included, fails npm ci on ERESOLVE. Lift this (and
       # conform's typescriptCap) once typescript-eslint supports newer TS.
       - dependency-name: "typescript"
-        versions: [">=6.1.0"]
+        versions: [">=[[ .TypescriptCap ]].0"]
 [[- template "entries" (index .Ignore "npm") ]]
 [[- end ]]
 [[- range .DockerDirs ]]

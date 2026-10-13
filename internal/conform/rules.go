@@ -97,9 +97,8 @@ var uiDevDependencies = []string{"typescript", "prettier", "eslint", "typescript
 // exactVersion is an npm version with no range: x.y.z, a pre-release allowed.
 var exactVersion = regexp.MustCompile(`^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$`)
 
-// typescriptCap: typescript-eslint's peer dependency takes typescript <6.1.0; dependabot's typescript ignore
-// (>=6.1.0) holds it back, this catches a hand bump. Lift both once typescript-eslint supports newer TypeScript.
-const typescriptCap = "6.1"
+// typescriptCap: dependabot's typescript ignore holds a UI below it, this catches a hand bump.
+const typescriptCap = pins.TypescriptCap
 
 // SetupImport is the first statement of the UI's src/test/setup.ts: jest-dom's matchers on vitest's expect, before
 // anything a repo adds there.
@@ -330,8 +329,8 @@ func atLeast(v, floor string) bool {
 	return true
 }
 
-// gomod: every module's go line is a full toolchain version (go mod tidy's own form) at least pins.GoMin, and kit,
-// once go.dir's module requires it, is the newest.
+// gomod: every module's go line is a full toolchain version (go mod tidy's own form) at least pins.GoMin. kit's
+// version is Dependabot's to move like any dependency's: a kit release never fails a consumer's push.
 func (e *env) gomod() result {
 	file := e.goPath("go.mod")
 	m, err := e.goMod()
@@ -353,64 +352,7 @@ func (e *env) gomod() result {
 			fs = append(fs, goLineFindings(f, nm.goVersion)...)
 		}
 	}
-	if m.kit == "" {
-		return result{findings: fs}
-	}
-	latest, err := e.latestKit()
-	switch {
-	case err != nil:
-		fs = append(fs, finding{what: err.Error(), file: file})
-	case latest == "":
-		return result{findings: fs, note: "no kit/v* tag yet"}
-	case m.kit != latest:
-		fs = append(fs, finding{what: fmt.Sprintf("%s %s, newest is %s (go get %s@%s)", KitModule, m.kit, latest,
-			KitModule, latest), file: file})
-	}
 	return result{findings: fs}
-}
-
-// latestKit is the newest kit/v* tag as a module version, "" when there is none.
-func (e *env) latestKit() (string, error) {
-	if e.kitTags == nil && e.kitErr == nil {
-		e.kitTags, e.kitErr = e.o.KitTags() // once per run: gomod and kit both ask
-		if e.kitTags == nil {
-			e.kitTags = []string{}
-		}
-	}
-	tags, err := e.kitTags, e.kitErr
-	if err != nil {
-		return "", err
-	}
-	best, bestV := "", []int(nil)
-	for _, t := range tags {
-		v, ok := strings.CutPrefix(t, "kit/")
-		if !ok {
-			continue
-		}
-		n, ok := semver(v)
-		if ok && (bestV == nil || slices.Compare(n, bestV) > 0) {
-			best, bestV = v, n
-		}
-	}
-	return best, nil
-}
-
-// semver parses vX.Y.Z (no pre-release: a kit release is a plain tag).
-func semver(v string) ([]int, bool) {
-	s, ok := strings.CutPrefix(v, "v")
-	parts := strings.Split(s, ".")
-	if !ok || len(parts) != 3 {
-		return nil, false
-	}
-	n := make([]int, 3)
-	for i, p := range parts {
-		x, err := strconv.Atoi(p)
-		if err != nil {
-			return nil, false
-		}
-		n[i] = x
-	}
-	return n, true
 }
 
 // kit: a repo with images is a service, and a service runs on kit.
@@ -424,13 +366,6 @@ func (e *env) kit() result {
 	}
 	if m.kit != "" {
 		return result{}
-	}
-	// Before kit's first tag there is nothing to require.
-	switch latest, err := e.latestKit(); {
-	case err != nil:
-		return result{findings: []finding{{what: err.Error(), file: e.goPath("go.mod")}}}
-	case latest == "":
-		return result{note: "no kit/v* tag yet"}
 	}
 	return result{findings: []finding{{what: "a service (images) requires " + KitModule, file: e.goPath("go.mod")}}}
 }
