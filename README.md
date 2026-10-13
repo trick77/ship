@@ -191,7 +191,7 @@ builder, `ship init` moves CI after it.
 | `golangci` | no `.golangci.yaml`/`.yml` in the repo: ship's config is the family's | per `path` |
 | `gomod` | `go x.y.z` ≥ 1.27.0 in go.dir and every go.modules module; a required `github.com/trick77/ship/kit` is the newest `kit/v*` tag | yes |
 | `kit` | a repo with images requires kit | yes |
-| `handrolled` | no `internal/version` package, health route strings, `signal.Notify`/`NotifyContext`, `github.com/coreos/go-oidc` import outside tests: kit (kit/auth) has them | per `path` |
+| `handrolled` | no `internal/version` package, `/health`, `/healthz` or `/readyz` route (a method pattern such as `"GET /healthz"`, or a `Handle`/`HandleFunc` argument; a URL such as `LocalURL(addr, "/healthz")` is none; another router's methods and a path held in a constant are not seen), `signal.Notify`/`NotifyContext`, `github.com/coreos/go-oidc` import outside tests: kit (kit/auth) has them | per `path` |
 | `agents` | AGENTS.md has the commit-subject line | yes |
 | `postgres` | `compose:<service>` resolves; a literal `postgres:` (a version too) names no repository a root compose service's `image:` names (`duplicates compose service <s>'s image, use compose:<s>`): two pins drift | yes |
 

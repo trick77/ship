@@ -432,15 +432,28 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 		{"handrolled", appShip, func(r *repo) {
 			r.write("backend/internal/version/version.go", "package version\n\nvar Version = \"dev\"\n")
 			r.write("backend/internal/api/api.go", "package api\n\nconst p = \"GET /api/v1/"+"health\"\n")
+			// The probes kit's httpx.Health serves, written by hand: rongo's GET /healthz went unflagged.
+			r.write("backend/internal/api/live.go", "package api\n\nconst p = \"GET /"+"healthz\"\n")
+			r.write("backend/internal/api/ready.go", "package api\n\nfunc f() { mux.HandleFunc(\"/api/"+"readyz\", h) }\n")
+			// Handle without Func, its argument on the next line, a raw string; a method pattern with a tab and a host.
+			r.write("backend/internal/api/handle.go", "package api\n\nfunc f() {\n\tmux.Handle(\n\t\t`/api/v1/"+"healthz`, h)\n}\n")
+			r.write("backend/internal/api/host.go", "package api\n\nconst p = \"GET\\tapp.example/"+"readyz\"\n")
+			// A path named as a URL, not a route: kit's own probe call, a client of someone's /health. Never a finding.
+			r.write("backend/cmd/app/probe.go", "package main\n\nfunc g() {\n\thttpx.Healthcheck(httpx.LocalURL(addr, \"/"+
+				"healthz\"))\n\t_, _ = http.Get(base + \"/"+"health\")\n}\n")
 			r.write("backend/cmd/app/main.go", "package main\n\nfunc init() { signal."+"NotifyContext(nil) }\n")
-			r.write("backend/cmd/app/main_test.go", "package main\n\nconst p = \"/"+"health\"\n")
-			r.write("backend/testdata/x.go", "package x\n\nconst p = \"/"+"health\"\n")
+			r.write("backend/cmd/app/main_test.go", "package main\n\nconst p = \"GET /"+"health\"\n")
+			r.write("backend/testdata/x.go", "package x\n\nconst p = \"GET /"+"health\"\n")
 			r.write("backend/tools/go.mod", "module tools\n")
-			r.write("backend/tools/x.go", "package x\n\nconst p = \"/"+"health\"\n")
+			r.write("backend/tools/x.go", "package x\n\nconst p = \"GET /"+"health\"\n")
 			r.write("backend/internal/auth/oidc.go", "package auth\n\nimport (\n\toidc \"github.com/coreos/"+"go-oidc/v3/oidc\"\n)\n")
 			r.write("backend/internal/auth/oidc_test.go", "package auth\n\nimport _ \"github.com/coreos/"+"go-oidc/v3/oidc\"\n")
 		}, []string{"FAIL handrolled: own version package: use github.com/trick77/ship/kit/version (backend/internal/version)",
 			"FAIL handrolled: own health route: use kit's (backend/internal/api/api.go)",
+			"FAIL handrolled: own health route: use kit's (backend/internal/api/handle.go)",
+			"FAIL handrolled: own health route: use kit's (backend/internal/api/host.go)",
+			"FAIL handrolled: own health route: use kit's (backend/internal/api/live.go)",
+			"FAIL handrolled: own health route: use kit's (backend/internal/api/ready.go)",
 			"FAIL handrolled: own shutdown signal handling: use kit's (run.Context, httpx.Serve) (backend/cmd/app/main.go)",
 			"FAIL handrolled: own OIDC: use github.com/trick77/ship/kit/auth (backend/internal/auth/oidc.go)"}},
 		{"agents", appShip, func(r *repo) { r.write("AGENTS.md", "# AGENTS.md\n") },
