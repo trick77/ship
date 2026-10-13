@@ -178,6 +178,31 @@ func TestFiles_whenGoModules_thenGomodEntryEach(t *testing.T) {
 	}
 }
 
+func TestFiles_whenDependabotIgnore_thenUnderItsEcosystem(t *testing.T) {
+	c := parse(t, "go:\n  dir: backend\n  modules: [kit]\nui: {}\ndependabot:\n  ignore:\n"+
+		"    - { ecosystem: gomod, dependency: github.com/ncruces/go-sqlite3, why: bindings welded to v0.23.3 }\n"+
+		"    - { ecosystem: npm, dependency: mermaid, versions: [\">=12.1.0\", \"<13\"], why: drops a diagram type }\n")
+	files, err := Files(t.TempDir(), c, Facts{Visibility: "public"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dep := string(byPath(t, files, Dependabot).Want)
+	gomod := "          - major\n    ignore:\n      # bindings welded to v0.23.3\n" +
+		"      - dependency-name: \"github.com/ncruces/go-sqlite3\"\n\n"
+	// go.dir's block and the nested module's: ship.yaml names a dependency, not a directory.
+	if strings.Count(dep, gomod) != 2 {
+		t.Errorf("gomod ignore, want it under both gomod entries:\n%s", dep)
+	}
+	npm := "        versions: [\">=6.1.0\"]\n      # drops a diagram type\n" +
+		"      - dependency-name: \"mermaid\"\n        versions: [\">=12.1.0\", \"<13\"]\n"
+	if !strings.Contains(dep, npm) {
+		t.Errorf("npm ignore, want it after the typescript cap:\n%s", dep)
+	}
+	if strings.Count(dep, "ignore:") != 3 {
+		t.Errorf("ignore blocks, want gomod twice and npm once:\n%s", dep)
+	}
+}
+
 func TestFiles_whenComposePins_thenComposeEntry(t *testing.T) {
 	for _, compose := range []bool{false, true} {
 		files, err := Files(t.TempDir(), parse(t, ""), Facts{Visibility: "private", Compose: compose})

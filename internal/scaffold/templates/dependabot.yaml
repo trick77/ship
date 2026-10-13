@@ -19,6 +19,21 @@
           - "*"
         update-types:
           - major
+[[- end ]]
+[[- define "entries" ]]
+[[- range . ]]
+      # [[ .Why ]]
+      - dependency-name: [[ quote .Dependency ]]
+[[- if .Versions ]]
+        versions: [[ quoteList .Versions ]]
+[[- end ]]
+[[- end ]]
+[[- end ]]
+[[- define "ignore" ]]
+[[- if . ]]
+    ignore:
+[[- template "entries" . ]]
+[[- end ]]
 [[- end -]]
 version: 2
 updates:
@@ -27,6 +42,7 @@ updates:
 [[- template "head" ]]
     groups:
 [[- template "split" "gomod" ]]
+[[- template "ignore" (index .Ignore "gomod") ]]
 [[- range .GoModules ]]
 
   # Nested Go module (ship.yaml go.modules), its own go.mod.
@@ -35,6 +51,7 @@ updates:
 [[- template "head" ]]
     groups:
 [[- template "split" "gomod" ]]
+[[- template "ignore" (index $.Ignore "gomod") ]]
 [[- end ]]
 [[- if .UI ]]
 
@@ -67,6 +84,7 @@ updates:
       # conform's typescriptCap) once typescript-eslint supports newer TS.
       - dependency-name: "typescript"
         versions: [">=6.1.0"]
+[[- template "entries" (index .Ignore "npm") ]]
 [[- end ]]
 [[- range .DockerDirs ]]
 
@@ -76,6 +94,7 @@ updates:
 [[- template "head" ]]
     groups:
 [[- template "split" "docker" ]]
+[[- template "ignore" (index $.Ignore "docker") ]]
 [[- end ]]
 [[- if .Compose ]]
 
@@ -85,6 +104,7 @@ updates:
 [[- template "head" ]]
     groups:
 [[- template "split" "compose" ]]
+[[- template "ignore" (index .Ignore "docker-compose") ]]
 [[- end ]]
 
   - package-ecosystem: github-actions
@@ -92,3 +112,4 @@ updates:
 [[- template "head" ]]
     groups:
 [[- template "split" "actions" ]]
+[[- template "ignore" (index .Ignore "github-actions") ]]
