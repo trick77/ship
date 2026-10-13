@@ -874,6 +874,43 @@ func TestServe_whenServerFailsOnItsOwn_thenClosesConnections(t *testing.T) {
 	}
 }
 
+func TestServe_whenProgramShutsDownTheServer_thenNilWithoutCuttingTheDrain(t *testing.T) {
+	addr := freeAddr(t)
+	release := make(chan struct{})
+	entered, returned := make(chan struct{}), make(chan struct{})
+	srv := NewServer(addr, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/hold" {
+			return
+		}
+		close(entered)
+		defer close(returned)
+		select { // a Close ends r.Context(), a Shutdown does not
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	defer close(release)
+	done := make(chan error, 1)
+	go func() { done <- Serve(context.Background(), srv, time.Minute) }()
+	waitUp(t, "http://"+addr+"/")
+	getHold(addr)
+	<-entered
+	go func() { _ = srv.Shutdown(context.Background()) }() // an admin endpoint's doing
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Serve = %v, want nil on the program's own Shutdown", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve did not return on the program's own Shutdown")
+	}
+	select {
+	case <-returned:
+		t.Error("the handler in flight was cut: Serve closed the server")
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 func TestServe_whenListenerCloseFails_thenItsErrorWithoutOverrun(t *testing.T) {
 	broke := errors.New("close broke")
 	useFaultyListener(t, broke)

@@ -34,8 +34,14 @@ func NewServer(addr string, h http.Handler) *http.Server {
 // (a listener that fails to close after a clean drain) is returned as is. A server that fails on its own (its
 // accept loop errs) is closed too before its error returns: kept-alive connections must not go on serving. Neither
 // Shutdown nor Close waits for a handler to return or for a hijacked connection (a WebSocket); Main also waits for
-// those, within the same budget.
+// those, within the same budget. A Shutdown the program calls itself (an admin endpoint) is a stop too: Serve
+// returns nil at once and leaves that Shutdown its drain.
 func Serve(ctx context.Context, srv *http.Server, shutdownTimeout time.Duration) error {
+	ctx, stop := run.Context(ctx)
+	defer stop()
+	// The handler goes as soon as the stop is in, not at return: a second signal must not wait out the drain.
+	// NotifyContext alone keeps it registered, swallowing every further signal, until stop.
+	context.AfterFunc(ctx, stop)
 	_, _, err := serve(ctx, srv, shutdownTimeout)
 	return err
 }
@@ -43,8 +49,9 @@ func Serve(ctx context.Context, srv *http.Server, shutdownTimeout time.Duration)
 // listen opens serve's listener; a var only for the tests of a failing one. srv.Serve closes it.
 var listen = net.Listen
 
-// serve is Serve and also returns when the stop came in (the return time when the server failed on its own) and
-// whether there was one: Main counts its whole stop budget from stoppedAt and tells a failure from a stop.
+// serve is Serve without the signal handling (ctx is taken as given: Serve and Main bind the signals themselves) and
+// also returns when the stop came in (the return time when the server failed on its own) and whether there was one:
+// Main counts its whole stop budget from stoppedAt and tells a failure from a stop.
 func serve(ctx context.Context, srv *http.Server, shutdownTimeout time.Duration) (stoppedAt time.Time, stopped bool, err error) {
 	addr := srv.Addr
 	if addr == "" {
@@ -54,15 +61,15 @@ func serve(ctx context.Context, srv *http.Server, shutdownTimeout time.Duration)
 	if err != nil {
 		return time.Now(), false, err
 	}
-	ctx, stop := run.Context(ctx)
-	defer stop()
-	// The handler goes as soon as the stop is in, not at return: a second signal must not wait out the drain.
-	// NotifyContext alone keeps it registered, swallowing every further signal, until stop.
-	context.AfterFunc(ctx, stop)
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()
 	select {
 	case err = <-errc:
+		if errors.Is(err, http.ErrServerClosed) {
+			// Someone else's Shutdown: a stop, and its drain is under way. No Close, no second Shutdown (that would
+			// cut the drain short or rerun the RegisterOnShutdown hooks).
+			return time.Now(), true, nil
+		}
 		// Failed on its own: the connections it accepted would go on dispatching requests.
 		_ = srv.Close()
 		return time.Now(), false, err

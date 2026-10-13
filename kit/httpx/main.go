@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -55,20 +56,23 @@ type MainOptions struct {
 // signal handler: a second Ctrl-C or SIGTERM during a slow Build, drain or cleanup kills the process at once.
 //
 // Exit codes: 0 on a stop, also one that arrives during Build (Build then returns an error wrapping
-// context.Canceled or context.DeadlineExceeded, or no server; any other error stays a failure), 1 when Build or the
-// server fails (a port that cannot bind, a server not on o.Addr) or o is unusable (no Addr, no Build, a
-// -healthcheck flag that is not a bool), 2 on a bad command line. The -h (0) and bad flag (2) returns are a
-// ContinueOnError fs's: flag.CommandLine is ExitOnError, its Parse exits the process with those codes itself.
+// context.Canceled or context.DeadlineExceeded, no server, or a server Main then never binds; any other error stays a
+// failure), 1 when Build or the server fails (a port that cannot bind, a server not on o.Addr) or o is unusable (no
+// Addr, no Build, a -healthcheck flag that is not a bool), 2 on a bad command line. The -h (0) and bad flag (2)
+// returns are a ContinueOnError fs's: flag.CommandLine is ExitOnError, its Parse exits the process with those codes
+// itself.
 //
 // A drain that outlasts o.Drain closes the server (Serve), cutting off the requests still in flight, and exits 0
 // with a warning: the stop was asked for and happened, it only ran long. A non-zero exit would read as a crash to
 // the restart policy. Any other Shutdown error (a listener that fails to close after the drain) is a stop too: it
-// is logged and exits 0.
+// is logged and exits 0. So is a Shutdown the program calls itself (an admin endpoint): Main waits for the handlers
+// and runs the cleanup as on a signal.
 //
 // Main counts the calls into the server's handler. Once the server has stopped it waits for every call to return,
 // for what is left of o.Drain since the stop but at least a second, then runs the cleanup: drain and wait share the
 // one budget, so a stop takes about o.Drain before the cleanup (a second more on an overrun), never twice it.
-// Shutdown and Close wait for neither a hijacked connection (a WebSocket) nor a handler's return; the count covers both, as long as the work runs inside the handler call. A
+// Shutdown and Close wait for neither a hijacked connection (a WebSocket) nor a handler's return; the count covers
+// both, as long as the work runs inside the handler call. A
 // call still running after the wait gets a warning with the count, and the cleanup runs under it anyway: an exit
 // must not hang on a stuck handler. A goroutine a handler started and left running is not counted; it must stop on
 // its own before the cleanup, or not use what the cleanup closes.
@@ -110,8 +114,8 @@ func Main(ctx context.Context, fs *flag.FlagSet, args []string, o MainOptions) i
 	// One signal context for Build and Serve: a stop during a slow Build reaches it, and the cleanup still runs.
 	ctx, stop := run.Context(ctx)
 	defer stop()
-	// The handler goes as soon as the stop is in, not at return: a second signal must not wait out a slow Build or
-	// the cleanup. Serve releases its own the same way for the drain.
+	// The handler goes as soon as the stop is in, not at return: a second signal must not wait out a slow Build, the
+	// drain or the cleanup. serve takes this ctx as is, with no signal handling of its own.
 	context.AfterFunc(ctx, stop)
 	srv, cleanup, err := o.Build(ctx)
 	if cleanup != nil {
@@ -134,10 +138,18 @@ func Main(ctx context.Context, fs *flag.FlagSet, args []string, o MainOptions) i
 		return 1
 	case srv.Addr == "":
 		srv.Addr = o.Addr
-	case !probeReaches(srv.Addr, o.Addr):
-		// -healthcheck would probe where nothing listens, and the runtime restart a working server.
-		o.Log.ErrorContext(ctx, "Startup failed: the server's Addr is not where -healthcheck probes MainOptions.Addr", "addr", srv.Addr, "want", o.Addr)
-		return 1
+	default:
+		if err := probeReaches(srv.Addr, o.Addr); err != nil {
+			// -healthcheck would probe where nothing listens, and the runtime restart a working server.
+			o.Log.ErrorContext(ctx, "Startup failed: the server's Addr is not where -healthcheck probes MainOptions.Addr",
+				"addr", srv.Addr, "want", o.Addr, logging.Err(err))
+			return 1
+		}
+	}
+	if stopped {
+		// Build ignored ctx and returned a server anyway: binding it only to shut it down helps no one.
+		o.Log.InfoContext(ctx, "Stopped during startup")
+		return 0
 	}
 	var calls inflight
 	srv.Handler = calls.wrap(srv.Handler)
@@ -160,23 +172,44 @@ func Main(ctx context.Context, fs *flag.FlagSet, args []string, o MainOptions) i
 	return 0
 }
 
-// probeReaches reports whether a server listening on addr answers -healthcheck's probe of want: same port, and addr's
-// host takes a connection to LocalURL's host. "" and "::" are dual-stack wildcards, "0.0.0.0" takes IPv4 only;
-// a probe of "localhost" dials ::1 and 127.0.0.1; a server on "localhost" binds 127.0.0.1 (Go's Listen prefers IPv4).
-func probeReaches(addr, want string) bool {
+// probeReaches returns nil when a server listening on addr answers -healthcheck's probe of want, else why not: the same port (by
+// number: ":http" is ":80", ":08080" is ":8080"), and addr's host takes a connection to LocalURL's host. "" and "::"
+// are dual-stack wildcards, "0.0.0.0" takes IPv4 only; a probe of "localhost" dials ::1 and 127.0.0.1; a server on
+// "localhost" binds 127.0.0.1 (Go's Listen prefers IPv4).
+func probeReaches(addr, want string) error {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
-		return false
+		return err
 	}
 	wantHost, wantPort, err := net.SplitHostPort(want)
-	if err != nil || port != wantPort {
-		return false
+	if err != nil {
+		return err
 	}
-	probe := dialHost(wantHost)
+	p, err := net.LookupPort("tcp", port)
+	if err != nil {
+		return err
+	}
+	wp, err := net.LookupPort("tcp", wantPort)
+	if err != nil {
+		return err
+	}
+	if p != wp {
+		return fmt.Errorf("port %d, the probe dials %d", p, wp)
+	}
+	if !hostReaches(host, dialHost(wantHost)) {
+		return fmt.Errorf("host %q does not take the probe's connection to %q", host, dialHost(wantHost))
+	}
+	return nil
+}
+
+// hostReaches reports whether a server listening on host takes a connection to probe.
+func hostReaches(host, probe string) bool {
 	if host == probe {
 		return true
 	}
 	switch host {
+	// Dual-stack: a "tcp" wildcard listen is AF_INET6 with IPV6_V6ONLY set to 0 whatever the OS default (Go's
+	// net.favoriteAddrFamily, setDefaultSockopts); not on OpenBSD and DragonFly, which have no IPv4-mapped IPv6.
 	case "", "::":
 		return true
 	case "0.0.0.0":

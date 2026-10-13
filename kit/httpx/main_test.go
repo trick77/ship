@@ -363,6 +363,85 @@ func TestMain_whenStopDuringBuild_thenZeroOnlyForTheStopsOwnError(t *testing.T) 
 	}
 }
 
+func TestMain_whenStopDuringBuildReturnsAServer_thenZeroWithoutBinding(t *testing.T) {
+	orig := listen
+	listen = func(network, addr string) (net.Listener, error) {
+		t.Errorf("Main bound %s after a stop during Build", addr)
+		return orig(network, addr)
+	}
+	t.Cleanup(func() { listen = orig })
+	code, log, cleaned := stopDuringBuild(t, func(context.Context) (*http.Server, error) {
+		return NewServer("127.0.0.1:1", http.NotFoundHandler()), nil // a Build that ignores ctx
+	})
+	if code != 0 {
+		t.Errorf("Main = %d, want 0", code)
+	}
+	if !strings.Contains(log, "Stopped during startup") {
+		t.Errorf("log = %q, want the stop", log)
+	}
+	if !cleaned {
+		t.Error("cleanup did not run")
+	}
+}
+
+func TestMain_whenProgramShutsDownTheServer_thenZeroAfterHandlersAndCleanup(t *testing.T) {
+	addr := freeAddr(t)
+	release := make(chan struct{})
+	entered, returned := make(chan struct{}), make(chan struct{})
+	var srv *http.Server
+	handlerDone := make(chan bool, 1)
+	build := func(context.Context) (*http.Server, func(), error) {
+		srv = NewServer(addr, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/hold" {
+				return
+			}
+			close(entered)
+			defer close(returned)
+			select { // a Close ends r.Context(), a Shutdown does not
+			case <-release:
+			case <-r.Context().Done():
+			}
+		}))
+		cleanup := func() {
+			select {
+			case <-returned:
+				handlerDone <- true
+			default:
+				handlerDone <- false
+			}
+		}
+		return srv, cleanup, nil
+	}
+	var buf bytes.Buffer
+	o := MainOptions{Addr: addr, Build: build, Drain: time.Minute, Log: slog.New(slog.NewTextHandler(&buf, nil))}
+	done := make(chan int, 1)
+	go func() { done <- Main(context.Background(), mainFlags(), nil, o) }()
+	waitUp(t, "http://"+addr+"/")
+	getHold(addr)
+	<-entered
+	go func() { _ = srv.Shutdown(context.Background()) }() // an admin endpoint's doing
+	select {
+	case code := <-done:
+		t.Fatalf("Main = %d before the handler returned: the drain was cut", code)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Errorf("Main = %d, want 0 on the program's own Shutdown", code)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Main hung after the Shutdown")
+	}
+	if !<-handlerDone {
+		t.Error("cleanup ran with the handler still in flight")
+	}
+	if log := buf.String(); strings.Contains(log, "Server failed") {
+		t.Errorf("log = %q, want no failure", log)
+	}
+}
+
 func TestMain_whenHijackedHandlerRuns_thenCleanupWaitsForIt(t *testing.T) {
 	addr := freeAddr(t)
 	entered := make(chan struct{})
@@ -585,20 +664,34 @@ func TestProbeReaches(t *testing.T) {
 		for _, w := range hosts {
 			want := slices.Contains(reaches[h], w)
 			addr, o := net.JoinHostPort(h, "8080"), net.JoinHostPort(w, "8080")
-			if got := probeReaches(addr, o); got != want {
-				t.Errorf("probeReaches(%q, %q) = %v, want %v", addr, o, got, want)
+			if err := probeReaches(addr, o); (err == nil) != want {
+				t.Errorf("probeReaches(%q, %q) = %v, want reaches %v", addr, o, err, want)
 			}
 		}
 	}
-	for _, tt := range []struct{ addr, want string }{
-		{"127.0.0.1:8081", "127.0.0.1:8080"},
-		{":8081", ":8080"},
-		{"example.com:8080", "127.0.0.1:8080"},
-		{"8080", ":8080"},
-		{":8080", "8080"},
+	for _, tt := range []struct {
+		addr, want string
+		reaches    bool
+		why        string // in the error when it does not
+	}{
+		{"127.0.0.1:8081", "127.0.0.1:8080", false, "port 8081, the probe dials 8080"},
+		{":8081", ":8080", false, "port 8081"},
+		{"example.com:8080", "127.0.0.1:8080", false, `host "example.com"`},
+		{"8080", ":8080", false, "missing port"},
+		{":8080", "8080", false, "missing port"},
+		// Ports by number, not by spelling.
+		{":http", ":80", true, ""},
+		{":80", ":http", true, ""},
+		{"[::]:http", "127.0.0.1:80", true, ""},
+		{":08080", ":8080", true, ""},
+		{"127.0.0.1:8080", "localhost:08080", true, ""},
+		{":http", ":8080", false, "port 80, the probe dials 8080"},
+		{":nosuch", ":8080", false, "nosuch"},
+		{":8080", ":nosuch", false, "nosuch"},
 	} {
-		if probeReaches(tt.addr, tt.want) {
-			t.Errorf("probeReaches(%q, %q) = true, want false", tt.addr, tt.want)
+		err := probeReaches(tt.addr, tt.want)
+		if (err == nil) != tt.reaches || err != nil && !strings.Contains(err.Error(), tt.why) {
+			t.Errorf("probeReaches(%q, %q) = %v, want reaches %v (%s)", tt.addr, tt.want, err, tt.reaches, tt.why)
 		}
 	}
 }
