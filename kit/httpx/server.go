@@ -86,7 +86,8 @@ func healthcheck(url string, w io.Writer) int {
 	}
 	_ = resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		_, _ = fmt.Fprintf(w, "healthcheck: %s: %s\n", url, resp.Status)
+		// The status alone: url may carry userinfo, and the health log keeps what this prints.
+		_, _ = fmt.Fprintf(w, "healthcheck: %s\n", resp.Status)
 		return 1
 	}
 	return 0

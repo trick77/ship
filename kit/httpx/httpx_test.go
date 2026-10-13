@@ -640,23 +640,30 @@ func TestHealthcheck(t *testing.T) {
 	if got := Healthcheck(srv.URL + "/ok"); got != 0 {
 		t.Errorf("Healthcheck(/ok) = %d, want 0", got)
 	}
+	// The userinfo must not reach the health log.
+	withSecret := strings.Replace(srv.URL, "://", "://user:secret@", 1)
 	for path, want := range map[string]struct {
 		code int
-		out  string // printed reason, empty: nothing printed
-	}{"/ok": {0, ""}, "/redirect": {1, "302 Found"}, "/down": {1, "503 Service Unavailable"}} {
+		out  string
+	}{
+		"/ok":       {0, ""},
+		"/redirect": {1, "healthcheck: 302 Found\n"},
+		"/down":     {1, "healthcheck: 503 Service Unavailable\n"},
+	} {
 		var out bytes.Buffer
-		if got := healthcheck(srv.URL+path, &out); got != want.code {
-			t.Errorf("Healthcheck(%s) = %d, want %d", path, got, want.code)
+		if got := healthcheck(withSecret+path, &out); got != want.code {
+			t.Errorf("healthcheck(%s) = %d, want %d", path, got, want.code)
 		}
-		if (want.out == "") != (out.Len() == 0) || !strings.Contains(out.String(), want.out) {
-			t.Errorf("Healthcheck(%s) printed %q, want %q", path, out.String(), want.out)
+		if out.String() != want.out {
+			t.Errorf("healthcheck(%s) printed %q, want %q", path, out.String(), want.out)
 		}
 	}
 	var out bytes.Buffer
 	if got := healthcheck("http://127.0.0.1:1/", &out); got != 1 {
 		t.Errorf("unreachable = %d", got)
 	}
-	if !strings.Contains(out.String(), "connection refused") {
+	// The dial error's wording is the platform's: only that a reason is printed.
+	if !strings.HasPrefix(out.String(), "healthcheck: ") || len(out.String()) <= len("healthcheck: \n") {
 		t.Errorf("unreachable printed %q, want the dial error", out.String())
 	}
 }
