@@ -12,7 +12,7 @@ import (
 )
 
 // Unix only: Windows cannot send itself SIGTERM.
-func TestMain_whenSIGTERMDuringBuild_thenBuildSeesItAndCleanup(t *testing.T) {
+func TestMain_whenSIGTERMDuringBuild_thenBuildSeesItZeroAndCleanup(t *testing.T) {
 	entered, cleaned := make(chan struct{}), false
 	build := func(ctx context.Context) (*http.Server, func(), error) {
 		close(entered)
@@ -36,8 +36,8 @@ func TestMain_whenSIGTERMDuringBuild_thenBuildSeesItAndCleanup(t *testing.T) {
 	if err := p.Signal(syscall.SIGTERM); err != nil {
 		t.Fatal(err)
 	}
-	if code := <-done; code != 1 {
-		t.Errorf("Main = %d, want 1 for a startup cut short", code)
+	if code := <-done; code != 0 {
+		t.Errorf("Main = %d, want 0 for a startup cut short by a stop", code)
 	}
 	if !cleaned {
 		t.Error("cleanup did not run")

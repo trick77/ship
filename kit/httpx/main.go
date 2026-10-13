@@ -38,8 +38,9 @@ type MainOptions struct {
 // Otherwise it serves o.Build's server until ctx ends or the process gets SIGINT/SIGTERM (Serve); Build's ctx ends
 // on the signal too. Flags of the program's own go on fs before the call.
 //
-// Exit codes: 0 on a stop, 1 when Build or the server fails (a port that cannot bind) or o is unusable (no Addr, no
-// Build, a -healthcheck flag that is not a bool), 2 on a bad command line. The -h (0) and bad flag (2) returns are a
+// Exit codes: 0 on a stop, also one that arrives during Build (its error is then the stop's, not a failure), 1 when
+// Build or the server fails (a port that cannot bind) or o is unusable (no Addr, no Build, a -healthcheck flag that
+// is not a bool), 2 on a bad command line. The -h (0) and bad flag (2) returns are a
 // ContinueOnError fs's: flag.CommandLine is ExitOnError, its Parse exits the process with those codes itself.
 //
 // A drain that outlasts o.Drain closes the server, cutting off the requests still in flight, and exits 0 with a
@@ -86,6 +87,10 @@ func Main(ctx context.Context, fs *flag.FlagSet, args []string, o MainOptions) i
 		defer cleanup()
 	}
 	switch {
+	case err != nil && ctx.Err() != nil:
+		// A stop asked for, not a crash: like the drain overrun, non-zero would read as one to the restart policy.
+		o.Log.InfoContext(ctx, "Stopped during startup", logging.Err(err))
+		return 0
 	case err != nil:
 		o.Log.ErrorContext(ctx, "Startup failed", logging.Err(err))
 		return 1

@@ -111,15 +111,21 @@ func TestMain_whenNoBuildOrNoServer_thenOne(t *testing.T) {
 	}
 }
 
-func TestMain_whenBuildFails_thenOne(t *testing.T) {
+func TestMain_whenBuildFails_thenOneAndCleanup(t *testing.T) {
 	var buf bytes.Buffer
-	build := func(context.Context) (*http.Server, func(), error) { return nil, nil, errors.New("no DATABASE_URL") }
+	cleaned := false
+	build := func(context.Context) (*http.Server, func(), error) {
+		return nil, func() { cleaned = true }, errors.New("no DATABASE_URL")
+	}
 	o := MainOptions{Addr: "127.0.0.1:1", Build: build, Log: slog.New(slog.NewTextHandler(&buf, nil))}
 	if code := Main(context.Background(), mainFlags(), nil, o); code != 1 {
 		t.Errorf("Main = %d, want 1", code)
 	}
 	if !strings.Contains(buf.String(), "no DATABASE_URL") {
 		t.Errorf("log = %q, want the build error", buf.String())
+	}
+	if !cleaned {
+		t.Error("cleanup did not run")
 	}
 }
 
