@@ -17,3 +17,32 @@ func TestContext_whenParentEnds_thenDone(t *testing.T) {
 		t.Fatal("parent's end did not end the context")
 	}
 }
+
+func TestSleep_whenDurationPasses_thenTrue(t *testing.T) {
+	if !Sleep(context.Background(), time.Millisecond) {
+		t.Fatal("Sleep = false, want true after the full duration")
+	}
+}
+
+func TestSleep_whenContextEnds_thenFalseAtOnce(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	go cancel()
+	start := time.Now()
+	if Sleep(ctx, time.Hour) {
+		t.Fatal("Sleep = true, want false on a cancelled context")
+	}
+	if waited := time.Since(start); waited > 5*time.Second {
+		t.Fatalf("Sleep waited %s after the context ended", waited)
+	}
+}
+
+func TestSleep_whenNoDuration_thenReportsTheContext(t *testing.T) {
+	if !Sleep(context.Background(), 0) {
+		t.Error("Sleep(live, 0) = false, want true")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if Sleep(ctx, 0) {
+		t.Error("Sleep(ended, 0) = true, want false")
+	}
+}

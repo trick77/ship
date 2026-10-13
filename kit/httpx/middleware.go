@@ -290,6 +290,9 @@ type SecurityOptions struct {
 	HTMLOnly bool
 	// COOP is the Cross-Origin-Opener-Policy ("same-origin"), none when empty.
 	COOP string
+	// PermissionsPolicy is the Permissions-Policy ("camera=(), microphone=(), geolocation=()"): the browser features
+	// the page, and anything it embeds, may never ask for. None when empty; sent with CSP (HTMLOnly applies).
+	PermissionsPolicy string
 	// HSTS sends Strict-Transport-Security with this max-age (lens: two years); 0 sends none. Browsers ignore it over
 	// plain http, so it is safe behind a TLS-terminating proxy. Opt-in: once sent, a browser refuses http to the
 	// host for max-age. Whole seconds; a positive value below one second panics (it would be max-age=0).
@@ -323,6 +326,9 @@ func SecurityHeadersWith(o SecurityOptions) func(http.Handler) http.Handler {
 		h.Set("Content-Security-Policy", o.CSP)
 		if o.COOP != "" {
 			h.Set("Cross-Origin-Opener-Policy", o.COOP)
+		}
+		if o.PermissionsPolicy != "" {
+			h.Set("Permissions-Policy", o.PermissionsPolicy)
 		}
 	}
 	return func(next http.Handler) http.Handler {
