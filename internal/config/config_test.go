@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -22,9 +23,16 @@ func TestParse_whenEmpty_thenFamilyDefaults(t *testing.T) {
 	}
 }
 
-// An explicit empty coverpkg is no -coverpkg, the narrow one stays as written.
+// An empty or null coverpkg is no -coverpkg, unset the default, the narrow one stays as written.
 func TestParse_whenCoverpkgSet_thenItWins(t *testing.T) {
-	for in, want := range map[string]string{"go:\n  coverpkg: \"\"\n": "", "go:\n  coverpkg: ./internal/...\n": "./internal/..."} {
+	for in, want := range map[string]string{
+		"go:\n  coverpkg: \"\"\n":           "",
+		"go:\n  coverpkg:\n":                "",
+		"go:\n  coverpkg: ~\n":              "",
+		"go:\n  coverpkg: null\n":           "",
+		"go:\n  dir: .\n":                   "./...",
+		"go:\n  coverpkg: ./internal/...\n": "./internal/...",
+	} {
 		c, err := Parse([]byte(in))
 		if err != nil || c.Go.Coverpkg != want {
 			t.Errorf("%q: %q %v", in, c.Go.Coverpkg, err)
@@ -38,7 +46,7 @@ func TestParse_whenUIAndImages_thenTheirDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if c.UI.Dir != "ui" || c.UI.Floor != 75 || c.UI.Lcov != filepath.Join("coverage", "ui", "lcov.info") ||
-		!strings.Contains(c.UI.Build, "npm ci") || c.UI.Lint != "npm run lint" || c.UI.Embed != "" || c.UI.Test != "npm run test -- --coverage" {
+		!strings.Contains(c.UI.Build, "npm ci") || c.UI.Lint != "npm run lint" || c.UI.Embed != "" || !strings.Contains(c.UI.Test, "--coverage.reporter=lcov") {
 		t.Fatalf("ui: %+v", c.UI)
 	}
 	im := c.Images[0]
@@ -101,6 +109,8 @@ func TestParse_whenUnknownKeyOrBadValue_thenError(t *testing.T) {
 		"ui:\n  embed: ../x\n",
 		"shell: [\".\"]\n", // the root itself
 		"go:\n  modules: [../x]\n",
+		"go:\n  modules: [kit/../../x]\n",
+		"go:\n  modules: [/kit]\n",
 		"go:\n  modules: [.]\n",                        // go.dir itself
 		"go:\n  dir: backend\n  modules: [backend/]\n", // go.dir itself
 		"go:\n  modules: [kit, ./kit]\n",               // twice
@@ -142,6 +152,14 @@ func TestParse_whenModules_thenListed(t *testing.T) {
 	c, err := Parse([]byte("go:\n  modules: [kit, kit/auth]\n"))
 	if err != nil || len(c.Go.Modules) != 2 || c.Go.Modules[1] != "kit/auth" {
 		t.Fatalf("%+v %v", c, err)
+	}
+}
+
+// A module reaches release -dir and the tag prefix as listed: cleaned once here, ./kit/auth/ is kit/auth.
+func TestParse_whenModulesUnclean_thenCleaned(t *testing.T) {
+	c, err := Parse([]byte("go:\n  modules: [./kit/auth, kit//x/, a/../lib]\n"))
+	if err != nil || !slices.Equal(c.Go.Modules, []string{"kit/auth", "kit/x", "lib"}) {
+		t.Fatalf("%q %v", c.Go.Modules, err)
 	}
 }
 

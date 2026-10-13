@@ -53,6 +53,37 @@ func (e *env) scaffold() result {
 	return result{findings: fs}
 }
 
+// dockerignore: the host's node_modules (darwin binaries) and a stale dist never reach the image. Where
+// .dockerignore may differ from its template; byte-equal, scaffold holds its ship block.
+func (e *env) dockerignore() result {
+	if len(e.c.Images) == 0 {
+		return result{skip: "no images"}
+	}
+	if !e.ownDiff(scaffold.Ignore) {
+		return result{}
+	}
+	b, err := e.read(scaffold.Ignore)
+	switch {
+	case err != nil:
+		return result{findings: []finding{{what: err.Error(), file: scaffold.Ignore}}}
+	case b == nil:
+		return result{findings: []finding{{what: "missing (ship init)", file: scaffold.Ignore}}}
+	case e.c.UI == nil:
+		return result{}
+	}
+	lines := map[string]bool{}
+	for _, l := range strings.Split(string(b), "\n") {
+		lines[strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(l), "/"), "/")] = true
+	}
+	var fs []finding
+	for _, d := range []string{"node_modules", "dist"} {
+		if !lines[e.uiPath(d)] && !lines["**/"+d] {
+			fs = append(fs, finding{what: "does not exclude " + e.uiPath(d), file: scaffold.Ignore})
+		}
+	}
+	return result{findings: fs}
+}
+
 // uiScripts are the UI's package.json scripts, exactly: ship.yaml's ui.lint runs lint, the build is the typecheck.
 var uiScripts = []struct{ name, want string }{
 	{"build", "tsc -b && vite build"},
@@ -85,7 +116,6 @@ var viteWants = []struct{ lit, why string }{
 	{"globals: true", "test.globals: true (Testing Library's cleanup)"},
 	{`setupFiles: ["./src/test/setup.ts"]`, `test.setupFiles: ["./src/test/setup.ts"]`},
 	{`reportsDirectory: "../coverage/ui"`, `coverage.reportsDirectory: "../coverage/ui" (ship.yaml ui.lcov: coverage/ui/lcov.info)`},
-	{`"lcov"`, `coverage.reporter with "lcov" (ship.yaml ui.test's default asks for the config's reporters)`},
 }
 
 // ui: one lint (ESLint, then Prettier, every tool at one pinned version), the build is the typecheck, vitest runs
@@ -123,6 +153,9 @@ func (e *env) ui() result {
 			fs = append(fs, finding{what: fmt.Sprintf("devDependency typescript %s: want below %s, typescript-eslint "+
 				"does not support it", v, typescriptCap), file: pj})
 		}
+	}
+	if es := e.uiPath(scaffold.ESLint); e.ownDiff(es) && !e.exists(es) {
+		fs = append(fs, finding{what: "missing (ship init)", file: es})
 	}
 	fs = append(fs, e.tsconfigRef()...)
 	fs = append(fs, e.viteConfig()...)

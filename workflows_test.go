@@ -36,6 +36,7 @@ func TestShipRelease_whenDispatched_thenEveryModuleOffered(t *testing.T) {
 	if err := yaml.Unmarshal(b, &w); err != nil {
 		t.Fatal(err)
 	}
+	// config cleans go.modules: an option spelled ./kit/auth would reach release -dir as such and fails here.
 	want := append([]string{"ship"}, c.Go.Modules...)
 	if got := w.On.WorkflowDispatch.Inputs.Dir.Options; !slices.Equal(got, want) {
 		t.Errorf("ship-release dir options %v, want %v (ship + ship.yaml go.modules)", got, want)
@@ -43,24 +44,41 @@ func TestShipRelease_whenDispatched_thenEveryModuleOffered(t *testing.T) {
 }
 
 // resolve is how everything that runs master's ship finds its sha, before any ship runs: exactly refs/heads/master
-// (ls-remote matches by suffix). Each copy is shell of its own (a workflow step, the hook, a Makefile, README's
-// function), none can call another; this keeps them one.
-const resolve = `git ls-remote https://github.com/trick77/ship refs/heads/master | awk '$2 == "refs/heads/master" { print $1 }'`
+// (ls-remote matches by suffix), a 40-hex sha or a stop with the error. Each copy is shell of its own (a workflow
+// step, the hook, a Makefile, README's function), none can call another; this keeps them one.
+const (
+	resolve = `git ls-remote https://github.com/trick77/ship refs/heads/master | awk '$2 == "refs/heads/master" { print $1 }'`
+	// The guard: bash in the workflows, POSIX sh elsewhere.
+	hexBash = `[[ "$sha" =~ ^[0-9a-f]{40}$ ]] ||`
+	hexSh   = `| grep -Eqx '[0-9a-f]{40}' ||`
+	fail    = `cannot resolve ship's master on GitHub: '$sha'`
+)
 
 func TestMasterResolver_whenCopied_thenSame(t *testing.T) {
-	for _, f := range []string{".github/workflows/check.yaml", ".github/workflows/release.yaml",
-		"internal/hook/hook.go", "internal/scaffold/templates/Makefile", "README.md"} {
+	workflow := `sha="$(` + resolve + `)" ` + hexBash + ` { echo "::error::` + fail + `"; exit 1; } ` +
+		`SHIP="go run github.com/trick77/ship@$sha"`
+	for f, want := range map[string]string{
+		".github/workflows/check.yaml":   workflow,
+		".github/workflows/release.yaml": workflow,
+		"internal/hook/hook.go": `sha="$(` + resolve + `)" printf '%s\n' "$sha" ` + hexSh + ` { echo "pre-push: ` + fail +
+			` (git ls-remote, error above)"; exit 1; } printf '%s\n' "$refs" | go run "github.com/trick77/ship@$sha" pre-push "$@"`,
+		"internal/scaffold/templates/Makefile": `sha=$(` + resolve + `); echo "$sha" ` + hexSh + ` { echo "` + fail +
+			` (git ls-remote, error above)"; exit 1; }; go run github.com/trick77/ship@$sha`,
+		"README.md": `sha="$(` + resolve + `)" printf '%s\n' "$sha" ` + hexSh + ` { echo "ship: ` + fail +
+			` (git ls-remote, error above)" >&2; return 1; } go run "github.com/trick77/ship@$sha" "$@"`,
+	} {
 		b, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)
 		}
 		s := string(b)
 		if strings.HasSuffix(f, "Makefile") {
-			// make's $$ and a continued line.
-			s = strings.ReplaceAll(strings.ReplaceAll(s, "$$", "$"), "| \\\n\t\tawk", "| awk")
+			s = strings.ReplaceAll(s, "$$", "$") // make's $
 		}
-		if !strings.Contains(s, resolve) {
-			t.Errorf("%s: no %s", f, resolve)
+		// A continued line, indentation and line breaks are layout, not the block.
+		s = strings.Join(strings.Fields(strings.ReplaceAll(s, "\\\n", " ")), " ")
+		if !strings.Contains(s, want) {
+			t.Errorf("%s: no resolver block\n%s", f, want)
 		}
 	}
 }

@@ -17,9 +17,9 @@ import (
 	"github.com/trick77/ship/internal/pins"
 )
 
-// uiTest takes vitest's reporters from vite.config.ts, where conform requires "lcov" next to reportsDirectory: one
-// place says where and in which form the report lands.
-const uiTest = "npm run test -- --coverage"
+// uiTest asks vitest for lcov itself: its default reporters write none, and a repo relying on the default must not
+// fail on a missing report.
+const uiTest = "npm run test -- --coverage --coverage.reporter=lcov --coverage.reporter=text-summary"
 
 // File is the config file name, at the repo root.
 const File = "ship.yaml"
@@ -63,7 +63,7 @@ type Go struct {
 	// Race runs the tests with -race (needs cgo; CGO_ENABLED=1 is set for the test run only).
 	Race *bool `yaml:"race"`
 	// Coverpkg is passed to go test -coverpkg: default ./... (a package's lines count as covered by any package's
-	// tests), ./internal/... to narrow, "" = none.
+	// tests, every package instrumented), ./internal/... to narrow, "" or null = none.
 	Coverpkg string `yaml:"coverpkg"`
 	// Exclude lists Go path prefixes, relative to the repo root, that neither coverage gate counts. A prefix also
 	// matches as a path segment anywhere ("cmd/" excludes backend/cmd/x.go). UI coverage scope is the test
@@ -156,6 +156,12 @@ func Parse(b []byte) (*Config, error) {
 	if hasUI && c.UI == nil {
 		c.UI = uiDefaults()
 	}
+	// A null coverpkg (`coverpkg:`, `~`) leaves a string as it was, the default: it means none, as "" does.
+	if g, ok := keys["go"].(map[string]any); ok {
+		if v, set := g["coverpkg"]; set && v == nil {
+			c.Go.Coverpkg = ""
+		}
+	}
 	c.defaults()
 	return &c, c.validate()
 }
@@ -202,13 +208,16 @@ func (c *Config) validate() error {
 		return fmt.Errorf("%s: postgres: %q, want a version like \"17\", an image like "+
 			"\"timescale/timescaledb:2.29.1-pg17\" or a compose service like \"compose:db\"", File, c.Postgres)
 	}
+	// Modules are kept clean (kit/auth, never ./kit/auth/): a release tag prefix and a dependabot directory are
+	// spelled from them.
 	seen := map[string]bool{path.Clean(filepath.ToSlash(c.Go.Dir)): true}
-	for _, m := range c.Go.Modules {
+	for i, m := range c.Go.Modules {
 		d := path.Clean(filepath.ToSlash(m))
 		if !inRepo(m) || seen[d] {
 			return fmt.Errorf("%s: go.modules: %q, want a dir inside the repo, not go.dir, listed once", File, m)
 		}
 		seen[d] = true
+		c.Go.Modules[i] = d
 	}
 	for _, s := range c.Shell {
 		if !inRepo(s) {

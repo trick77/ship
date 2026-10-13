@@ -32,6 +32,7 @@ const (
 	Dependabot    = "dependabot"
 	Containerfile = "containerfile"
 	Distroless    = "distroless"
+	Dockerignore  = "dockerignore"
 	UI            = "ui"
 	Golangci      = "golangci"
 	Gomod         = "gomod"
@@ -97,6 +98,7 @@ func rules() []rule {
 		{Dependabot, (*env).dependabot},
 		{Containerfile, (*env).containerfile},
 		{Distroless, (*env).distroless},
+		{Dockerignore, (*env).dockerignore},
 		{UI, (*env).ui},
 		{Golangci, (*env).golangci},
 		{Gomod, (*env).gomod},
@@ -275,6 +277,14 @@ func (e *env) read(p string) ([]byte, error) {
 func (e *env) exists(p string) bool {
 	_, err := os.Stat(filepath.Join(e.root, filepath.FromSlash(p)))
 	return err == nil
+}
+
+// ownDiff reports whether ship.yaml allows owned file p to differ from its template. Byte-equal, the scaffold rule
+// already holds everything a rule reads in p: the rule checks p only here, its one guard then, and never doubles a
+// scaffold finding.
+func (e *env) ownDiff(p string) bool {
+	_, ok := e.c.Allowed(Scaffold, nil, p)
+	return ok
 }
 
 func (e *env) goPath(p string) string { return path.Join(filepath.ToSlash(e.c.Go.Dir), p) }

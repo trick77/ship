@@ -43,8 +43,10 @@ on:
         default: ui
       postgres:
         description: >-
-          Deprecated, set fails the run: ship.yaml's postgres key is the one source, ship check starts that container
-          itself here as locally.
+          Deprecated, still works: set ship.yaml postgres: instead. Postgres for go test: a version
+          (postgres:<v>-alpine) or a tagged image ref, DSN in SHIP_TEST_DSN; empty = none here. Redundant with a
+          ship.yaml postgres key: ship check starts that container itself (and resolves compose:<service>, which this
+          input does not take).
         type: string
         default: ""
       ship:
@@ -75,11 +77,27 @@ jobs:
           node-version: ${{ inputs.node-version }}
           cache: npm
           cache-dependency-path: ${{ inputs.ui-dir }}/package-lock.json
-      # Deprecated input: loud, never ignored, so no DB test silently runs without its server.
+      # A step, not services: a reusable workflow cannot make a service depend on an input. ship check finds
+      # SHIP_TEST_DSN set and starts no container of its own. The runner goes with the job: no cleanup.
       - if: inputs.postgres != ''
+        env:
+          PG: ${{ inputs.postgres }}
         run: |
-          echo "::error::the postgres input is deprecated: drop it, set ship.yaml postgres: (ship check starts the container)"
-          exit 1
+          if [[ "$PG" == compose:* ]]; then
+            echo "::error::postgres input '$PG': compose:<service> is ship.yaml's postgres key, not this input; drop the input, ship check resolves it"; exit 1
+          elif [[ "$PG" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+            PG="postgres:$PG-alpine"
+          elif [[ ! "$PG" =~ ^[a-z0-9][a-z0-9._/-]*(:[A-Za-z0-9._-]+(@sha256:[0-9a-f]{64})?|@sha256:[0-9a-f]{64})$ ]]; then
+            echo "::error::postgres input '$PG': want a version like 17 or a tagged image ref"; exit 1
+          fi
+          docker run -d --rm --name ship-postgres -p 127.0.0.1:5432:5432 -e POSTGRES_PASSWORD=ship "$PG"
+          # Over TCP: the image's init runs a socket-only server first, which reads as ready and then restarts.
+          for _ in $(seq 120); do
+            docker exec ship-postgres pg_isready -q -h 127.0.0.1 -U postgres && break
+            sleep 0.5
+          done
+          docker exec ship-postgres pg_isready -h 127.0.0.1 -U postgres
+          echo "SHIP_TEST_DSN=postgres://postgres:ship@127.0.0.1:5432/postgres?sslmode=disable" >> "$GITHUB_ENV"
       # shellcheck (ship check's step for a repo's shell scripts): preinstalled on GitHub's ubuntu runner images.
       - working-directory: ${{ inputs.go-dir }}
         env:

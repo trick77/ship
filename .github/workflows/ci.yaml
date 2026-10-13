@@ -60,7 +60,11 @@ jobs:
       - id: dirs
         run: |
           dirs="$(yq -o=json -I=0 '[""] + (.go.modules // [])' ship.yaml)"
-          echo "$dirs" | jq -e 'type == "array" and length > 0 and all(type == "string")' >/dev/null
+          # Raw, as written: each entry must already be ship's cleaned form (kit/auth, not ./kit/auth/), the -dir and
+          # tag prefix release spells from it.
+          echo "$dirs" | jq -e 'type == "array" and length > 0 and all(type == "string") and
+            (.[1:] | all(split("/") | all(. != "" and . != "." and . != "..")))' >/dev/null ||
+            { echo "::error::ship.yaml go.modules: $dirs, want clean repo-relative dirs (kit/auth)"; exit 1; }
           echo "dirs=$dirs" >> "$GITHUB_OUTPUT"
           echo "release modules: $dirs"
 
