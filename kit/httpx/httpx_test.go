@@ -698,6 +698,18 @@ func freeAddr(t *testing.T) string {
 	return addr
 }
 
+// waitUp polls url until it answers, or fails the test.
+func waitUp(t *testing.T, url string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for healthcheck(url, io.Discard) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("server never came up")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestServeShutsDownCleanly(t *testing.T) {
 	addr := freeAddr(t)
 	srv := NewServer(addr, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("hi")) }))
@@ -707,13 +719,7 @@ func TestServeShutsDownCleanly(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- Serve(ctx, srv, time.Second) }()
-	deadline := time.Now().Add(5 * time.Second)
-	for healthcheck("http://"+addr+"/", io.Discard) != 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("server never came up")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitUp(t, "http://"+addr+"/")
 	cancel()
 	if err := <-done; err != nil {
 		t.Errorf("Serve = %v, want nil on clean shutdown", err)
