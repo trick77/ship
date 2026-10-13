@@ -1,8 +1,7 @@
 // Package migrate applies numbered SQL files to a database/sql database, exactly once each, in order.
 //
-// The bookkeeping table is the one netra and noergler already run, schema_migrations(name TEXT PRIMARY KEY,
-// applied_at), keyed by file name, so either switches with no data step. A goose database (ipverse-core) converts
-// once with AdoptGoose.
+// The bookkeeping table is schema_migrations(name TEXT PRIMARY KEY, applied_at), keyed by file name, so a repo that
+// already runs that table switches with no data step. A goose database converts once with AdoptGoose.
 //
 // Files are *.sql at the root of the given fs.FS, ordered by their numeric prefix (0001_init.sql, 00002_runs.sql).
 // Each runs in its own transaction together with its bookkeeping row, so a failure leaves it unrecorded and it runs
@@ -14,8 +13,8 @@
 // connection per call.
 //
 // A pgx program needs no second runner: stdlib.OpenDBFromPool(pool) (github.com/jackc/pgx/v5/stdlib) is the *sql.DB
-// Up and Pending take, borrowing the pool's connections, so closing it leaves the pool open. netra and noergler run
-// their migrations that way with Postgres(theirLockKey).
+// Up and Pending take, borrowing the pool's connections, so closing it leaves the pool open; pass it with
+// Postgres(lockKey).
 package migrate
 
 import (

@@ -726,6 +726,42 @@ func TestServeShutsDownCleanly(t *testing.T) {
 	}
 }
 
+func TestServeDrainOverrun_thenClosesAndDeadlineExceeded(t *testing.T) {
+	addr := freeAddr(t)
+	entered, returned := make(chan struct{}), make(chan struct{})
+	srv := NewServer(addr, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/slow" {
+			return
+		}
+		close(entered)
+		defer close(returned)
+		select {
+		case <-r.Context().Done():
+		case <-time.After(time.Minute):
+		}
+	}))
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- Serve(ctx, srv, 50*time.Millisecond) }()
+	waitUp(t, "http://"+addr+"/")
+	go func() {
+		resp, err := http.Get("http://" + addr + "/slow") //nolint:noctx // ends with the server
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+	<-entered
+	cancel()
+	if err := <-done; !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Serve = %v, want context.DeadlineExceeded on an overrun", err)
+	}
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Error("the handler's connection was not closed on the overrun")
+	}
+}
+
 func TestServeBindError(t *testing.T) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

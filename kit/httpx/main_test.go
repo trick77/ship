@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -12,6 +13,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -236,5 +238,216 @@ func TestMain_whenDrainNegative_thenDefault(t *testing.T) {
 	}
 	if strings.Contains(log, "drain exceeded") || !handlerDone {
 		t.Errorf("log = %q, want a drain of DefaultDrain that waits for the handler", log)
+	}
+}
+
+// getterFlag is a bool flag.Value whose String is not "true" when set: Main must ask Get.
+type getterFlag struct{ on bool }
+
+func (f *getterFlag) String() string {
+	if f.on {
+		return "on"
+	}
+	return "off"
+}
+func (f *getterFlag) Set(s string) error { f.on = s == "true"; return nil }
+func (f *getterFlag) IsBoolFlag() bool   { return true }
+func (f *getterFlag) Get() any           { return f.on }
+
+// plainBoolFlag is a bool flag.Value without Get: Main parses its String.
+type plainBoolFlag struct{ on bool }
+
+func (f *plainBoolFlag) String() string {
+	if f.on {
+		return "1"
+	}
+	return "0"
+}
+func (f *plainBoolFlag) Set(s string) error { f.on = s == "true"; return nil }
+func (f *plainBoolFlag) IsBoolFlag() bool   { return true }
+
+func TestMain_whenHealthcheckFlagCustomBool_thenReadsIt(t *testing.T) {
+	build := func(context.Context) (*http.Server, func(), error) {
+		t.Fatal("Build ran for -healthcheck")
+		return nil, nil, nil
+	}
+	for _, v := range []flag.Value{&getterFlag{}, &plainBoolFlag{}} {
+		fs := mainFlags()
+		fs.Var(v, "healthcheck", "the program's own")
+		if code := Main(context.Background(), fs, []string{"-healthcheck"}, MainOptions{Addr: liveHealthz(t), Build: build}); code != 0 {
+			t.Errorf("Main -healthcheck with a %T flag = %d, want 0 (the probe ran)", v, code)
+		}
+	}
+}
+
+func TestMain_whenServerAddrEmpty_thenListensOnAddr(t *testing.T) {
+	addr := freeAddr(t)
+	build := func(context.Context) (*http.Server, func(), error) {
+		return NewServer("", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})), nil, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan int, 1)
+	go func() { done <- Main(ctx, mainFlags(), nil, MainOptions{Addr: addr, Build: build, Log: quietLog()}) }()
+	waitUp(t, "http://"+addr+"/")
+	cancel()
+	if code := <-done; code != 0 {
+		t.Errorf("Main = %d, want 0", code)
+	}
+}
+
+func TestMain_whenServerAddrDiffers_thenOneWithoutServing(t *testing.T) {
+	addr, other := freeAddr(t), freeAddr(t)
+	cleaned := false
+	build := func(context.Context) (*http.Server, func(), error) {
+		return NewServer(other, http.NotFoundHandler()), func() { cleaned = true }, nil
+	}
+	var buf bytes.Buffer
+	o := MainOptions{Addr: addr, Build: build, Log: slog.New(slog.NewTextHandler(&buf, nil))}
+	if code := Main(context.Background(), mainFlags(), nil, o); code != 1 {
+		t.Errorf("Main with a server on %s, Addr %s = %d, want 1", other, addr, code)
+	}
+	if !strings.Contains(buf.String(), "not MainOptions.Addr") {
+		t.Errorf("log = %q, want why", buf.String())
+	}
+	if !cleaned {
+		t.Error("cleanup did not run")
+	}
+}
+
+// stopDuringBuild runs Main with a Build that waits for the stop and then returns what ret makes of its ctx.
+func stopDuringBuild(t *testing.T, ret func(ctx context.Context) (*http.Server, error)) (code int, log string, cleaned bool) {
+	t.Helper()
+	entered := make(chan struct{})
+	build := func(ctx context.Context) (*http.Server, func(), error) {
+		close(entered)
+		<-ctx.Done()
+		srv, err := ret(ctx)
+		return srv, func() { cleaned = true }, err
+	}
+	var buf bytes.Buffer
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan int, 1)
+	go func() {
+		done <- Main(ctx, mainFlags(), nil, MainOptions{Addr: "127.0.0.1:1", Build: build, Log: slog.New(slog.NewTextHandler(&buf, nil))})
+	}()
+	<-entered
+	cancel()
+	code = <-done
+	return code, buf.String(), cleaned
+}
+
+func TestMain_whenStopDuringBuild_thenZeroOnlyForTheStopsOwnError(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		ret  func(ctx context.Context) (*http.Server, error)
+		want int
+	}{
+		{"no server", func(context.Context) (*http.Server, error) { return nil, nil }, 0},
+		{"canceled", func(ctx context.Context) (*http.Server, error) { return nil, fmt.Errorf("connect: %w", ctx.Err()) }, 0},
+		{"deadline", func(context.Context) (*http.Server, error) {
+			return nil, fmt.Errorf("ping: %w", context.DeadlineExceeded)
+		}, 0},
+		{"other failure", func(context.Context) (*http.Server, error) { return nil, errors.New("no DATABASE_URL") }, 1},
+	} {
+		code, log, cleaned := stopDuringBuild(t, tt.ret)
+		if code != tt.want {
+			t.Errorf("%s: Main = %d, want %d", tt.name, code, tt.want)
+		}
+		if tt.want == 1 && !strings.Contains(log, "Startup failed") {
+			t.Errorf("%s: log = %q, want Startup failed", tt.name, log)
+		}
+		if !cleaned {
+			t.Errorf("%s: cleanup did not run", tt.name)
+		}
+	}
+}
+
+func TestMain_whenHijackedHandlerRuns_thenCleanupWaitsForIt(t *testing.T) {
+	addr := freeAddr(t)
+	entered := make(chan struct{})
+	var returned atomic.Bool
+	handlerDone := make(chan bool, 1)
+	build := func(context.Context) (*http.Server, func(), error) {
+		srv := NewServer(addr, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/ws" {
+				return
+			}
+			conn, _, err := http.NewResponseController(w).Hijack()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			defer conn.Close()
+			close(entered)
+			// Shutdown does not wait for a hijacked connection: only the count holds the cleanup back.
+			time.Sleep(300 * time.Millisecond)
+			returned.Store(true)
+		}))
+		return srv, func() { handlerDone <- returned.Load() }, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan int, 1)
+	go func() {
+		done <- Main(ctx, mainFlags(), nil, MainOptions{Addr: addr, Build: build, Drain: 5 * time.Second, Log: quietLog()})
+	}()
+	waitUp(t, "http://"+addr+"/")
+	go func() {
+		resp, err := http.Get("http://" + addr + "/ws") //nolint:noctx // the hijacker closes it
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+	<-entered
+	cancel()
+	if code := <-done; code != 0 {
+		t.Errorf("Main = %d, want 0", code)
+	}
+	if !<-handlerDone {
+		t.Error("cleanup ran under the hijacked handler")
+	}
+}
+
+func TestMain_whenHandlerStuck_thenWarnsAndCleansUp(t *testing.T) {
+	addr := freeAddr(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	defer close(release)
+	cleaned := false
+	build := func(context.Context) (*http.Server, func(), error) {
+		srv := NewServer(addr, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/stuck" {
+				return
+			}
+			close(entered)
+			<-release // deaf to its request's context
+		}))
+		return srv, func() { cleaned = true }, nil
+	}
+	var buf bytes.Buffer
+	o := MainOptions{Addr: addr, Build: build, Drain: 50 * time.Millisecond, Log: slog.New(slog.NewTextHandler(&buf, nil))}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan int, 1)
+	go func() { done <- Main(ctx, mainFlags(), nil, o) }()
+	waitUp(t, "http://"+addr+"/")
+	go func() {
+		resp, err := http.Get("http://" + addr + "/stuck") //nolint:noctx // ends with the server
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+	<-entered
+	cancel()
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Errorf("Main = %d, want 0", code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Main hung on a stuck handler")
+	}
+	if !strings.Contains(buf.String(), "Handlers still running") || !strings.Contains(buf.String(), "handlers=1") {
+		t.Errorf("log = %q, want the warning with the count", buf.String())
+	}
+	if !cleaned {
+		t.Error("cleanup did not run")
 	}
 }
