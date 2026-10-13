@@ -50,6 +50,8 @@ type Config struct {
 	Visibility string `yaml:"visibility"`
 	// Allow excuses conform rules, each with its why.
 	Allow []Allow `yaml:"allow"`
+	// Dependabot adds the repo's ignores to ship's dependabot.yaml.
+	Dependabot Dependabot `yaml:"dependabot"`
 }
 
 // Go configures the Go side of the gate.
@@ -211,6 +213,9 @@ func (c *Config) validate() error {
 		if !inRepo(s) {
 			return fmt.Errorf("%s: shell: %q is not a path inside the repo", File, s)
 		}
+	}
+	if err := c.validateDependabot(); err != nil {
+		return err
 	}
 	return c.validateConform()
 }

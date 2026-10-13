@@ -54,6 +54,10 @@ images:               # release builds these; none = tag + GitHub release only
 visibility: private   # conform checks it against GitHub's; unset = GitHub's
 allow:                # conform exceptions, why required (see Conform)
   - { rule: distroless, image: -agent, why: smartctl needs root }
+dependabot:           # ignores for ship's dependabot.yaml: under every entry of the ecosystem, why as a comment;
+  ignore:             # an ecosystem the file has no entry for fails init and conform
+    - { ecosystem: npm, dependency: mermaid, versions: [">=12.1.0"], why: drops a diagram type }
+    - { ecosystem: gomod, dependency: example.com/pair, why: bumped by hand with its twin }   # no versions: all
 ```
 
 A platform other than amd64 builds under QEMU on the amd64 runner: every `RUN` in its stages is emulated, several

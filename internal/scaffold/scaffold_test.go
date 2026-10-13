@@ -178,6 +178,41 @@ func TestFiles_whenGoModules_thenGomodEntryEach(t *testing.T) {
 	}
 }
 
+func TestFiles_whenDependabotIgnore_thenUnderItsEcosystem(t *testing.T) {
+	c := parse(t, "go:\n  dir: backend\n  modules: [kit]\nui: {}\ndependabot:\n  ignore:\n"+
+		"    - { ecosystem: gomod, dependency: github.com/ncruces/go-sqlite3, why: bindings welded to v0.23.3 }\n"+
+		"    - { ecosystem: npm, dependency: mermaid, versions: [\">=12.1.0\", \"<13\"], why: drops a diagram type }\n")
+	files, err := Files(t.TempDir(), c, Facts{Visibility: "public"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dep := string(byPath(t, files, Dependabot).Want)
+	gomod := "          - major\n    ignore:\n      # bindings welded to v0.23.3\n" +
+		"      - dependency-name: \"github.com/ncruces/go-sqlite3\"\n\n"
+	// go.dir's block and the nested module's: ship.yaml names a dependency, not a directory.
+	if strings.Count(dep, gomod) != 2 {
+		t.Errorf("gomod ignore, want it under both gomod entries:\n%s", dep)
+	}
+	npm := "        versions: [\">=6.1.0\"]\n      # drops a diagram type\n" +
+		"      - dependency-name: \"mermaid\"\n        versions: [\">=12.1.0\", \"<13\"]\n"
+	if !strings.Contains(dep, npm) {
+		t.Errorf("npm ignore, want it after the typescript cap:\n%s", dep)
+	}
+	if strings.Count(dep, "ignore:") != 3 {
+		t.Errorf("ignore blocks, want gomod twice and npm once:\n%s", dep)
+	}
+}
+
+func TestFiles_whenIgnoreForAbsentEcosystem_thenError(t *testing.T) {
+	// No ui:, no Containerfile, no compose pin: an ignore there would be written nowhere while init stays green.
+	for _, eco := range []string{"npm", "docker", "docker-compose"} {
+		c := parse(t, "dependabot:\n  ignore:\n    - { ecosystem: "+eco+", dependency: x, why: y }\n")
+		if _, err := Files(t.TempDir(), c, Facts{Visibility: "public"}); err == nil {
+			t.Errorf("%s ignore without an entry accepted", eco)
+		}
+	}
+}
+
 func TestFiles_whenComposePins_thenComposeEntry(t *testing.T) {
 	for _, compose := range []bool{false, true} {
 		files, err := Files(t.TempDir(), parse(t, ""), Facts{Visibility: "private", Compose: compose})
@@ -309,9 +344,10 @@ const npmGroups = `    groups:
       # provider are one dependency family: vitest pins a vite major range and
       # @vitest/coverage-v8 pins vitest's exact version, so bumping any one
       # alone fails npm ci on ERESOLVE (or nests a second vite). They always
-      # travel together. @tailwindcss/vite peer-depends on vite's major too.
+      # travel together. @tailwindcss/vite peer-depends on vite's major too,
+      # and pins tailwindcss exactly: split, the plugin nests its own core.
       vite-and-vitest:
-        patterns: ["vite", "@vitejs/*", "vitest", "@vitest/*", "@tailwindcss/vite"]
+        patterns: ["vite", "@vitejs/*", "vitest", "@vitest/*", "@tailwindcss/vite", "tailwindcss"]
       # Pinned exact; a release may format differently and fail the gate's
       # format:check, so it never blocks the other bumps: its own PR,
       # reformatted there.

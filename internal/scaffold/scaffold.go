@@ -15,6 +15,7 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"text/template"
 
@@ -85,6 +86,8 @@ type data struct {
 	Branches, GoDir, GoDirAbs, UIDir, UIDirAbs string
 	DependabotOnly, NodeVersion, Packages      string
 	DockerDirs, GoModules                      []string
+	// Ignore is ship.yaml's dependabot.ignore by ecosystem.
+	Ignore map[string][]config.Ignore
 }
 
 // Files renders every file ship owns in root. A file whose facts are missing (no origin, no visibility) carries
@@ -94,7 +97,17 @@ func Files(root string, c *config.Config, f Facts) ([]File, error) {
 		Private: f.Visibility == "private", Images: len(c.Images) > 0, UI: c.UI != nil,
 		Branches: "[" + c.Base + "]", GoDir: c.Go.Dir, GoDirSet: path.Clean(c.Go.Dir) != ".",
 		GoDirAbs: abs(c.Go.Dir), DependabotOnly: DependabotOnly, NodeVersion: f.NodeVersion, DockerDirs: f.DockerDirs,
-		Compose: f.Compose,
+		Compose: f.Compose, Ignore: map[string][]config.Ignore{},
+	}
+	// An ignore under an ecosystem dependabot.yaml has no entry for would be written nowhere, init and conform green.
+	rendered := map[string]bool{"gomod": true, "github-actions": true, "npm": d.UI, "docker": len(f.DockerDirs) > 0,
+		"docker-compose": f.Compose}
+	for _, ig := range c.Dependabot.Ignore {
+		if !rendered[ig.Ecosystem] {
+			return nil, fmt.Errorf("%s: dependabot.ignore: %s %s, but dependabot.yaml has no %s entry", config.File,
+				ig.Ecosystem, ig.Dependency, ig.Ecosystem)
+		}
+		d.Ignore[ig.Ecosystem] = append(d.Ignore[ig.Ecosystem], ig)
 	}
 	for _, m := range c.Go.Modules {
 		d.GoModules = append(d.GoModules, abs(m))
@@ -191,8 +204,21 @@ func packages(repo string, images []config.Image) string {
 	return strings.ReplaceAll(string(b), `","`, `", "`)
 }
 
+// funcs: quote writes a YAML double-quoted scalar (Go's quoting is a subset of YAML's for single-line strings),
+// quoteList a flow sequence of them.
+var funcs = template.FuncMap{
+	"quote": strconv.Quote,
+	"quoteList": func(ss []string) string {
+		q := make([]string, len(ss))
+		for i, s := range ss {
+			q[i] = strconv.Quote(s)
+		}
+		return "[" + strings.Join(q, ", ") + "]"
+	},
+}
+
 func render(name string, d data) (string, error) {
-	t, err := template.New(name).Delims("[[", "]]").ParseFS(templates, "templates/"+name)
+	t, err := template.New(name).Delims("[[", "]]").Funcs(funcs).ParseFS(templates, "templates/"+name)
 	if err != nil {
 		return "", err
 	}
