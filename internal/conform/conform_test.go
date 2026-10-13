@@ -85,6 +85,7 @@ export default defineConfig({
     setupFiles: ["./src/test/setup.ts"],
     coverage: {
       provider: "v8",
+      reporter: ["text-summary", "lcov"],
       reportsDirectory: "../coverage/ui",
     },
   },
@@ -236,37 +237,15 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 		{"scaffold edited", appShip, func(r *repo) { r.edit(scaffold.CI, "cancel-in-progress: true", "cancel-in-progress: false") },
 			[]string{"FAIL scaffold: differs from ship's template (ship init -diff) (.github/workflows/ci.yaml)"}},
 		{"scaffold missing", appShip, func(r *repo) { r.remove(scaffold.Cleanup) }, []string{
-			"FAIL scaffold: missing (ship init) (.github/workflows/cleanup-images.yaml)",
-			"FAIL workflows: missing (ship init) (.github/workflows/cleanup-images.yaml)",
-			"FAIL visibility: private repo with images: the cleanup-images caller is missing"}},
+			"FAIL scaffold: missing (ship init) (.github/workflows/cleanup-images.yaml)"}},
+		// A pinned caller, its permissions, a private repo's if: are the owned file's bytes.
 		{"caller pinned", appShip, func(r *repo) { r.edit(scaffold.CI, "check.yaml@master", "check.yaml@v1") },
-			[]string{"FAIL workflows: trick77/ship/.github/workflows/check.yaml@v1: call it @master"}},
-		{"caller gone", appShip, func(r *repo) { r.edit(scaffold.Release, "trick77/ship/.github/workflows/release.yaml", "./x.yaml") },
-			[]string{"FAIL workflows: no job calls trick77/ship/.github/workflows/release.yaml@master"}},
-		{"release perms and bumps", appShip, func(r *repo) {
-			r.edit(scaffold.Release, "      packages: write\n", "")
-			r.edit(scaffold.Release, ", auto]", "]")
-		}, []string{"FAIL workflows: ship.yaml has images: the release job needs permissions packages: write",
-			"FAIL workflows: workflow_dispatch bump options lack auto"}},
-		// An allowed scaffold diff still needs the grant cosign signs with.
-		{"release without id-token", appShip + "allow:\n  - { rule: scaffold, path: .github/workflows/release.yaml, why: own }\n",
-			func(r *repo) { r.edit(scaffold.Release, "      id-token: write\n", "") },
-			[]string{"FAIL workflows: ship.yaml has images: the release job needs permissions id-token: write (cosign)"}},
-		{"release id-token without images", "go:\n  dir: backend\nui:\n  lint: npm run lint\n", func(*repo) {},
-			[]string{"FAIL workflows: id-token: write without images in ship.yaml: drop it",
-				"FAIL workflows: packages: write without images in ship.yaml: drop it"}},
+			[]string{"FAIL scaffold: differs from ship's template (ship init -diff) (.github/workflows/ci.yaml)"}},
 		{"foreign cleanup", appShip, func(r *repo) {
 			r.write(".github/workflows/prune.yml", "on: push\njobs:\n  x:\n    steps:\n      - uses: dataaxiom/ghcr-cleanup-action@v1\n")
 		}, []string{"FAIL workflows: image cleanup by dataaxiom/ghcr-cleanup-action: use the cleanup-images caller (.github/workflows/prune.yml)"}},
 		{"broken workflow", appShip, func(r *repo) { r.write(".github/workflows/x.yaml", "jobs: [\n") },
 			[]string{"FAIL workflows: .github/workflows/x.yaml: yaml"}},
-		{"private without if", appShip, func(r *repo) { r.edit(scaffold.CI, "    if: github", "    x-if: github") },
-			[]string{"FAIL visibility: private repo: the check job needs if:"}},
-		{"private ungrouped", appShip, func(r *repo) {
-			r.edit(scaffold.Dependabot, "      npm-major:", "      npm-x:")
-			r.edit(scaffold.Dependabot, "      - major\n    ignore", "      - premajor\n    ignore")
-			r.edit(scaffold.Dependabot, "open-pull-requests-limit: 5", "open-pull-requests-limit: 10")
-		}, []string{"FAIL visibility: npm /ui: not every update grouped", "FAIL visibility: gomod /backend: open-pull-requests-limit 10"}},
 		{"visibility mismatch", "visibility: public\n" + appShip, func(*repo) {},
 			[]string{"FAIL visibility: visibility: public, GitHub says private (ship.yaml)"}},
 		{"dependabot prefix and docker", appShip, func(r *repo) {
@@ -340,10 +319,8 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 		},
 			[]string{`FAIL distroless: image "": final stage base alpine:3.24, not gcr.io/distroless/ (Containerfile)`,
 				`FAIL containerfile: image "": final stage runs as root`}},
-		{"dockerignore", appShip, func(r *repo) { r.write(scaffold.Ignore, "*\n") },
-			[]string{"FAIL dockerignore: does not exclude ui/node_modules", "FAIL dockerignore: does not exclude ui/dist"}},
 		{"dockerignore missing", appShip, func(r *repo) { r.remove(scaffold.Ignore) },
-			[]string{"FAIL dockerignore: missing (ship init) (.dockerignore)"}},
+			[]string{"FAIL scaffold: missing (ship init) (.dockerignore)"}},
 		{"ui", strings.Replace(appShip, "npm run lint", "npm run format:check", 1), func(r *repo) {
 			r.write("ui/package.json", `{"scripts": {"build": "tsc --noEmit && vite build", "lint": "eslint ."},
 				"devDependencies": {"prettier": "^3.9.9"}}`)
@@ -356,7 +333,7 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 			"FAIL ui: devDependency typescript missing", "FAIL ui: devDependency eslint missing",
 			"FAIL ui: devDependency typescript-eslint missing", "FAIL ui: devDependency eslint-config-prettier missing",
 			"FAIL ui: devDependency @eslint/js missing", "FAIL ui: devDependency eslint-plugin-react-hooks missing",
-			"FAIL ui: missing (ship init) (ui/eslint.config.js)"}},
+			"FAIL scaffold: missing (ship init) (ui/eslint.config.js)"}},
 		// Dependabot moves a version per repo: any exact one passes, a range or TypeScript 6.1+ does not.
 		{"ui devDependency versions", appShip, func(r *repo) {
 			r.edit("ui/package.json", `"eslint": "10.12.0"`, `"eslint": "~10.13.0"`)
@@ -376,8 +353,10 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 			r.edit("ui/vite.config.ts", "globals: true", "globals: false")
 			r.edit("ui/vite.config.ts", "./src/test/setup.ts", "./src/setupTests.ts")
 			r.edit("ui/vite.config.ts", "../coverage/ui", "coverage")
+			r.edit("ui/vite.config.ts", `"lcov"`, `"html"`)
 		}, []string{`FAIL ui: no from "vitest/config"`, "FAIL ui: no globals: true",
-			`FAIL ui: no setupFiles: ["./src/test/setup.ts"]`, `FAIL ui: no reportsDirectory: "../coverage/ui"`}},
+			`FAIL ui: no setupFiles: ["./src/test/setup.ts"]`, `FAIL ui: no reportsDirectory: "../coverage/ui"`,
+			`FAIL ui: no "lcov"`}},
 		{"ui vite config missing", appShip, func(r *repo) { r.remove("ui/vite.config.ts") },
 			[]string{"FAIL ui: missing (ui/vite.config.ts)"}},
 		{"ui setup import late", appShip, func(r *repo) {
@@ -579,14 +558,15 @@ func TestRun_whenLibrary_thenAppRulesSkipped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	for _, s := range []string{"skip containerfile: no images", "skip distroless: no images", "skip dockerignore: no images",
+	for _, s := range []string{"skip containerfile: no images", "skip distroless: no images",
 		"skip ui: no ui", "skip kit: no images", "ok scaffold", "ok visibility"} {
 		if !strings.Contains(out, s+"\n") {
 			t.Errorf("no %q in:\n%s", s, out)
 		}
 	}
+	// A public repo's CI runs every PR: the private if: is a scaffold diff.
 	r.edit(scaffold.CI, "  check:\n", "  check:\n    if: false\n")
-	if out, _ := r.run(""); !strings.Contains(out, "FAIL visibility: public repo: every PR runs CI, drop the check job's if:") {
+	if out, _ := r.run(""); !strings.Contains(out, "FAIL scaffold: differs from ship's template (ship init -diff) (.github/workflows/ci.yaml)") {
 		t.Errorf("public with if:\n%s", out)
 	}
 }

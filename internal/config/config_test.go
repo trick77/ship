@@ -17,8 +17,18 @@ func TestParse_whenEmpty_thenFamilyDefaults(t *testing.T) {
 	if c.Base != "master" || c.Lint != pins.Golangci || c.Patch != 75 || c.Go.Dir != "." || c.Go.Floor != 75 {
 		t.Fatalf("defaults: %+v", c)
 	}
-	if !c.Go.RaceOn() || len(c.Go.Exclude) != 1 || c.Go.Exclude[0] != "cmd/" || c.UI != nil {
+	if !c.Go.RaceOn() || len(c.Go.Exclude) != 1 || c.Go.Exclude[0] != "cmd/" || c.Go.Coverpkg != "./..." || c.UI != nil {
 		t.Fatalf("go defaults: %+v", c.Go)
+	}
+}
+
+// An explicit empty coverpkg is no -coverpkg, the narrow one stays as written.
+func TestParse_whenCoverpkgSet_thenItWins(t *testing.T) {
+	for in, want := range map[string]string{"go:\n  coverpkg: \"\"\n": "", "go:\n  coverpkg: ./internal/...\n": "./internal/..."} {
+		c, err := Parse([]byte(in))
+		if err != nil || c.Go.Coverpkg != want {
+			t.Errorf("%q: %q %v", in, c.Go.Coverpkg, err)
+		}
 	}
 }
 
@@ -28,7 +38,7 @@ func TestParse_whenUIAndImages_thenTheirDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if c.UI.Dir != "ui" || c.UI.Floor != 75 || c.UI.Lcov != filepath.Join("coverage", "ui", "lcov.info") ||
-		!strings.Contains(c.UI.Build, "npm ci") || c.UI.Lint != "npm run lint" || c.UI.Embed != "" || !strings.Contains(c.UI.Test, "--coverage") {
+		!strings.Contains(c.UI.Build, "npm ci") || c.UI.Lint != "npm run lint" || c.UI.Embed != "" || c.UI.Test != "npm run test -- --coverage" {
 		t.Fatalf("ui: %+v", c.UI)
 	}
 	im := c.Images[0]

@@ -15,8 +15,9 @@ as the hook does, and run that.
 ```sh
 ship() {
   local sha
-  sha="$(git ls-remote https://github.com/trick77/ship refs/heads/master | cut -f1)"
-  [ -n "$sha" ] || { echo "ship: cannot resolve ship's master on GitHub (git ls-remote, error above)" >&2; return 1; }
+  sha="$(git ls-remote https://github.com/trick77/ship refs/heads/master | awk '$2 == "refs/heads/master" { print $1 }')"
+  printf '%s\n' "$sha" | grep -Eqx '[0-9a-f]{40}' ||
+    { echo "ship: cannot resolve ship's master on GitHub: '$sha' (git ls-remote, error above)" >&2; return 1; }
   go run "github.com/trick77/ship@$sha" "$@"
 }
 ship hooks   # once per clone: the pre-push hook (runs master's ship on every push)
@@ -36,15 +37,15 @@ go:
   dir: .              # module dir, e.g. backend
   floor: 75           # min line coverage, %
   race: true
-  coverpkg: ./internal/...
+  coverpkg: ./...     # go test -coverpkg (cross-package attribution); e.g. ./internal/... to narrow, "" = none
   exclude: [cmd/]     # not counted by either coverage gate
   modules: [kit, kit/auth]   # nested modules (own go.mod), gated like go.dir; see below
 ui:                   # omit for no UI
   dir: ui
   floor: 75
   build: npm ci && npm run build      # tsc -b && vite build: the typecheck
-  lint: npm run lint                  # the default: eslint / prettier --check; "" = none
-  test: npm run test -- --coverage --coverage.reporter=lcov --coverage.reporter=text-summary  # must write lcov
+  lint: npm run lint                  # eslint / prettier --check; conform allows nothing else
+  test: npm run test -- --coverage    # must write lcov: vite.config.ts's coverage.reporter has "lcov" (conform)
   lcov: coverage/ui/lcov.info         # repo-relative, vite reportsDirectory "../coverage/ui"; SF: paths relative to ui.dir
   embed: backend/web/dist             # go:embed dir, emptied but for .gitkeep before ui.build; omit for none
 steps:                # repo-specific checks, run after lint
@@ -155,7 +156,7 @@ Reusable, for running the same commands on GitHub:
 ```yaml
 jobs:
   check:
-    uses: trick77/ship/.github/workflows/check.yaml@master      # inputs: go-dir, node-version, ui-dir, postgres
+    uses: trick77/ship/.github/workflows/check.yaml@master      # inputs: go-dir, node-version, ui-dir (postgres: deprecated, ship.yaml's)
   release:
     uses: trick77/ship/.github/workflows/release.yaml@master    # inputs: bump, go-dir, dir
   cleanup:
@@ -180,14 +181,13 @@ builder, `ship init` moves CI after it.
 
 | rule | what | allowable |
 |---|---|---|
-| `scaffold` | every owned file equals ship's template | per `path` |
-| `workflows` | ci/release/cleanup callers use `trick77/ship/.github/workflows/<x>.yaml@master`; release: `packages: write` ⇔ images, bump options include `auto`; no other image cleanup action | yes |
-| `visibility` | GitHub's visibility (Actions event, else the API unauthenticated, cached a day in the git dir) matches `visibility:`; a failed lookup: `visibility:` stands (a note), unset = FAIL; public: CI on every PR (no `if:`); private: Dependabot-only `if:`, every npm/docker/docker-compose update grouped, ≤ 5 open PRs, cleanup caller with images | yes |
-| `dependabot` | `commit-message: { prefix: deps }` everywhere; gomod, github-actions, npm (UI), docker (Containerfile), docker-compose `/` (a root `compose*.yaml` naming an image by a version tag) present | yes |
+| `scaffold` | every owned file equals ship's template: the callers `@master`, release's permissions (`packages: write`, `id-token: write` ⇔ images) and `auto`, public CI on every PR, private Dependabot-only `if:`, every update grouped, ≤ 5 open PRs, `.dockerignore`'s UI lines. An allowed diff gives all of that file's up | per `path` |
+| `workflows` | no image cleanup action but ship's caller, in any workflow | yes |
+| `visibility` | GitHub's visibility (Actions event, else the API unauthenticated, cached a day in the git dir) matches `visibility:`; a failed lookup: `visibility:` stands (a note), unset = FAIL | yes |
+| `dependabot` | `commit-message: { prefix: deps }` everywhere; gomod (go.dir, go.modules), github-actions, npm (UI), docker (Containerfile), docker-compose `/` (a root `compose*.yaml` naming an image by a version tag) present: holds where `scaffold` allows the file (ship's own) | yes |
 | `containerfile` | per image: `ARG VERSION` into `-X github.com/trick77/ship/kit/version.Version=${VERSION}`, `-trimpath`, non-root final stage, builder `golang:X.Y` = go.mod's and ≥ ship's Go floor (1.27), builder `node:N` ≥ ship's Node floor (26), every base (not a stage, `scratch` or `${ARG}`) with a tag or digest (untagged = a floating `:latest` Dependabot cannot track) | per `image` |
 | `distroless` | final stage on `gcr.io/distroless/` | per `image` |
-| `dockerignore` | exists with images; excludes `<ui.dir>/node_modules` and `<ui.dir>/dist` | yes |
-| `ui` | `ui.lint: npm run lint`; scripts exactly `build` = `tsc -b && vite build`, `lint` = `eslint . --max-warnings 0 && npm run format:check`, `format` = `prettier --write 'src/**/*.{ts,tsx,css}' '*.ts'`, `format:check` = `prettier --check …` (same globs), `test` = `vitest run`; devDependencies `typescript`, `prettier`, `eslint`, `typescript-eslint`, `eslint-config-prettier`, `@eslint/js`, `eslint-plugin-react-hooks` present at an exact version (no range; the version is the repo's), typescript below `pins.TypescriptCap` (typescript-eslint); eslint.config.js; tsconfig.json references `./tsconfig.node.json`; vite.config.ts: `defineConfig` from `vitest/config`, `globals: true`, `setupFiles: ["./src/test/setup.ts"]`, `reportsDirectory: "../coverage/ui"`; `src/test/setup.ts`'s first statement `import "@testing-library/jest-dom/vitest";` | yes |
+| `ui` | `ui.lint: npm run lint`; scripts exactly `build` = `tsc -b && vite build`, `lint` = `eslint . --max-warnings 0 && npm run format:check`, `format` = `prettier --write 'src/**/*.{ts,tsx,css}' '*.ts'`, `format:check` = `prettier --check …` (same globs), `test` = `vitest run`; devDependencies `typescript`, `prettier`, `eslint`, `typescript-eslint`, `eslint-config-prettier`, `@eslint/js`, `eslint-plugin-react-hooks` present at an exact version (no range; the version is the repo's), typescript below `pins.TypescriptCap` (typescript-eslint); tsconfig.json references `./tsconfig.node.json`; vite.config.ts: `defineConfig` from `vitest/config`, `globals: true`, `setupFiles: ["./src/test/setup.ts"]`, `reportsDirectory: "../coverage/ui"`, a `"lcov"` coverage reporter; `src/test/setup.ts`'s first statement `import "@testing-library/jest-dom/vitest";` | yes |
 | `golangci` | no `.golangci.yaml`/`.yml` in the repo: ship's config is the family's | per `path` |
 | `gomod` | `go x.y.z` ≥ 1.27.0 in go.dir and every go.modules module; kit's version is Dependabot's to move | yes |
 | `kit` | a repo with images requires kit | yes |

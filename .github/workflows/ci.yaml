@@ -48,13 +48,29 @@ jobs:
   # A merge is already live for every consumer (they run master's sha): tag it, with notes, once both gates pass.
   # auto: patch, or a `Release: minor|major` + `Release-note:` line in a commit; docs/tests only → no release.
   # Each module on its own (tags v…, kit/v…, kit/auth/v…), only its own changes count; one not merged yet skips.
+  # The modules release cuts: ship itself ("") and ship.yaml's go.modules, the one list. On every run, so a broken
+  # read shows on the PR, not first on master. yq: preinstalled on GitHub's ubuntu runner images.
+  modules:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      dirs: ${{ steps.dirs.outputs.dirs }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: dirs
+        run: |
+          dirs="$(yq -o=json -I=0 '[""] + (.go.modules // [])' ship.yaml)"
+          echo "$dirs" | jq -e 'type == "array" and length > 0 and all(type == "string")' >/dev/null
+          echo "dirs=$dirs" >> "$GITHUB_OUTPUT"
+          echo "release modules: $dirs"
+
   release:
-    needs: [check, test-macos]
+    needs: [check, test-macos, modules]
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     strategy:
       fail-fast: false
       matrix:
-        dir: ["", kit, kit/auth]
+        dir: ${{ fromJSON(needs.modules.outputs.dirs) }}
     uses: ./.github/workflows/release.yaml
     with:
       bump: auto

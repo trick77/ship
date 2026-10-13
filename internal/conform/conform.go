@@ -32,7 +32,6 @@ const (
 	Dependabot    = "dependabot"
 	Containerfile = "containerfile"
 	Distroless    = "distroless"
-	Dockerignore  = "dockerignore"
 	UI            = "ui"
 	Golangci      = "golangci"
 	Gomod         = "gomod"
@@ -98,7 +97,6 @@ func rules() []rule {
 		{Dependabot, (*env).dependabot},
 		{Containerfile, (*env).containerfile},
 		{Distroless, (*env).distroless},
-		{Dockerignore, (*env).dockerignore},
 		{UI, (*env).ui},
 		{Golangci, (*env).golangci},
 		{Gomod, (*env).gomod},

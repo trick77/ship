@@ -17,9 +17,9 @@ import (
 	"github.com/trick77/ship/internal/pins"
 )
 
-// uiTest asks vitest for lcov itself: its default reporters write none, and a repo relying on the default must not
-// fail on a missing report.
-const uiTest = "npm run test -- --coverage --coverage.reporter=lcov --coverage.reporter=text-summary"
+// uiTest takes vitest's reporters from vite.config.ts, where conform requires "lcov" next to reportsDirectory: one
+// place says where and in which form the report lands.
+const uiTest = "npm run test -- --coverage"
 
 // File is the config file name, at the repo root.
 const File = "ship.yaml"
@@ -62,7 +62,8 @@ type Go struct {
 	Floor float64 `yaml:"floor"`
 	// Race runs the tests with -race (needs cgo; CGO_ENABLED=1 is set for the test run only).
 	Race *bool `yaml:"race"`
-	// Coverpkg is passed to go test -coverpkg when set, e.g. ./internal/...
+	// Coverpkg is passed to go test -coverpkg: default ./... (a package's lines count as covered by any package's
+	// tests), ./internal/... to narrow, "" = none.
 	Coverpkg string `yaml:"coverpkg"`
 	// Exclude lists Go path prefixes, relative to the repo root, that neither coverage gate counts. A prefix also
 	// matches as a path segment anywhere ("cmd/" excludes backend/cmd/x.go). UI coverage scope is the test
@@ -82,7 +83,7 @@ type UI struct {
 	// `npm run build` is `tsc -b && vite build`: the typecheck.
 	Build string `yaml:"build"`
 	// Lint is the UI's lint/format check (eslint, prettier --check), run after the Go lint; default npm run lint,
-	// an explicit "" = none.
+	// the only value conform passes ("" runs none, an allowed ui exception).
 	Lint string `yaml:"lint"`
 	// Test runs the UI tests with coverage and must write Lcov.
 	Test string `yaml:"test"`
@@ -133,7 +134,7 @@ func Parse(b []byte) (*Config, error) {
 		Base:  "master",
 		Lint:  pins.Golangci,
 		Patch: 75,
-		Go:    Go{Dir: ".", Floor: 75, Exclude: []string{"cmd/"}},
+		Go:    Go{Dir: ".", Floor: 75, Coverpkg: "./...", Exclude: []string{"cmd/"}},
 	}
 	// yaml fills an already set pointer in place: a ui: block keeps the defaults it does not override. A bare
 	// `ui:` (null) decodes to nil and is put back: naming the key means a UI, never a silently skipped gate.
