@@ -80,11 +80,11 @@ updates:
         patterns: ["eslint", "eslint-*", "typescript-eslint", "@eslint/*"]
 [[- template "split" "npm" ]]
     ignore:
-      # typescript-eslint's peer dependency takes typescript <6.1.0: any newer
+      # typescript-eslint's peer dependency takes typescript <[[ .TypescriptCap ]].0: any newer
       # one, minor included, fails npm ci on ERESOLVE. Lift this (and
       # conform's typescriptCap) once typescript-eslint supports newer TS.
       - dependency-name: "typescript"
-        versions: [">=6.1.0"]
+        versions: [">=[[ .TypescriptCap ]].0"]
 [[- template "entries" (index .Ignore "npm") ]]
 [[- end ]]
 [[- range .DockerDirs ]]

@@ -11,7 +11,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -52,8 +51,6 @@ type Options struct {
 	// Getenv reads GITHUB_ACTIONS and GITHUB_EVENT_PATH.
 	Getenv func(string) string
 	Now    func() time.Time
-	// KitTags lists ship's kit/v* tags (git ls-remote on GitHub).
-	KitTags func() ([]string, error)
 }
 
 func (o Options) withDefaults() Options {
@@ -71,9 +68,6 @@ func (o Options) withDefaults() Options {
 	}
 	if o.Now == nil {
 		o.Now = time.Now
-	}
-	if o.KitTags == nil {
-		o.KitTags = kitTags
 	}
 	return o
 }
@@ -129,9 +123,6 @@ type env struct {
 	visNote string
 	files   []scaffold.File
 	git     map[string]bool
-	// kitTags, kitErr: KitTags' answer, asked once.
-	kitTags []string
-	kitErr  error
 	// renderErr: the owned files could not be rendered at all.
 	renderErr error
 	// compose: composePins, read once for the render and the dependabot rule alike.
@@ -354,21 +345,4 @@ func (e *env) composePins() bool {
 		}
 	}
 	return false
-}
-
-// kitTags lists the kit/v* tags of ship on GitHub.
-func kitTags() ([]string, error) {
-	cmd := exec.Command("git", "ls-remote", "--tags", "https://github.com/trick77/ship", "refs/tags/kit/v*")
-	cmd.Env = gitx.CleanEnv()
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("git ls-remote --tags https://github.com/trick77/ship: %w", err)
-	}
-	var tags []string
-	for _, l := range strings.Split(string(out), "\n") {
-		if _, ref, ok := strings.Cut(l, "\t"); ok && !strings.HasSuffix(ref, "^{}") {
-			tags = append(tags, strings.TrimPrefix(ref, "refs/tags/"))
-		}
-	}
-	return tags, nil
 }

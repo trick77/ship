@@ -1,7 +1,6 @@
 package conform
 
 import (
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -122,9 +121,8 @@ func newRepo(t *testing.T, files map[string]string) *repo {
 		r.write(p, s)
 	}
 	r.opts = Options{
-		Out:     &r.out,
-		Getenv:  fakeEnv(map[string]string{"GITHUB_ACTIONS": "true", "GITHUB_EVENT_PATH": r.event(true)}),
-		KitTags: func() ([]string, error) { return []string{"kit/v0.1.0", "kit/v0.2.0", "v1.0.0", "kit/vX"}, nil },
+		Out:    &r.out,
+		Getenv: fakeEnv(map[string]string{"GITHUB_ACTIONS": "true", "GITHUB_EVENT_PATH": r.event(true)}),
 	}
 	return r
 }
@@ -397,8 +395,6 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 			[]string{"FAIL golangci: own golangci-lint config: ship's is the family's (backend/.golangci.yml)"}},
 		{"gomod", appShip, func(r *repo) { r.edit("backend/go.mod", "go 1.27.1", "go 1.27") },
 			[]string{"FAIL gomod: go 1.27: want x.y.z (backend/go.mod)"}},
-		{"kit old", appShip, func(r *repo) { r.edit("backend/go.mod", "kit v0.2.0", "kit v0.1.0") },
-			[]string{"FAIL gomod: github.com/trick77/ship/kit v0.1.0, newest is v0.2.0"}},
 		{"kit missing", appShip, func(r *repo) { r.edit("backend/go.mod", "github.com/trick77/ship/kit", "example.com/other") },
 			[]string{"FAIL kit: a service (images) requires github.com/trick77/ship/kit (backend/go.mod)"}},
 		// Below the floor, go.mod and builder agreeing: both fail.
@@ -572,7 +568,6 @@ func TestRun_whenLibrary_thenAppRulesSkipped(t *testing.T) {
 	r := newRepo(t, map[string]string{"go.mod": "module example.com/lib\n\ngo 1.27.1\n", "lib.go": "package lib\n",
 		"AGENTS.md": agentsMD})
 	r.opts.Getenv = fakeEnv(map[string]string{"GITHUB_ACTIONS": "true", "GITHUB_EVENT_PATH": r.event(false)})
-	r.opts.KitTags = func() ([]string, error) { return nil, errors.New("not asked") }
 	if err := Init(r.dir, r.config(""), r.opts, false); err != nil {
 		t.Fatal(err)
 	}
@@ -596,29 +591,12 @@ func TestRun_whenLibrary_thenAppRulesSkipped(t *testing.T) {
 	}
 }
 
-func TestRun_whenKitTagsAbsentOrUnreachable_thenNoteOrFail(t *testing.T) {
+// Any kit version passes: Dependabot moves it, a kit release never fails a consumer's push.
+func TestRun_whenKitOld_thenOK(t *testing.T) {
 	r := app(t)
-	r.opts.KitTags = func() ([]string, error) { return []string{"v1.0.0"}, nil }
-	if out, err := r.run(appShip); err != nil || !strings.Contains(out, "ok gomod: no kit/v* tag yet\n") {
-		t.Errorf("no tags: %v\n%s", err, out)
-	}
-	r.opts.KitTags = func() ([]string, error) { return nil, errors.New("ls-remote: offline") }
-	if out, err := r.run(appShip); err == nil || !strings.Contains(out, "FAIL gomod: ls-remote: offline (backend/go.mod)") {
-		t.Errorf("offline: %v\n%s", err, out)
-	}
-	// A service without kit: nothing to require before kit's first tag.
-	r.edit("backend/go.mod", "github.com/trick77/ship/kit", "example.com/other")
-	calls := 0
-	r.opts.KitTags = func() ([]string, error) { calls++; return nil, nil }
-	if out, err := r.run(appShip); err != nil || !strings.Contains(out, "ok kit: no kit/v* tag yet\n") {
-		t.Errorf("no tags, no kit: %v\n%s", err, out)
-	}
-	r.opts.KitTags = func() ([]string, error) { calls++; return nil, errors.New("ls-remote: offline") }
-	if out, err := r.run(appShip); err == nil || !strings.Contains(out, "FAIL kit: ls-remote: offline (backend/go.mod)") {
-		t.Errorf("offline, no kit: %v\n%s", err, out)
-	}
-	if calls != 2 {
-		t.Errorf("%d ls-remotes, want one per run", calls)
+	r.edit("backend/go.mod", "kit v0.2.0", "kit v0.0.1")
+	if out, err := r.run(appShip); err != nil || !strings.Contains(out, "ok gomod\n") || !strings.Contains(out, "ok kit\n") {
+		t.Errorf("old kit: %v\n%s", err, out)
 	}
 }
 
@@ -774,12 +752,5 @@ func TestAtLeast(t *testing.T) {
 		if got := atLeast(tc.v, tc.floor); got != tc.want {
 			t.Errorf("atLeast(%s, %s) = %v", tc.v, tc.floor, got)
 		}
-	}
-}
-
-func TestKitTags_whenOffline_thenError(t *testing.T) {
-	t.Setenv("PATH", "")
-	if _, err := kitTags(); err == nil {
-		t.Error("no git, no error")
 	}
 }

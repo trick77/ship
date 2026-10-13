@@ -85,6 +85,7 @@ type data struct {
 	Compose                                    bool
 	Branches, GoDir, GoDirAbs, UIDir, UIDirAbs string
 	DependabotOnly, NodeVersion, Packages      string
+	TypescriptCap                              string
 	DockerDirs, GoModules                      []string
 	// Ignore is ship.yaml's dependabot.ignore by ecosystem.
 	Ignore map[string][]config.Ignore
@@ -97,7 +98,7 @@ func Files(root string, c *config.Config, f Facts) ([]File, error) {
 		Private: f.Visibility == "private", Images: len(c.Images) > 0, UI: c.UI != nil,
 		Branches: "[" + c.Base + "]", GoDir: c.Go.Dir, GoDirSet: path.Clean(c.Go.Dir) != ".",
 		GoDirAbs: abs(c.Go.Dir), DependabotOnly: DependabotOnly, NodeVersion: f.NodeVersion, DockerDirs: f.DockerDirs,
-		Compose: f.Compose, Ignore: map[string][]config.Ignore{},
+		Compose: f.Compose, Ignore: map[string][]config.Ignore{}, TypescriptCap: pins.TypescriptCap,
 	}
 	// An ignore under an ecosystem dependabot.yaml has no entry for would be written nowhere, init and conform green.
 	rendered := map[string]bool{"gomod": true, "github-actions": true, "npm": d.UI, "docker": len(f.DockerDirs) > 0,
