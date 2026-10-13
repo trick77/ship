@@ -27,41 +27,63 @@ func NewServer(addr string, h http.Handler) *http.Server {
 }
 
 // Serve runs srv until ctx ends or the process gets SIGINT/SIGTERM, then drains in-flight requests for up to
-// shutdownTimeout. A clean shutdown returns nil; a listener that cannot bind returns its error at once. A drain
-// that outlasts shutdownTimeout closes the server, cutting off the connections still open, and returns
-// context.DeadlineExceeded: whatever the caller closes next is no longer read through them. Neither Shutdown nor
-// Close waits for a handler to return or for a hijacked connection (a WebSocket); Main also waits for those, within
-// the same budget.
+// shutdownTimeout. A clean shutdown returns nil; a listener that cannot bind returns its error at once. Once the stop
+// is in, Serve releases its signal handler: a second Ctrl-C or SIGTERM during the drain kills the process at once.
+// A drain that outlasts shutdownTimeout closes the server, cutting off the connections still open, and returns
+// context.DeadlineExceeded: whatever the caller closes next is no longer read through them. Any other Shutdown error
+// (a listener that fails to close after a clean drain) is returned as is. A server that fails on its own (its
+// accept loop errs) is closed too before its error returns: kept-alive connections must not go on serving. Neither
+// Shutdown nor Close waits for a handler to return or for a hijacked connection (a WebSocket); Main also waits for
+// those, within the same budget.
 func Serve(ctx context.Context, srv *http.Server, shutdownTimeout time.Duration) error {
-	_, err := serve(ctx, srv, shutdownTimeout)
+	_, _, err := serve(ctx, srv, shutdownTimeout)
 	return err
 }
 
-// serve is Serve and also returns when the stop came in (the return time when the server failed on its own): Main
-// counts its whole stop budget from there.
-func serve(ctx context.Context, srv *http.Server, shutdownTimeout time.Duration) (time.Time, error) {
+// listen opens serve's listener; a var only for the tests of a failing one. srv.Serve closes it.
+var listen = net.Listen
+
+// serve is Serve and also returns when the stop came in (the return time when the server failed on its own) and
+// whether there was one: Main counts its whole stop budget from stoppedAt and tells a failure from a stop.
+func serve(ctx context.Context, srv *http.Server, shutdownTimeout time.Duration) (stoppedAt time.Time, stopped bool, err error) {
+	addr := srv.Addr
+	if addr == "" {
+		addr = ":http" // what ListenAndServe listens on
+	}
+	ln, err := listen("tcp", addr)
+	if err != nil {
+		return time.Now(), false, err
+	}
 	ctx, stop := run.Context(ctx)
 	defer stop()
+	// The handler goes as soon as the stop is in, not at return: a second signal must not wait out the drain.
+	// NotifyContext alone keeps it registered, swallowing every further signal, until stop.
+	context.AfterFunc(ctx, stop)
 	errc := make(chan error, 1)
-	go func() { errc <- srv.ListenAndServe() }()
+	go func() { errc <- srv.Serve(ln) }()
 	select {
-	case err := <-errc:
-		return time.Now(), err
+	case err = <-errc:
+		// Failed on its own: the connections it accepted would go on dispatching requests.
+		_ = srv.Close()
+		return time.Now(), false, err
 	case <-ctx.Done():
 	}
-	stoppedAt := time.Now()
+	stoppedAt = time.Now()
 	// A fresh context: the one that just ended would cancel the drain before it starts.
 	sctx, cancel := context.WithDeadline(context.WithoutCancel(ctx), stoppedAt.Add(shutdownTimeout))
 	defer cancel()
 	if err := srv.Shutdown(sctx); err != nil {
-		// Overrun: the handlers still running get their connections closed and their request contexts ended.
-		_ = srv.Close()
-		return stoppedAt, err
+		if errors.Is(err, context.DeadlineExceeded) {
+			// Overrun: the handlers still running get their connections closed and their request contexts ended.
+			_ = srv.Close()
+		}
+		// Otherwise the drain finished and only a listener failed to close.
+		return stoppedAt, true, err
 	}
 	if err := <-errc; err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return stoppedAt, err
+		return stoppedAt, true, err
 	}
-	return stoppedAt, nil
+	return stoppedAt, true, nil
 }
 
 // LocalURL turns a listen address into a URL on this host: ":8080" and "0.0.0.0:8080" become

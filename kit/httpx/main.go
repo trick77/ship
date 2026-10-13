@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"sync"
@@ -20,14 +21,15 @@ const DefaultDrain = 8 * time.Second
 
 // handlerGrace is the least Main waits for handlers once the server has stopped, also when the drain used up the
 // whole budget: a handler whose connection the overrun's Close cut, or whose request context it ended, gets this
-// moment to return before the cleanup closes what it uses.
-const handlerGrace = time.Second
+// moment to return before the cleanup closes what it uses. A var only for the timing test.
+var handlerGrace = time.Second
 
 // MainOptions shapes Main.
 type MainOptions struct {
 	// Addr is the listen address -healthcheck probes (its /healthz), required. Read it from the environment and
 	// nothing else: the probe must not fail on config it does not use. Build's server listens on it: an empty
-	// srv.Addr becomes Addr, a different one is a startup failure.
+	// srv.Addr becomes Addr; any other must have Addr's port and Addr's host, no host, a wildcard (0.0.0.0, ::) or
+	// loopback (localhost, 127.0.0.1, ::1), where the probe reaches it. Anything else is a startup failure.
 	Addr string
 	// Build makes the server, only when serving: config, secrets and the database belong here, never before Main, so
 	// the probe runs without them. ctx ends on the stop signal too, so a slow startup and the goroutines it starts
@@ -59,12 +61,13 @@ type MainOptions struct {
 //
 // A drain that outlasts o.Drain closes the server (Serve), cutting off the requests still in flight, and exits 0
 // with a warning: the stop was asked for and happened, it only ran long. A non-zero exit would read as a crash to
-// the restart policy.
+// the restart policy. Any other Shutdown error (a listener that fails to close after the drain) is a stop too: it
+// is logged and exits 0.
 //
 // Main counts the calls into the server's handler. Once the server has stopped it waits for every call to return,
 // for what is left of o.Drain since the stop but at least a second, then runs the cleanup: drain and wait share the
-// one budget, so a stop takes about o.Drain before the cleanup (a second more on an overrun), never twice it. Shutdown and Close wait for neither a hijacked connection (a
-// WebSocket) nor a handler's return; the count covers both, as long as the work runs inside the handler call. A
+// one budget, so a stop takes about o.Drain before the cleanup (a second more on an overrun), never twice it.
+// Shutdown and Close wait for neither a hijacked connection (a WebSocket) nor a handler's return; the count covers both, as long as the work runs inside the handler call. A
 // call still running after the wait gets a warning with the count, and the cleanup runs under it anyway: an exit
 // must not hang on a stuck handler. A goroutine a handler started and left running is not counted; it must stop on
 // its own before the cleanup, or not use what the cleanup closes.
@@ -75,11 +78,13 @@ func Main(ctx context.Context, fs *flag.FlagSet, args []string, o MainOptions) i
 	if o.Drain <= 0 {
 		o.Drain = DefaultDrain
 	}
-	hc := fs.Lookup("healthcheck")
-	if hc == nil {
-		fs.Bool("healthcheck", false, "probe this process's /healthz and exit 0 when it answers 2xx (the container healthcheck)")
-		hc = fs.Lookup("healthcheck")
-	} else if b, ok := hc.Value.(interface{ IsBoolFlag() bool }); !ok || !b.IsBoolFlag() {
+	var healthcheck func() bool
+	if hc := fs.Lookup("healthcheck"); hc == nil {
+		on := fs.Bool("healthcheck", false, "probe this process's /healthz and exit 0 when it answers 2xx (the container healthcheck)")
+		healthcheck = func() bool { return *on }
+	} else if b, ok := hc.Value.(interface{ IsBoolFlag() bool }); ok && b.IsBoolFlag() {
+		healthcheck = func() bool { return boolFlag(hc.Value) }
+	} else {
 		o.Log.ErrorContext(ctx, "Flag -healthcheck is defined and not a bool")
 		return 1
 	}
@@ -98,13 +103,14 @@ func Main(ctx context.Context, fs *flag.FlagSet, args []string, o MainOptions) i
 		o.Log.ErrorContext(ctx, "MainOptions.Build is nil")
 		return 1
 	}
-	if boolFlag(hc.Value) {
+	if healthcheck() {
 		return Healthcheck(LocalURL(o.Addr, "/healthz"))
 	}
 	// One signal context for Build and Serve: a stop during a slow Build reaches it, and the cleanup still runs.
 	ctx, stop := run.Context(ctx)
 	defer stop()
-	// The handler goes as soon as the stop is in, not at return: a second signal must not wait out a drain or cleanup.
+	// The handler goes as soon as the stop is in, not at return: a second signal must not wait out a slow Build or
+	// the cleanup. Serve releases its own the same way for the drain.
 	context.AfterFunc(ctx, stop)
 	srv, cleanup, err := o.Build(ctx)
 	if cleanup != nil {
@@ -127,27 +133,48 @@ func Main(ctx context.Context, fs *flag.FlagSet, args []string, o MainOptions) i
 		return 1
 	case srv.Addr == "":
 		srv.Addr = o.Addr
-	case srv.Addr != o.Addr:
+	case !probeReaches(srv.Addr, o.Addr):
 		// -healthcheck would probe where nothing listens, and the runtime restart a working server.
-		o.Log.ErrorContext(ctx, "Startup failed: the server's Addr is not MainOptions.Addr", "addr", srv.Addr, "want", o.Addr)
+		o.Log.ErrorContext(ctx, "Startup failed: the server's Addr is not where -healthcheck probes MainOptions.Addr", "addr", srv.Addr, "want", o.Addr)
 		return 1
 	}
 	var calls inflight
 	srv.Handler = calls.wrap(srv.Handler)
-	stoppedAt, err := serve(ctx, srv, o.Drain)
+	stoppedAt, stopped, err := serve(ctx, srv, o.Drain)
 	// Before the deferred cleanup: the handlers still running would use what it closes.
 	if n := calls.wait(max(time.Until(stoppedAt.Add(o.Drain)), handlerGrace)); n > 0 {
 		o.Log.WarnContext(ctx, "Handlers still running after the server stopped, cleaning up under them", "handlers", n, "drain", o.Drain.String())
 	}
 	switch {
+	case err != nil && !stopped:
+		o.Log.ErrorContext(ctx, "Server failed", logging.Err(err))
+		return 1
 	case errors.Is(err, context.DeadlineExceeded):
 		o.Log.WarnContext(ctx, "Shutdown drain exceeded, stopping with requests in flight", "drain", o.Drain.String())
 		return 0
 	case err != nil:
-		o.Log.ErrorContext(ctx, "Server failed", logging.Err(err))
-		return 1
+		o.Log.WarnContext(ctx, "Shutdown failed after the drain", logging.Err(err))
+		return 0
 	}
 	return 0
+}
+
+// probeReaches reports whether a server listening on addr answers -healthcheck's probe of want (LocalURL): the same
+// port, and want's own host or one that takes loopback connections.
+func probeReaches(addr, want string) bool {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	wantHost, wantPort, err := net.SplitHostPort(want)
+	if err != nil || port != wantPort {
+		return false
+	}
+	switch host {
+	case wantHost, "", "0.0.0.0", "::", "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	return false
 }
 
 // boolFlag reports whether a bool flag is set. A flag.Getter says so itself; any other bool Value (IsBoolFlag,

@@ -306,7 +306,7 @@ func TestMain_whenServerAddrDiffers_thenOneWithoutServing(t *testing.T) {
 	if code := Main(context.Background(), mainFlags(), nil, o); code != 1 {
 		t.Errorf("Main with a server on %s, Addr %s = %d, want 1", other, addr, code)
 	}
-	if !strings.Contains(buf.String(), "not MainOptions.Addr") {
+	if !strings.Contains(buf.String(), "not where -healthcheck probes") {
 		t.Errorf("log = %q, want why", buf.String())
 	}
 	if !cleaned {
@@ -453,7 +453,11 @@ func TestMain_whenHandlerStuck_thenWarnsAndCleansUp(t *testing.T) {
 }
 
 func TestMain_whenDrainOverrunsOnAStuckHandler_thenStopTakesOneBudget(t *testing.T) {
-	const drain = 2 * time.Second
+	// A short grace, so one budget (drain+grace) and two (2*drain, the wait taking its own Drain) lie far apart.
+	const drain, grace = 500 * time.Millisecond, 50 * time.Millisecond
+	orig := handlerGrace
+	handlerGrace = grace
+	defer func() { handlerGrace = orig }()
 	addr := freeAddr(t)
 	entered, release := make(chan struct{}), make(chan struct{})
 	defer close(release)
@@ -484,11 +488,122 @@ func TestMain_whenDrainOverrunsOnAStuckHandler_thenStopTakesOneBudget(t *testing
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(2 * drain):
-		t.Fatal("Main still stopping after twice Drain")
+	case <-time.After(10 * time.Second):
+		t.Fatal("Main hung on a stuck handler")
 	}
-	// The drain takes the whole budget; the handler wait gets only handlerGrace on top, not another Drain.
-	if took := time.Since(start); took < drain || took > drain+handlerGrace+500*time.Millisecond {
-		t.Errorf("stop took %v, want about Drain+handlerGrace (%v)", took, drain+handlerGrace)
+	// The drain takes the whole budget; the handler wait gets only the grace on top, not another Drain. The bound
+	// sits halfway between one budget (550ms) and two (1s).
+	if took, limit := time.Since(start), drain+drain/2+grace; took < drain || took > limit {
+		t.Errorf("stop took %v, want about Drain+handlerGrace (%v), under %v", took, drain+grace, limit)
+	}
+}
+
+// failingServer runs Main on a server whose accept loop fails with /hold in flight. It returns the exit code, the
+// log, and whether /hold had returned by the time the cleanup ran.
+func failingServer(t *testing.T) (code int, log string, handlerDone bool) {
+	t.Helper()
+	fail := useFaultyListener(t, nil)
+	addr := freeAddr(t)
+	h, entered, returned := holdHandler()
+	build := func(context.Context) (*http.Server, func(), error) {
+		cleanup := func() {
+			select {
+			case <-returned:
+				handlerDone = true
+			default:
+			}
+		}
+		return NewServer(addr, h), cleanup, nil
+	}
+	var buf bytes.Buffer
+	o := MainOptions{Addr: addr, Build: build, Drain: time.Minute, Log: slog.New(slog.NewTextHandler(&buf, nil))}
+	done := make(chan int, 1)
+	go func() { done <- Main(context.Background(), mainFlags(), nil, o) }()
+	waitUp(t, "http://"+addr+"/")
+	getHold(addr)
+	<-entered
+	close(fail)
+	select {
+	case code = <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Main hung after the server failed: the handler in flight was not cut")
+	}
+	return code, buf.String(), handlerDone
+}
+
+func TestMain_whenServerFailsOnItsOwn_thenOneAfterHandlersCut(t *testing.T) {
+	code, log, handlerDone := failingServer(t)
+	if code != 1 {
+		t.Errorf("Main = %d, want 1 when the server fails", code)
+	}
+	if !strings.Contains(log, "Server failed") || !strings.Contains(log, "accept broke") {
+		t.Errorf("log = %q, want the failure", log)
+	}
+	if !handlerDone {
+		t.Error("cleanup ran with the handler still in flight")
+	}
+}
+
+func TestMain_whenListenerCloseFails_thenWarnsAndZero(t *testing.T) {
+	useFaultyListener(t, errors.New("close broke"))
+	addr := freeAddr(t)
+	build := func(context.Context) (*http.Server, func(), error) {
+		return NewServer(addr, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})), nil, nil
+	}
+	var buf bytes.Buffer
+	o := MainOptions{Addr: addr, Build: build, Log: slog.New(slog.NewTextHandler(&buf, nil))}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan int, 1)
+	go func() { done <- Main(ctx, mainFlags(), nil, o) }()
+	waitUp(t, "http://"+addr+"/")
+	cancel()
+	if code := <-done; code != 0 {
+		t.Errorf("Main = %d, want 0: the stop happened, only the listener's close failed", code)
+	}
+	if log := buf.String(); !strings.Contains(log, "Shutdown failed") || !strings.Contains(log, "close broke") ||
+		strings.Contains(log, "drain exceeded") {
+		t.Errorf("log = %q, want the close error, not an overrun", log)
+	}
+}
+
+func TestProbeReaches(t *testing.T) {
+	for _, tt := range []struct {
+		addr, want string
+		ok         bool
+	}{
+		{"127.0.0.1:8080", "127.0.0.1:8080", true},
+		{":8080", "127.0.0.1:8080", true},
+		{"0.0.0.0:8080", ":8080", true},
+		{"[::]:8080", ":8080", true},
+		{"localhost:8080", ":8080", true},
+		{"127.0.0.1:8080", ":8080", true},
+		{"[::1]:8080", "127.0.0.1:8080", true},
+		{"10.0.0.5:8080", "10.0.0.5:8080", true},
+		{"127.0.0.1:8081", "127.0.0.1:8080", false},
+		{":8081", ":8080", false},
+		{"10.0.0.5:8080", ":8080", false},
+		{"example.com:8080", "127.0.0.1:8080", false},
+		{"8080", ":8080", false},
+		{":8080", "8080", false},
+	} {
+		if got := probeReaches(tt.addr, tt.want); got != tt.ok {
+			t.Errorf("probeReaches(%q, %q) = %v, want %v", tt.addr, tt.want, got, tt.ok)
+		}
+	}
+}
+
+func TestMain_whenServerAddrEquivalent_thenServes(t *testing.T) {
+	addr := freeAddr(t)
+	_, port, _ := net.SplitHostPort(addr)
+	build := func(context.Context) (*http.Server, func(), error) {
+		return NewServer("localhost:"+port, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})), nil, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan int, 1)
+	go func() { done <- Main(ctx, mainFlags(), nil, MainOptions{Addr: addr, Build: build, Log: quietLog()}) }()
+	waitUp(t, "http://"+addr+"/")
+	cancel()
+	if code := <-done; code != 0 {
+		t.Errorf("Main with the server on localhost:%s, Addr %s = %d, want 0", port, addr, code)
 	}
 }

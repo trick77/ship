@@ -84,6 +84,13 @@ func TestMain_whenSecondSIGTERMDuringSlowStop_thenKilled(t *testing.T) {
 		t.Fatal(err)
 	}
 	expect("stopping")
+	expectKilledBySecondSIGTERM(t, cmd)
+}
+
+// expectKilledBySecondSIGTERM repeats SIGTERM to the child, which has had its first, until it dies of one, and fails
+// the test when that takes 10s: the signal handler stayed in place.
+func expectKilledBySecondSIGTERM(t *testing.T, cmd *exec.Cmd) {
+	t.Helper()
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
 	// The handler goes asynchronously after the first stop: repeat the second signal until it lands.
@@ -105,5 +112,55 @@ func TestMain_whenSecondSIGTERMDuringSlowStop_thenKilled(t *testing.T) {
 			<-exited
 			t.Fatal("a second SIGTERM during the stop did not kill the process: the signal handler was still in place")
 		}
+	}
+}
+
+// drainChild is the child process of the second-signal-during-drain test: "serve" or "main", which of the two runs
+// the server whose handler blocks through the drain.
+const drainChild = "HTTPX_TEST_DRAIN_CHILD"
+
+func TestServeAndMain_whenSecondSIGTERMDuringDrain_thenKilled(t *testing.T) {
+	if mode := os.Getenv(drainChild); mode != "" {
+		addr := freeAddr(t)
+		srv := NewServer(addr, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/hold" {
+				return
+			}
+			fmt.Println("handling")
+			time.Sleep(30 * time.Second) // deaf to its request's context: the drain waits it out
+		}))
+		go func() {
+			waitUp(t, "http://"+addr+"/")
+			getHold(addr)
+		}()
+		if mode == "serve" {
+			_ = Serve(context.Background(), srv, 30*time.Second)
+			os.Exit(0)
+		}
+		build := func(context.Context) (*http.Server, func(), error) { return srv, nil, nil }
+		os.Exit(Main(context.Background(), mainFlags(), nil, MainOptions{Addr: addr, Build: build, Drain: 30 * time.Second, Log: quietLog()}))
+	}
+	for _, mode := range []string{"serve", "main"} {
+		t.Run(mode, func(t *testing.T) {
+			cmd := exec.Command(os.Args[0], "-test.run=^TestServeAndMain_whenSecondSIGTERMDuringDrain_thenKilled$")
+			cmd.Env = append(os.Environ(), drainChild+"="+mode)
+			out, err := cmd.StdoutPipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			lines := bufio.NewScanner(out)
+			if !lines.Scan() || lines.Text() != "handling" {
+				_ = cmd.Process.Kill()
+				t.Fatalf("child said %q, want %q", lines.Text(), "handling")
+			}
+			// The first starts the drain, which the deaf handler holds 30s; a later one must kill.
+			if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+				t.Fatal(err)
+			}
+			expectKilledBySecondSIGTERM(t, cmd)
+		})
 	}
 }
