@@ -18,7 +18,7 @@ func TestParse_whenEmpty_thenFamilyDefaults(t *testing.T) {
 	if c.Base != "master" || c.Lint != pins.Golangci || c.Patch != 75 || c.Go.Dir != "." || c.Go.Floor != 75 {
 		t.Fatalf("defaults: %+v", c)
 	}
-	if !c.Go.RaceOn() || len(c.Go.Exclude) != 1 || c.Go.Exclude[0] != "cmd/" || c.Go.Coverpkg != "./..." || c.UI != nil {
+	if !c.Go.RaceOn() || len(c.Go.Exclude) != 1 || c.Go.Exclude[0] != "cmd/" || c.Go.CoverpkgArg() != "./..." || c.UI != nil {
 		t.Fatalf("go defaults: %+v", c.Go)
 	}
 }
@@ -34,8 +34,8 @@ func TestParse_whenCoverpkgSet_thenItWins(t *testing.T) {
 		"go:\n  coverpkg: ./internal/...\n": "./internal/...",
 	} {
 		c, err := Parse([]byte(in))
-		if err != nil || c.Go.Coverpkg != want {
-			t.Errorf("%q: %q %v", in, c.Go.Coverpkg, err)
+		if err != nil || c.Go.CoverpkgArg() != want {
+			t.Errorf("%q: %q %v", in, c.Go.CoverpkgArg(), err)
 		}
 	}
 }

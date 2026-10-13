@@ -76,6 +76,8 @@ func (o Options) withDefaults() Options {
 type finding struct {
 	what, file string
 	image      *string
+	// rerender: a scaffold finding ship init fixes by rewriting file (missing or differing, never Manual).
+	rerender bool
 }
 
 // result is a rule's verdict: findings, or skip (the rule does not apply), or an ok with a note.
@@ -203,12 +205,19 @@ func Fix(root string, c *config.Config, o Options) error {
 func (e *env) report() error {
 	known := map[string]bool{}
 	fails := 0
-	stale := e.stale()
+	// stale are the owned files scaffold fails, not allowed: ship init rewrites them, so another rule's finding there
+	// only doubles scaffold's. scaffold runs first and fills it. An allowed diff keeps every rule's findings, its one
+	// guard; a Manual file too (ship writes none of it).
+	stale := map[string]bool{}
 	for _, r := range rules() {
 		known[r.name] = true
 		res := r.fn(e)
-		if r.name != Scaffold {
+		if n := len(res.findings); r.name != Scaffold {
 			res.findings = slices.DeleteFunc(res.findings, func(f finding) bool { return stale[f.file] })
+			if d := n - len(res.findings); d > 0 {
+				res.note = strings.TrimSuffix(fmt.Sprintf("%d finding(s) on owned files scaffold re-renders; %s",
+					d, res.note), "; ")
+			}
 		}
 		switch {
 		case res.skip != "":
@@ -229,6 +238,9 @@ func (e *env) report() error {
 					_, _ = fmt.Fprintf(e.o.Out, "allowed %s: %s\n", r.name, a.Why)
 				}
 				continue
+			}
+			if f.rerender {
+				stale[f.file] = true
 			}
 			fails++
 			_, _ = fmt.Fprintf(e.o.Out, "FAIL %s: %s (%s)\n", r.name, f.what, f.file)
@@ -281,19 +293,6 @@ func (e *env) read(p string) ([]byte, error) {
 func (e *env) exists(p string) bool {
 	_, err := os.Stat(filepath.Join(e.root, filepath.FromSlash(p)))
 	return err == nil
-}
-
-// stale are the owned files scaffold fails, not allowed: ship init rewrites them, so another rule's finding there
-// only doubles scaffold's. An allowed diff keeps every rule's findings, its one guard; a Manual file too (ship
-// writes none of it).
-func (e *env) stale() map[string]bool {
-	s := map[string]bool{}
-	for _, f := range e.files {
-		if _, ok := e.c.Allowed(Scaffold, nil, f.Path); f.Manual == "" && f.Differs() && !ok {
-			s[f.Path] = true
-		}
-	}
-	return s
 }
 
 func (e *env) goPath(p string) string { return path.Join(filepath.ToSlash(e.c.Go.Dir), p) }

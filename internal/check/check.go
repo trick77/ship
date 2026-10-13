@@ -540,8 +540,8 @@ func (r runner) goTest(env ...string) error {
 		if r.c.Go.RaceOn() {
 			args = append(args, "-race")
 		}
-		if r.c.Go.Coverpkg != "" && !r.nested(dir) {
-			args = append(args, "-coverpkg="+r.c.Go.Coverpkg)
+		if r.c.Go.CoverpkgArg() != "" && !r.nested(dir) {
+			args = append(args, "-coverpkg="+r.c.Go.CoverpkgArg())
 		}
 		return r.run(filepath.Join(r.root, dir), env, "go", append(args, "./...")...)
 	})

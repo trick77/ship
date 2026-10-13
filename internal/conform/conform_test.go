@@ -1,6 +1,7 @@
 package conform
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -642,11 +643,14 @@ func TestRules_whenOwnedFileBroken_thenRuleFailsReportShowsScaffold(t *testing.T
 			tc.mut(r)
 			e := newEnv(r.dir, r.config(appShip), r.opts)
 			i := slices.IndexFunc(rules(), func(rl rule) bool { return rl.name == tc.rule })
-			if !slices.ContainsFunc(rules()[i].fn(e).findings, func(f finding) bool { return strings.Contains(f.what, tc.want) }) {
+			fs := rules()[i].fn(e).findings
+			if !slices.ContainsFunc(fs, func(f finding) bool { return strings.Contains(f.what, tc.want) }) {
 				t.Errorf("%s: no %q", tc.rule, tc.want)
 			}
+			// The rule's findings are dropped, not hidden: its ok line counts them.
 			out, _ := r.run(appShip)
-			if !strings.Contains(out, "FAIL scaffold: ") || !strings.Contains(out, "ok "+tc.rule+"\n") {
+			note := fmt.Sprintf("ok %s: %d finding(s) on owned files scaffold re-renders\n", tc.rule, len(fs))
+			if !strings.Contains(out, "FAIL scaffold: ") || !strings.Contains(out, note) {
 				t.Errorf("want scaffold's finding alone:\n%s", out)
 			}
 		})
