@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -567,27 +568,37 @@ func TestMain_whenListenerCloseFails_thenWarnsAndZero(t *testing.T) {
 }
 
 func TestProbeReaches(t *testing.T) {
-	for _, tt := range []struct {
-		addr, want string
-		ok         bool
-	}{
-		{"127.0.0.1:8080", "127.0.0.1:8080", true},
-		{":8080", "127.0.0.1:8080", true},
-		{"0.0.0.0:8080", ":8080", true},
-		{"[::]:8080", ":8080", true},
-		{"localhost:8080", ":8080", true},
-		{"127.0.0.1:8080", ":8080", true},
-		{"[::1]:8080", "127.0.0.1:8080", true},
-		{"10.0.0.5:8080", "10.0.0.5:8080", true},
-		{"127.0.0.1:8081", "127.0.0.1:8080", false},
-		{":8081", ":8080", false},
-		{"10.0.0.5:8080", ":8080", false},
-		{"example.com:8080", "127.0.0.1:8080", false},
-		{"8080", ":8080", false},
-		{":8080", "8080", false},
+	// Server host (row) against MainOptions.Addr host (column): does the probe of LocalURL reach it?
+	hosts := []string{"", "0.0.0.0", "::", "localhost", "127.0.0.1", "::1", "10.0.0.5", "fd00::5"}
+	loopV4 := []string{"", "0.0.0.0", "::", "localhost", "127.0.0.1"}
+	reaches := map[string][]string{ // per server host, the want hosts it answers
+		"":          hosts,
+		"::":        hosts,
+		"0.0.0.0":   append(slices.Clone(loopV4), "10.0.0.5"),
+		"localhost": loopV4,
+		"127.0.0.1": loopV4,
+		"::1":       {"localhost", "::1"},
+		"10.0.0.5":  {"10.0.0.5"},
+		"fd00::5":   {"fd00::5"},
+	}
+	for _, h := range hosts {
+		for _, w := range hosts {
+			want := slices.Contains(reaches[h], w)
+			addr, o := net.JoinHostPort(h, "8080"), net.JoinHostPort(w, "8080")
+			if got := probeReaches(addr, o); got != want {
+				t.Errorf("probeReaches(%q, %q) = %v, want %v", addr, o, got, want)
+			}
+		}
+	}
+	for _, tt := range []struct{ addr, want string }{
+		{"127.0.0.1:8081", "127.0.0.1:8080"},
+		{":8081", ":8080"},
+		{"example.com:8080", "127.0.0.1:8080"},
+		{"8080", ":8080"},
+		{":8080", "8080"},
 	} {
-		if got := probeReaches(tt.addr, tt.want); got != tt.ok {
-			t.Errorf("probeReaches(%q, %q) = %v, want %v", tt.addr, tt.want, got, tt.ok)
+		if probeReaches(tt.addr, tt.want) {
+			t.Errorf("probeReaches(%q, %q) = true, want false", tt.addr, tt.want)
 		}
 	}
 }

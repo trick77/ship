@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"sync"
 	"time"
@@ -159,8 +160,9 @@ func Main(ctx context.Context, fs *flag.FlagSet, args []string, o MainOptions) i
 	return 0
 }
 
-// probeReaches reports whether a server listening on addr answers -healthcheck's probe of want (LocalURL): the same
-// port, and want's own host or one that takes loopback connections.
+// probeReaches reports whether a server listening on addr answers -healthcheck's probe of want: same port, and addr's
+// host takes a connection to LocalURL's host. "" and "::" are dual-stack wildcards, "0.0.0.0" takes IPv4 only;
+// a probe of "localhost" dials ::1 and 127.0.0.1; a server on "localhost" binds 127.0.0.1 (Go's Listen prefers IPv4).
 func probeReaches(addr, want string) bool {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -170,9 +172,20 @@ func probeReaches(addr, want string) bool {
 	if err != nil || port != wantPort {
 		return false
 	}
-	switch host {
-	case wantHost, "", "0.0.0.0", "::", "localhost", "127.0.0.1", "::1":
+	probe := dialHost(wantHost)
+	if host == probe {
 		return true
+	}
+	switch host {
+	case "", "::":
+		return true
+	case "0.0.0.0":
+		ip, err := netip.ParseAddr(probe)
+		return probe == "localhost" || err == nil && ip.Is4()
+	case "127.0.0.1", "localhost":
+		return probe == "127.0.0.1" || probe == "localhost"
+	case "::1":
+		return probe == "localhost"
 	}
 	return false
 }

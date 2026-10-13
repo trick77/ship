@@ -93,13 +93,19 @@ func LocalURL(addr, path string) string {
 	if err != nil {
 		host, port = addr, "80"
 	}
-	if host == "" || host == "0.0.0.0" || host == "::" {
-		host = "127.0.0.1"
-	}
+	host = dialHost(host)
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}
 	return "http://" + net.JoinHostPort(host, port) + path
+}
+
+// dialHost is the host LocalURL dials for a listen host: a wildcard becomes 127.0.0.1.
+func dialHost(host string) string {
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		return "127.0.0.1"
+	}
+	return host
 }
 
 // Healthcheck probes url and returns the process exit code: 0 on a 2xx, 1 otherwise. It is the container probe of a
