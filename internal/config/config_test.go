@@ -111,6 +111,9 @@ func TestParse_whenUnknownKeyOrBadValue_thenError(t *testing.T) {
 		"go:\n  modules: [../x]\n",
 		"go:\n  modules: [kit/../../x]\n",
 		"go:\n  modules: [/kit]\n",
+		"go:\n  dir: /backend\n",
+		"go:\n  dir: ../backend\n",
+		"go:\n  dir: backend/../..\n",
 		"go:\n  modules: [.]\n",                        // go.dir itself
 		"go:\n  dir: backend\n  modules: [backend/]\n", // go.dir itself
 		"go:\n  modules: [kit, ./kit]\n",               // twice
@@ -155,11 +158,17 @@ func TestParse_whenModules_thenListed(t *testing.T) {
 	}
 }
 
-// A module reaches release -dir and the tag prefix as listed: cleaned once here, ./kit/auth/ is kit/auth.
-func TestParse_whenModulesUnclean_thenCleaned(t *testing.T) {
-	c, err := Parse([]byte("go:\n  modules: [./kit/auth, kit//x/, a/../lib]\n"))
-	if err != nil || !slices.Equal(c.Go.Modules, []string{"kit/auth", "kit/x", "lib"}) {
-		t.Fatalf("%q %v", c.Go.Modules, err)
+// A Go dir reaches release -dir, the tag prefix and the rendered callers as listed: cleaned once here, ./kit/auth/
+// is kit/auth; backend and the default . stay as written.
+func TestParse_whenGoDirsUnclean_thenCleaned(t *testing.T) {
+	c, err := Parse([]byte("go:\n  dir: ./backend/\n  modules: [./kit/auth, kit//x/, a/../lib]\n"))
+	if err != nil || c.Go.Dir != "backend" || !slices.Equal(c.Go.Modules, []string{"kit/auth", "kit/x", "lib"}) {
+		t.Fatalf("%q %q %v", c.Go.Dir, c.Go.Modules, err)
+	}
+	for in, want := range map[string]string{"": ".", "go:\n  dir: backend\n": "backend", "go:\n  dir: .\n": "."} {
+		if c, err := Parse([]byte(in)); err != nil || c.Go.Dir != want {
+			t.Errorf("%q: %v %v", in, c, err)
+		}
 	}
 }
 

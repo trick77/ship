@@ -203,9 +203,13 @@ func Fix(root string, c *config.Config, o Options) error {
 func (e *env) report() error {
 	known := map[string]bool{}
 	fails := 0
+	stale := e.stale()
 	for _, r := range rules() {
 		known[r.name] = true
 		res := r.fn(e)
+		if r.name != Scaffold {
+			res.findings = slices.DeleteFunc(res.findings, func(f finding) bool { return stale[f.file] })
+		}
 		switch {
 		case res.skip != "":
 			_, _ = fmt.Fprintf(e.o.Out, "skip %s: %s\n", r.name, res.skip)
@@ -279,12 +283,17 @@ func (e *env) exists(p string) bool {
 	return err == nil
 }
 
-// ownDiff reports whether ship.yaml allows owned file p to differ from its template. Byte-equal, the scaffold rule
-// already holds everything a rule reads in p: the rule checks p only here, its one guard then, and never doubles a
-// scaffold finding.
-func (e *env) ownDiff(p string) bool {
-	_, ok := e.c.Allowed(Scaffold, nil, p)
-	return ok
+// stale are the owned files scaffold fails, not allowed: ship init rewrites them, so another rule's finding there
+// only doubles scaffold's. An allowed diff keeps every rule's findings, its one guard; a Manual file too (ship
+// writes none of it).
+func (e *env) stale() map[string]bool {
+	s := map[string]bool{}
+	for _, f := range e.files {
+		if _, ok := e.c.Allowed(Scaffold, nil, f.Path); f.Manual == "" && f.Differs() && !ok {
+			s[f.Path] = true
+		}
+	}
+	return s
 }
 
 func (e *env) goPath(p string) string { return path.Join(filepath.ToSlash(e.c.Go.Dir), p) }

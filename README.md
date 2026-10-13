@@ -44,7 +44,7 @@ ui:                   # omit for no UI
   dir: ui
   floor: 75
   build: npm ci && npm run build      # tsc -b && vite build: the typecheck
-  lint: npm run lint                  # eslint / prettier --check; conform allows nothing else
+  lint: npm run lint                  # eslint / prettier --check, the only value conform passes; "" = none, needs a ui allow
   test: npm run test -- --coverage --coverage.reporter=lcov --coverage.reporter=text-summary  # must write lcov
   lcov: coverage/ui/lcov.info         # repo-relative, vite reportsDirectory "../coverage/ui"; SF: paths relative to ui.dir
   embed: backend/web/dist             # go:embed dir, emptied but for .gitkeep before ui.build; omit for none
@@ -182,7 +182,7 @@ builder, `ship init` moves CI after it.
 
 | rule | what | allowable |
 |---|---|---|
-| `scaffold` | every owned file equals ship's template. The rules below check what they read in an owned file only where `scaffold` allows that file's diff (byte-equal, the template holds it): never a second finding, still the guard of an allowed diff | per `path` |
+| `scaffold` | every owned file equals ship's template. The rules below read the owned files too; on one `scaffold` fails, not allowed, their findings are dropped (`ship init` rewrites it); an allowed diff keeps them | per `path` |
 | `workflows` | ci/release/cleanup callers use `trick77/ship/.github/workflows/<x>.yaml@master`; release: `packages: write` and `id-token: write` (cosign) ⇔ images, bump options include `auto`; no other image cleanup action, in any workflow | yes |
 | `visibility` | GitHub's visibility (Actions event, else the API unauthenticated, cached a day in the git dir) matches `visibility:`; a failed lookup: `visibility:` stands (a note), unset = FAIL; public: CI on every PR (no `if:`); private: Dependabot-only `if:`, every npm/docker/docker-compose update grouped, ≤ 5 open PRs, cleanup caller with images | yes |
 | `dependabot` | `commit-message: { prefix: deps }` everywhere; gomod (go.dir, go.modules), github-actions, npm (UI), docker (Containerfile), docker-compose `/` (a root `compose*.yaml` naming an image by a version tag) present | yes |

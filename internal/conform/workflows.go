@@ -59,8 +59,7 @@ func (w *workflow) caller(name string) (job, bool) {
 	return job{}, false
 }
 
-// workflows: ship's callers @master, release's grants and auto, in an owned caller allowed to differ from its
-// template (byte-equal, scaffold holds all of it); no image cleanup but ship's caller, in any workflow.
+// workflows: ship's callers @master, release's grants and auto; no image cleanup but ship's caller, in any workflow.
 func (e *env) workflows() result {
 	var fs []finding
 	callers := []struct{ file, name string }{{scaffold.CI, "check.yaml"}, {scaffold.Release, "release.yaml"}}
@@ -68,9 +67,6 @@ func (e *env) workflows() result {
 		callers = append(callers, struct{ file, name string }{scaffold.Cleanup, "cleanup-images.yaml"})
 	}
 	for _, c := range callers {
-		if !e.ownDiff(c.file) {
-			continue
-		}
 		w, err := e.loadWorkflow(c.file)
 		switch {
 		case err != nil:
@@ -169,8 +165,7 @@ func (e *env) workflowFiles() []string {
 
 // visibilityRule: ship.yaml's visibility agrees with GitHub's, and CI and dependabot fit it. Public: every PR runs
 // CI (forks and Dependabot have no hook). Private: Dependabot PRs only, every npm and docker bump grouped and few
-// PRs open (each runs billed CI), and old images cleaned up (storage is billed). Each file only where its scaffold
-// diff is allowed: byte-equal, it was rendered for this visibility.
+// PRs open (each runs billed CI), and old images cleaned up (storage is billed).
 func (e *env) visibilityRule() result {
 	if e.visErr != nil {
 		return result{findings: []finding{{what: e.visErr.Error(), file: "GitHub"}}}
@@ -180,11 +175,7 @@ func (e *env) visibilityRule() result {
 		fs = append(fs, finding{what: fmt.Sprintf("visibility: %s, GitHub says %s", e.c.Visibility, e.vis),
 			file: "ship.yaml"})
 	}
-	var w *workflow
-	var err error
-	if e.ownDiff(scaffold.CI) {
-		w, err = e.loadWorkflow(scaffold.CI)
-	}
+	w, err := e.loadWorkflow(scaffold.CI)
 	if err != nil {
 		fs = append(fs, finding{what: err.Error(), file: scaffold.CI})
 	} else if w != nil {
@@ -201,13 +192,9 @@ func (e *env) visibilityRule() result {
 	if e.vis != "private" {
 		return result{findings: fs, note: e.visNote}
 	}
-	var d *dependabotFile
-	var derr error
-	if e.ownDiff(scaffold.Dependabot) {
-		d, derr = e.loadDependabot()
-	}
-	if derr != nil {
-		fs = append(fs, finding{what: derr.Error(), file: scaffold.Dependabot})
+	d, err := e.loadDependabot()
+	if err != nil {
+		fs = append(fs, finding{what: err.Error(), file: scaffold.Dependabot})
 	} else if d != nil {
 		for _, u := range d.Updates {
 			if u.Limit != nil && *u.Limit > 5 {
@@ -220,7 +207,7 @@ func (e *env) visibilityRule() result {
 			}
 		}
 	}
-	if len(e.c.Images) > 0 && e.ownDiff(scaffold.Cleanup) && !e.exists(scaffold.Cleanup) {
+	if len(e.c.Images) > 0 && !e.exists(scaffold.Cleanup) {
 		fs = append(fs, finding{what: "private repo with images: the cleanup-images caller is missing (ship init)",
 			file: scaffold.Cleanup})
 	}
@@ -273,14 +260,10 @@ func (e *env) loadDependabot() (*dependabotFile, error) {
 	return &d, nil
 }
 
-// dependabot: deps-prefixed bumps (`deps: bump …`, a Go-style subject) for every ecosystem the repo has, where
-// dependabot.yaml may differ from its template (ship's own); byte-equal, scaffold holds both.
+// dependabot: deps-prefixed bumps (`deps: bump …`, a Go-style subject) for every ecosystem the repo has.
 func (e *env) dependabot() result {
 	if e.exists(".github/dependabot.yml") {
 		return result{findings: []finding{{what: "rename to dependabot.yaml", file: ".github/dependabot.yml"}}}
-	}
-	if !e.ownDiff(scaffold.Dependabot) {
-		return result{}
 	}
 	d, err := e.loadDependabot()
 	switch {

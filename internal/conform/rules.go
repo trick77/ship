@@ -53,14 +53,10 @@ func (e *env) scaffold() result {
 	return result{findings: fs}
 }
 
-// dockerignore: the host's node_modules (darwin binaries) and a stale dist never reach the image. Where
-// .dockerignore may differ from its template; byte-equal, scaffold holds its ship block.
+// dockerignore: the host's node_modules (darwin binaries) and a stale dist never reach the image.
 func (e *env) dockerignore() result {
 	if len(e.c.Images) == 0 {
 		return result{skip: "no images"}
-	}
-	if !e.ownDiff(scaffold.Ignore) {
-		return result{}
 	}
 	b, err := e.read(scaffold.Ignore)
 	switch {
@@ -154,7 +150,7 @@ func (e *env) ui() result {
 				"does not support it", v, typescriptCap), file: pj})
 		}
 	}
-	if es := e.uiPath(scaffold.ESLint); e.ownDiff(es) && !e.exists(es) {
+	if es := e.uiPath(scaffold.ESLint); !e.exists(es) {
 		fs = append(fs, finding{what: "missing (ship init)", file: es})
 	}
 	fs = append(fs, e.tsconfigRef()...)

@@ -83,7 +83,7 @@ type UI struct {
 	// `npm run build` is `tsc -b && vite build`: the typecheck.
 	Build string `yaml:"build"`
 	// Lint is the UI's lint/format check (eslint, prettier --check), run after the Go lint; default npm run lint,
-	// the only value conform passes ("" runs none, an allowed ui exception).
+	// the only value conform passes; "" runs none, needs a ui allow.
 	Lint string `yaml:"lint"`
 	// Test runs the UI tests with coverage and must write Lcov.
 	Test string `yaml:"test"`
@@ -168,6 +168,12 @@ func Parse(b []byte) (*Config, error) {
 
 // defaults fills what depends on other values or lives in lists.
 func (c *Config) defaults() {
+	// Go dirs are kept clean (kit/auth, never ./kit/auth/): a release tag prefix, a dependabot directory and the
+	// rendered callers are spelled from them. validate checks the clean form.
+	c.Go.Dir = path.Clean(filepath.ToSlash(c.Go.Dir))
+	for i, m := range c.Go.Modules {
+		c.Go.Modules[i] = path.Clean(filepath.ToSlash(m))
+	}
 	if c.UI != nil && c.UI.Lcov == "" {
 		// conform's vite reportsDirectory "../coverage/ui", seen from the repo root.
 		c.UI.Lcov = filepath.Join(filepath.Dir(c.UI.Dir), "coverage", "ui", "lcov.info")
@@ -208,16 +214,15 @@ func (c *Config) validate() error {
 		return fmt.Errorf("%s: postgres: %q, want a version like \"17\", an image like "+
 			"\"timescale/timescaledb:2.29.1-pg17\" or a compose service like \"compose:db\"", File, c.Postgres)
 	}
-	// Modules are kept clean (kit/auth, never ./kit/auth/): a release tag prefix and a dependabot directory are
-	// spelled from them.
-	seen := map[string]bool{path.Clean(filepath.ToSlash(c.Go.Dir)): true}
-	for i, m := range c.Go.Modules {
-		d := path.Clean(filepath.ToSlash(m))
-		if !inRepo(m) || seen[d] {
+	if c.Go.Dir != "." && !inRepo(c.Go.Dir) {
+		return fmt.Errorf("%s: go.dir: %q is not a directory inside the repo", File, c.Go.Dir)
+	}
+	seen := map[string]bool{c.Go.Dir: true}
+	for _, m := range c.Go.Modules {
+		if !inRepo(m) || seen[m] {
 			return fmt.Errorf("%s: go.modules: %q, want a dir inside the repo, not go.dir, listed once", File, m)
 		}
-		seen[d] = true
-		c.Go.Modules[i] = d
+		seen[m] = true
 	}
 	for _, s := range c.Shell {
 		if !inRepo(s) {
