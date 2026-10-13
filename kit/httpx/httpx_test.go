@@ -637,13 +637,27 @@ func TestHealthcheck(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	for path, want := range map[string]int{"/ok": 0, "/redirect": 1, "/down": 1} {
-		if got := Healthcheck(srv.URL + path); got != want {
-			t.Errorf("Healthcheck(%s) = %d, want %d", path, got, want)
+	if got := Healthcheck(srv.URL + "/ok"); got != 0 {
+		t.Errorf("Healthcheck(/ok) = %d, want 0", got)
+	}
+	for path, want := range map[string]struct {
+		code int
+		out  string // printed reason, empty: nothing printed
+	}{"/ok": {0, ""}, "/redirect": {1, "302 Found"}, "/down": {1, "503 Service Unavailable"}} {
+		var out bytes.Buffer
+		if got := healthcheck(srv.URL+path, &out); got != want.code {
+			t.Errorf("Healthcheck(%s) = %d, want %d", path, got, want.code)
+		}
+		if (want.out == "") != (out.Len() == 0) || !strings.Contains(out.String(), want.out) {
+			t.Errorf("Healthcheck(%s) printed %q, want %q", path, out.String(), want.out)
 		}
 	}
-	if got := Healthcheck("http://127.0.0.1:1/"); got != 1 {
+	var out bytes.Buffer
+	if got := healthcheck("http://127.0.0.1:1/", &out); got != 1 {
 		t.Errorf("unreachable = %d", got)
+	}
+	if !strings.Contains(out.String(), "connection refused") {
+		t.Errorf("unreachable printed %q, want the dial error", out.String())
 	}
 }
 
@@ -668,7 +682,7 @@ func TestServeShutsDownCleanly(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- Serve(ctx, srv, time.Second) }()
 	deadline := time.Now().Add(5 * time.Second)
-	for Healthcheck("http://"+addr+"/") != 0 {
+	for healthcheck("http://"+addr+"/", io.Discard) != 0 {
 		if time.Now().After(deadline) {
 			t.Fatal("server never came up")
 		}

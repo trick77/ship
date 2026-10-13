@@ -3,8 +3,11 @@ package httpx
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -65,18 +68,25 @@ func LocalURL(addr, path string) string {
 
 // Healthcheck probes url and returns the process exit code: 0 on a 2xx, 1 otherwise. It is the container probe of a
 // distroless image (no shell, no curl): the binary re-executes itself with -healthcheck. Redirects are not followed;
-// a probe endpoint that redirects is misrouted.
+// a probe endpoint that redirects is misrouted. A failure says why on stderr, where the runtime's health log
+// (docker/podman inspect) keeps it.
 func Healthcheck(url string) int {
+	return healthcheck(url, os.Stderr)
+}
+
+func healthcheck(url string, w io.Writer) int {
 	c := http.Client{
 		Timeout:       3 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	resp, err := c.Get(url) //nolint:gosec // the process's own listener, from its own config
 	if err != nil {
+		_, _ = fmt.Fprintf(w, "healthcheck: %v\n", err)
 		return 1
 	}
 	_ = resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		_, _ = fmt.Fprintf(w, "healthcheck: %s: %s\n", url, resp.Status)
 		return 1
 	}
 	return 0
