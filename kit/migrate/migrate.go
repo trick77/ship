@@ -12,6 +12,10 @@
 // Concurrent replicas are serialised by the dialect's lock (a Postgres session advisory lock), held on one dedicated
 // connection for the whole run, because a session lock belongs to one session and a pool hands out a different
 // connection per call.
+//
+// A pgx program needs no second runner: stdlib.OpenDBFromPool(pool) (github.com/jackc/pgx/v5/stdlib) is the *sql.DB
+// Up and Pending take, borrowing the pool's connections, so closing it leaves the pool open. netra and noergler run
+// their migrations that way with Postgres(theirLockKey).
 package migrate
 
 import (
