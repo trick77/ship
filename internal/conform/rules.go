@@ -437,7 +437,8 @@ func (e *env) kit() result {
 
 // The hand-rolled code kit replaces. Built from parts: ship's own source must not match its own rule.
 var (
-	healthRoute = regexp.MustCompile(`"(?:[A-Z]+ )?/(?:api/(?:v1/)?)?` + `health"`)
+	// The liveness and readiness paths kit's httpx.Health serves count too, not only /health.
+	healthRoute = regexp.MustCompile(`"(?:[A-Z]+ )?/(?:api/(?:v1/)?)?` + `(?:healthz?|readyz)"`)
 	signalWait  = regexp.MustCompile(`signal\.` + `Notify(?:Context)?\(`)
 	oidcImport  = regexp.MustCompile(`"github\.com/coreos/` + `go-oidc[/"]`)
 )
