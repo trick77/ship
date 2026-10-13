@@ -203,6 +203,16 @@ func TestFiles_whenDependabotIgnore_thenUnderItsEcosystem(t *testing.T) {
 	}
 }
 
+func TestFiles_whenIgnoreForAbsentEcosystem_thenError(t *testing.T) {
+	// No ui:, no Containerfile, no compose pin: an ignore there would be written nowhere while init stays green.
+	for _, eco := range []string{"npm", "docker", "docker-compose"} {
+		c := parse(t, "dependabot:\n  ignore:\n    - { ecosystem: "+eco+", dependency: x, why: y }\n")
+		if _, err := Files(t.TempDir(), c, Facts{Visibility: "public"}); err == nil {
+			t.Errorf("%s ignore without an entry accepted", eco)
+		}
+	}
+}
+
 func TestFiles_whenComposePins_thenComposeEntry(t *testing.T) {
 	for _, compose := range []bool{false, true} {
 		files, err := Files(t.TempDir(), parse(t, ""), Facts{Visibility: "private", Compose: compose})

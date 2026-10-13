@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"unicode"
 )
 
 // Dependabot is what ship's dependabot.yaml cannot know of the repo: versions it must never be offered.
@@ -24,30 +25,21 @@ type Ignore struct {
 // Ecosystems are the package ecosystems ship's dependabot.yaml writes.
 var Ecosystems = []string{"gomod", "npm", "docker", "docker-compose", "github-actions"}
 
-// IgnoreFor returns the ignore entries of one ecosystem, in ship.yaml's order.
-func (c *Config) IgnoreFor(ecosystem string) []Ignore {
-	var ig []Ignore
-	for _, i := range c.Dependabot.Ignore {
-		if i.Ecosystem == ecosystem {
-			ig = append(ig, i)
-		}
-	}
-	return ig
-}
-
 func (c *Config) validateDependabot() error {
 	for i, ig := range c.Dependabot.Ignore {
 		if !slices.Contains(Ecosystems, ig.Ecosystem) {
 			return fmt.Errorf("%s: dependabot.ignore[%d]: ecosystem %q, want one of %s", File, i, ig.Ecosystem,
 				strings.Join(Ecosystems, ", "))
 		}
-		if ig.Dependency == "" || ig.Why == "" {
+		if strings.TrimSpace(ig.Dependency) == "" || strings.TrimSpace(ig.Why) == "" {
 			return fmt.Errorf("%s: dependabot.ignore[%d] needs dependency and why", File, i)
 		}
-		// Rendered as one comment line and quoted strings: a newline would break out of either.
-		if strings.ContainsAny(ig.Why+ig.Dependency+strings.Join(ig.Versions, ""), "\n\r") ||
-			slices.Contains(ig.Versions, "") {
-			return fmt.Errorf("%s: dependabot.ignore[%d]: one line each, no empty version", File, i)
+		// Rendered as one comment line and quoted strings: a line break (YAML counts U+2028 and NEL too) would break
+		// out of either, a control character makes the file unparseable.
+		for _, s := range append([]string{ig.Dependency, ig.Why}, ig.Versions...) {
+			if strings.TrimSpace(s) == "" || strings.IndexFunc(s, func(r rune) bool { return !unicode.IsPrint(r) && r != ' ' }) >= 0 {
+				return fmt.Errorf("%s: dependabot.ignore[%d]: printable text on one line, no empty version", File, i)
+			}
 		}
 	}
 	return nil

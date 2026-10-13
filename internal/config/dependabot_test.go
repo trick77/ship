@@ -27,6 +27,9 @@ func TestParse_whenDependabotIgnoreIncomplete_thenError(t *testing.T) {
 		"dependabot:\n  ignore:\n    - { dependency: x, why: y }\n",
 		"dependabot:\n  ignore:\n    - { ecosystem: gomod, dependency: x, why: \"two\\nlines\" }\n",
 		"dependabot:\n  ignore:\n    - { ecosystem: gomod, dependency: x, versions: [\"\"], why: y }\n",
+		"dependabot:\n  ignore:\n    - { ecosystem: gomod, dependency: \" \", why: \" \" }\n",
+		"dependabot:\n  ignore:\n    - { ecosystem: gomod, dependency: x, why: \"a\\u2028b\" }\n",
+		"dependabot:\n  ignore:\n    - { ecosystem: gomod, dependency: x, why: \"a\\x1bb\" }\n",
 	} {
 		if _, err := Parse([]byte(s)); err == nil {
 			t.Errorf("%q accepted", s)

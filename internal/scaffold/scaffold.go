@@ -99,8 +99,15 @@ func Files(root string, c *config.Config, f Facts) ([]File, error) {
 		GoDirAbs: abs(c.Go.Dir), DependabotOnly: DependabotOnly, NodeVersion: f.NodeVersion, DockerDirs: f.DockerDirs,
 		Compose: f.Compose, Ignore: map[string][]config.Ignore{},
 	}
-	for _, e := range config.Ecosystems {
-		d.Ignore[e] = c.IgnoreFor(e)
+	// An ignore under an ecosystem dependabot.yaml has no entry for would be written nowhere, init and conform green.
+	rendered := map[string]bool{"gomod": true, "github-actions": true, "npm": d.UI, "docker": len(f.DockerDirs) > 0,
+		"docker-compose": f.Compose}
+	for _, ig := range c.Dependabot.Ignore {
+		if !rendered[ig.Ecosystem] {
+			return nil, fmt.Errorf("%s: dependabot.ignore: %s %s, but dependabot.yaml has no %s entry", config.File,
+				ig.Ecosystem, ig.Dependency, ig.Ecosystem)
+		}
+		d.Ignore[ig.Ecosystem] = append(d.Ignore[ig.Ecosystem], ig)
 	}
 	for _, m := range c.Go.Modules {
 		d.GoModules = append(d.GoModules, abs(m))
