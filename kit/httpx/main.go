@@ -18,6 +18,11 @@ import (
 // positive.
 const DefaultDrain = 10 * time.Second
 
+// handlerGrace is the least Main waits for handlers once the server has stopped, also when the drain used up the
+// whole budget: a handler whose connection the overrun's Close cut, or whose request context it ended, gets this
+// moment to return before the cleanup closes what it uses.
+const handlerGrace = time.Second
+
 // MainOptions shapes Main.
 type MainOptions struct {
 	// Addr is the listen address -healthcheck probes (its /healthz), required. Read it from the environment and
@@ -29,8 +34,11 @@ type MainOptions struct {
 	// see it. cleanup, when not nil, runs once the server has stopped (close the store, stop a scheduler), also when
 	// Build fails.
 	Build func(ctx context.Context) (srv *http.Server, cleanup func(), err error)
-	// Drain bounds the shutdown drain, DefaultDrain when zero or negative. It also bounds the wait for handlers still
-	// running once the server has stopped, so a stop takes up to twice Drain before the cleanup.
+	// Drain is the stop budget, DefaultDrain when zero or negative: one deadline, counted from the stop signal, for
+	// the shutdown drain and then the wait for handlers still running, which gets at least a second (handlerGrace)
+	// even when the drain used it all. Set it below the orchestrator's stop grace (Docker's and Kubernetes' default
+	// is 10s) by that second plus the cleanup's own time: past the grace the process is SIGKILLed and the cleanup
+	// never runs.
 	Drain time.Duration
 	// Log gets the failure and the overrun drain; nil is slog.Default.
 	Log *slog.Logger
@@ -53,8 +61,9 @@ type MainOptions struct {
 // with a warning: the stop was asked for and happened, it only ran long. A non-zero exit would read as a crash to
 // the restart policy.
 //
-// Main counts the calls into the server's handler. Once the server has stopped it waits up to o.Drain more for
-// every call to return, then runs the cleanup. Shutdown and Close wait for neither a hijacked connection (a
+// Main counts the calls into the server's handler. Once the server has stopped it waits for every call to return,
+// for what is left of o.Drain since the stop but at least a second, then runs the cleanup: drain and wait share the
+// one budget, so a stop takes about o.Drain before the cleanup (a second more on an overrun), never twice it. Shutdown and Close wait for neither a hijacked connection (a
 // WebSocket) nor a handler's return; the count covers both, as long as the work runs inside the handler call. A
 // call still running after the wait gets a warning with the count, and the cleanup runs under it anyway: an exit
 // must not hang on a stuck handler. A goroutine a handler started and left running is not counted; it must stop on
@@ -125,9 +134,9 @@ func Main(ctx context.Context, fs *flag.FlagSet, args []string, o MainOptions) i
 	}
 	var calls inflight
 	srv.Handler = calls.wrap(srv.Handler)
-	err = Serve(ctx, srv, o.Drain)
+	stoppedAt, err := serve(ctx, srv, o.Drain)
 	// Before the deferred cleanup: the handlers still running would use what it closes.
-	if n := calls.wait(o.Drain); n > 0 {
+	if n := calls.wait(max(time.Until(stoppedAt.Add(o.Drain)), handlerGrace)); n > 0 {
 		o.Log.WarnContext(ctx, "Handlers still running after the server stopped, cleaning up under them", "handlers", n, "drain", o.Drain.String())
 	}
 	switch {

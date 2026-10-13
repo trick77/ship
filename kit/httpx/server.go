@@ -30,29 +30,38 @@ func NewServer(addr string, h http.Handler) *http.Server {
 // shutdownTimeout. A clean shutdown returns nil; a listener that cannot bind returns its error at once. A drain
 // that outlasts shutdownTimeout closes the server, cutting off the connections still open, and returns
 // context.DeadlineExceeded: whatever the caller closes next is no longer read through them. Neither Shutdown nor
-// Close waits for a handler to return or for a hijacked connection (a WebSocket); Main also waits for those.
+// Close waits for a handler to return or for a hijacked connection (a WebSocket); Main also waits for those, within
+// the same budget.
 func Serve(ctx context.Context, srv *http.Server, shutdownTimeout time.Duration) error {
+	_, err := serve(ctx, srv, shutdownTimeout)
+	return err
+}
+
+// serve is Serve and also returns when the stop came in (the return time when the server failed on its own): Main
+// counts its whole stop budget from there.
+func serve(ctx context.Context, srv *http.Server, shutdownTimeout time.Duration) (time.Time, error) {
 	ctx, stop := run.Context(ctx)
 	defer stop()
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
 	select {
 	case err := <-errc:
-		return err
+		return time.Now(), err
 	case <-ctx.Done():
 	}
+	stoppedAt := time.Now()
 	// A fresh context: the one that just ended would cancel the drain before it starts.
-	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
+	sctx, cancel := context.WithDeadline(context.WithoutCancel(ctx), stoppedAt.Add(shutdownTimeout))
 	defer cancel()
 	if err := srv.Shutdown(sctx); err != nil {
 		// Overrun: the handlers still running get their connections closed and their request contexts ended.
 		_ = srv.Close()
-		return err
+		return stoppedAt, err
 	}
 	if err := <-errc; err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return err
+		return stoppedAt, err
 	}
-	return nil
+	return stoppedAt, nil
 }
 
 // LocalURL turns a listen address into a URL on this host: ":8080" and "0.0.0.0:8080" become

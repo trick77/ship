@@ -451,3 +451,44 @@ func TestMain_whenHandlerStuck_thenWarnsAndCleansUp(t *testing.T) {
 		t.Error("cleanup did not run")
 	}
 }
+
+func TestMain_whenDrainOverrunsOnAStuckHandler_thenStopTakesOneBudget(t *testing.T) {
+	const drain = 2 * time.Second
+	addr := freeAddr(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	defer close(release)
+	build := func(context.Context) (*http.Server, func(), error) {
+		srv := NewServer(addr, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/stuck" {
+				return
+			}
+			close(entered)
+			<-release // deaf to its request's context: drain and wait both run out
+		}))
+		return srv, nil, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan int, 1)
+	go func() {
+		done <- Main(ctx, mainFlags(), nil, MainOptions{Addr: addr, Build: build, Drain: drain, Log: quietLog()})
+	}()
+	waitUp(t, "http://"+addr+"/")
+	go func() {
+		resp, err := http.Get("http://" + addr + "/stuck") //nolint:noctx // ends with the server
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+	<-entered
+	start := time.Now()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * drain):
+		t.Fatal("Main still stopping after twice Drain")
+	}
+	// The drain takes the whole budget; the handler wait gets only handlerGrace on top, not another Drain.
+	if took := time.Since(start); took < drain || took > drain+handlerGrace+500*time.Millisecond {
+		t.Errorf("stop took %v, want about Drain+handlerGrace (%v)", took, drain+handlerGrace)
+	}
+}

@@ -85,7 +85,7 @@ type Options struct {
 	Dialect Dialect
 	// Log gets one line per applied file; nil is slog.Default.
 	Log *slog.Logger
-	// NoTxMarker overrides the package's marker, so a repo with its own spelling ("-- netra:no-transaction") need
+	// NoTxMarker overrides the package's marker, so a repo with its own spelling ("-- app:no-transaction") need
 	// not rewrite applied files.
 	NoTxMarker string
 	// LockTimeout bounds the wait for another migrator's lock: pg_advisory_lock blocks forever, and a wedged holder
@@ -391,8 +391,9 @@ func apply(ctx context.Context, conn *sql.Conn, m Migration, insert, marker stri
 	return tx.Commit()
 }
 
-// upSection is what to execute and whether outside a transaction. A goose-annotated file (ipverse-core's) runs its
-// "-- +goose Up" section only, never the Down below it; "-- +goose NO TRANSACTION" is honoured like the marker.
+// upSection is what to execute and whether outside a transaction. A goose-annotated file (a repo coming from goose)
+// runs its "-- +goose Up" section only, never the Down below it; "-- +goose NO TRANSACTION" is honoured like the
+// marker.
 func upSection(body, marker string) (string, bool) {
 	noTx := strings.HasPrefix(strings.TrimSpace(body), marker)
 	if i := strings.Index(body, "-- +goose Up"); i >= 0 {
