@@ -15,8 +15,8 @@ import (
 )
 
 // DefaultDrain is how long Main lets in-flight requests finish after the stop signal when MainOptions.Drain is not
-// positive.
-const DefaultDrain = 10 * time.Second
+// positive. 8s: with handlerGrace and the cleanup it stays inside Docker's and Kubernetes' default 10s stop grace.
+const DefaultDrain = 8 * time.Second
 
 // handlerGrace is the least Main waits for handlers once the server has stopped, also when the drain used up the
 // whole budget: a handler whose connection the overrun's Close cut, or whose request context it ended, gets this
