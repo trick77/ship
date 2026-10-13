@@ -434,7 +434,9 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 			r.write("backend/internal/api/api.go", "package api\n\nconst p = \"GET /api/v1/"+"health\"\n")
 			// The probes kit's httpx.Health serves, written by hand: rongo's GET /healthz went unflagged.
 			r.write("backend/internal/api/live.go", "package api\n\nconst p = \"GET /"+"healthz\"\n")
-			r.write("backend/internal/api/ready.go", "package api\n\nconst p = \"/api/"+"readyz\"\n")
+			r.write("backend/internal/api/ready.go", "package api\n\nfunc f() { mux.HandleFunc(\"/api/"+"readyz\", h) }\n")
+			// kit's own probe call names the path as a URL, not a route: never a finding.
+			r.write("backend/cmd/app/probe.go", "package main\n\nfunc g() { httpx.Healthcheck(httpx.LocalURL(addr, \"/"+"healthz\")) }\n")
 			r.write("backend/cmd/app/main.go", "package main\n\nfunc init() { signal."+"NotifyContext(nil) }\n")
 			r.write("backend/cmd/app/main_test.go", "package main\n\nconst p = \"/"+"health\"\n")
 			r.write("backend/testdata/x.go", "package x\n\nconst p = \"/"+"health\"\n")

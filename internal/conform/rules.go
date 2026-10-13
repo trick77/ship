@@ -437,10 +437,13 @@ func (e *env) kit() result {
 
 // The hand-rolled code kit replaces. Built from parts: ship's own source must not match its own rule.
 var (
-	// The liveness and readiness paths kit's httpx.Health serves count too, not only /health.
-	healthRoute = regexp.MustCompile(`"(?:[A-Z]+ )?/(?:api/(?:v1/)?)?` + `(?:healthz?|readyz)"`)
-	signalWait  = regexp.MustCompile(`signal\.` + `Notify(?:Context)?\(`)
-	oidcImport  = regexp.MustCompile(`"github\.com/coreos/` + `go-oidc[/"]`)
+	// The liveness and readiness paths kit's httpx.Health serves count too, but only as a route (a method pattern or
+	// a Handle/HandleFunc argument): kit's own probe, httpx.Healthcheck(httpx.LocalURL(addr, "/healthz")), names the
+	// path as a URL.
+	healthRoute = regexp.MustCompile(`"(?:[A-Z]+ )?/(?:api/(?:v1/)?)?` + `health"|` +
+		`(?:"[A-Z]+ |Handle(?:Func)?\(\s*")/(?:api/(?:v1/)?)?` + `(?:healthz|readyz)"`)
+	signalWait = regexp.MustCompile(`signal\.` + `Notify(?:Context)?\(`)
+	oidcImport = regexp.MustCompile(`"github\.com/coreos/` + `go-oidc[/"]`)
 )
 
 // handrolled: version stamping, health routes, shutdown signals and OIDC sign-in come from kit, never a copy.
