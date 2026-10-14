@@ -1,6 +1,7 @@
-// Package scaffold renders the files ship owns in a consumer repo (workflow callers, dependabot, .dockerignore,
-// the UI's ESLint config, tsconfig.node.json and .npmrc, the Makefile's ship block) from ship.yaml and the repo's facts. Owned means byte-equal to the
-// rendered template: a copied file that drifts is caught on the next push, never in an audit.
+// Package scaffold renders the files ship owns in a consumer repo (workflow callers, dependabot, the UI's ESLint
+// config, tsconfig.node.json and .npmrc, the ship blocks in Makefile, .dockerignore, .gitignore and AGENTS.md) from
+// ship.yaml and the repo's facts. Owned means byte-equal to the rendered template: a copied file that drifts is
+// caught on the next push, never in an audit.
 package scaffold
 
 import (
@@ -27,10 +28,21 @@ import (
 // gated by the hook).
 const DependabotOnly = "github.event_name != 'pull_request' || github.event.pull_request.user.login == 'dependabot[bot]'"
 
-// Begin and End mark the block ship owns inside a file the repo otherwise keeps (Makefile, .dockerignore).
+// Begin and End mark the block ship owns inside a file the repo otherwise keeps (Makefile, .dockerignore,
+// .gitignore); AGENTS.md's are HTML comments (a # line is a Markdown heading).
 const (
-	Begin = "# ship:begin"
-	End   = "# ship:end"
+	Begin   = "# ship:begin"
+	End     = "# ship:end"
+	MDBegin = "<!-- ship:begin -->"
+	MDEnd   = "<!-- ship:end -->"
+)
+
+// markers are a block's first and last line prefixes.
+type markers struct{ begin, end string }
+
+var (
+	hashMarks = markers{Begin, End}
+	mdMarks   = markers{MDBegin, MDEnd}
 )
 
 // Owned file paths, repo-relative.
@@ -41,6 +53,8 @@ const (
 	Dependabot = ".github/dependabot.yaml"
 	Ignore     = ".dockerignore"
 	Makefile   = "Makefile"
+	GitIgnore  = ".gitignore"
+	Agents     = "AGENTS.md"
 	// In the UI's directory.
 	ESLint       = "eslint.config.js"
 	TSConfigNode = "tsconfig.node.json"
@@ -81,8 +95,13 @@ type File struct {
 func (f File) Differs() bool { return f.Manual != "" || !bytes.Equal(f.Have, f.Want) }
 
 type data struct {
-	Private, UI, Images, GoDirSet, UIDirSet    bool
-	Compose                                    bool
+	Private, UI, Images, GoDirSet, UIDirSet bool
+	Compose                                 bool
+	// MakefileOwned: the Makefile carries ship's block, so its gate is make check (else ship check).
+	MakefileOwned bool
+	// UICoverage is the UI test runner's report dir, anchored (/coverage/ui/): the only coverage ship's gate writes
+	// into the tree (Go's lives in the git dir).
+	UICoverage                                 string
 	Branches, GoDir, GoDirAbs, UIDir, UIDirAbs string
 	DependabotOnly, NodeVersion, Packages      string
 	TypescriptCap                              string
@@ -118,9 +137,13 @@ func Files(root string, c *config.Config, f Facts) ([]File, error) {
 	}
 	if c.UI != nil {
 		d.UIDir, d.UIDirAbs, d.UIDirSet = c.UI.Dir, abs(c.UI.Dir), c.UI.Dir != "ui"
+		// A report at the root (ui.lcov: lcov.info) has no dir of its own to ignore.
+		if dir := path.Dir(filepath.ToSlash(c.UI.Lcov)); dir != "." {
+			d.UICoverage = abs(dir) + "/"
+		}
 	}
 	var files []File
-	add := func(p, tmpl, manual string, block func(have []byte, block string) ([]byte, string)) error {
+	add := func(p, tmpl, manual string, block blockFunc) error {
 		fl := File{Path: p}
 		b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(p))) //nolint:gosec // the repo's own files
 		switch {
@@ -170,7 +193,7 @@ func Files(root string, c *config.Config, f Facts) ([]File, error) {
 		return nil, err
 	}
 	if d.Images {
-		if err := add(Ignore, "dockerignore", "", prepend); err != nil {
+		if err := add(Ignore, "dockerignore", "", prepend(hashMarks)); err != nil {
 			return nil, err
 		}
 	}
@@ -184,9 +207,16 @@ func Files(root string, c *config.Config, f Facts) ([]File, error) {
 	}
 	// A library without a Makefile needs none; an app (images or a UI) gets the gate's targets.
 	if _, err := os.Stat(filepath.Join(root, Makefile)); err == nil || d.Images || d.UI {
-		if err := add(Makefile, "Makefile", "", appendBlock); err != nil {
+		d.MakefileOwned = true
+		if err := add(Makefile, "Makefile", "", appendBlock(hashMarks, makeTargets)); err != nil {
 			return nil, err
 		}
+	}
+	if err := add(GitIgnore, "gitignore", "", appendBlock(hashMarks, nil)); err != nil {
+		return nil, err
+	}
+	if err := add(Agents, "agents.md", "", appendBlock(mdMarks, nil)); err != nil {
+		return nil, err
 	}
 	return files, nil
 }
@@ -231,13 +261,13 @@ func render(name string, d data) (string, error) {
 }
 
 // blockRange finds the owned block: the begin marker's line through the end marker's line, end included.
-func blockRange(have []byte) (start, end int, ok bool) {
+func blockRange(have []byte, m markers) (start, end int, ok bool) {
 	s := string(have)
-	i := lineStart(s, Begin)
+	i := lineStart(s, m.begin)
 	if i < 0 {
 		return 0, 0, false
 	}
-	j := lineStart(s[i:], End)
+	j := lineStart(s[i:], m.end)
 	if j < 0 {
 		return 0, 0, false
 	}
@@ -263,47 +293,65 @@ func lineStart(s, prefix string) int {
 	return -1
 }
 
-func replaceBlock(have []byte, block string) ([]byte, bool) {
-	i, j, ok := blockRange(have)
+func replaceBlock(have []byte, block string, m markers) ([]byte, bool) {
+	i, j, ok := blockRange(have, m)
 	if !ok {
 		return nil, false
 	}
 	return slices.Concat(have[:i], []byte(block), have[j:]), true
 }
 
+// blockFunc merges the rendered block into the file's bytes, or says why that is by hand.
+type blockFunc func(have []byte, block string) ([]byte, string)
+
 // prepend puts the block first: a .dockerignore allowlist (`*`) must come before the repo's own lines, later
 // lines win.
-func prepend(have []byte, block string) ([]byte, string) {
-	if b, ok := replaceBlock(have, block); ok {
-		return b, ""
+func prepend(m markers) blockFunc {
+	return func(have []byte, block string) ([]byte, string) {
+		if b, ok := replaceBlock(have, block, m); ok {
+			return b, ""
+		}
+		if len(have) == 0 {
+			return []byte(block), ""
+		}
+		return slices.Concat([]byte(block+"\n"), have), ""
 	}
-	if len(have) == 0 {
-		return []byte(block), ""
-	}
-	return slices.Concat([]byte(block+"\n"), have), ""
 }
 
-// appendBlock adds the block last, so the Makefile's default goal stays the repo's. Targets of the same name
-// outside the block would override each other: those are moved by hand.
-func appendBlock(have []byte, block string) ([]byte, string) {
-	if b, ok := replaceBlock(have, block); ok {
-		return b, ""
-	}
+// makeTargets: the Makefile's lines the block defines. Targets of the same name outside the block would override
+// each other: those are moved by hand.
+func makeTargets(have []byte, m markers) string {
 	for _, l := range strings.Split(string(have), "\n") {
 		for _, t := range []string{"SHIP_CMD", "check:", "hooks:", "lint:"} {
 			if strings.HasPrefix(l, t) {
-				return nil, fmt.Sprintf("Makefile has its own %s outside the %s/%s block: move it in (ship init "+
-					"then owns the block)", strings.TrimSuffix(t, ":"), Begin, End)
+				return fmt.Sprintf("Makefile has its own %s outside the %s/%s block: move it in (ship init "+
+					"then owns the block)", strings.TrimSuffix(t, ":"), m.begin, m.end)
 			}
 		}
 	}
-	if len(have) == 0 {
-		return []byte(block), ""
+	return ""
+}
+
+// appendBlock adds the block last, so the Makefile's default goal stays the repo's. guard, if set, finds what
+// keeps a first block from being appended (Makefile: its own targets).
+func appendBlock(m markers, guard func(have []byte, m markers) string) blockFunc {
+	return func(have []byte, block string) ([]byte, string) {
+		if b, ok := replaceBlock(have, block, m); ok {
+			return b, ""
+		}
+		if guard != nil {
+			if manual := guard(have, m); manual != "" {
+				return nil, manual
+			}
+		}
+		if len(have) == 0 {
+			return []byte(block), ""
+		}
+		if !bytes.HasSuffix(have, []byte("\n")) {
+			have = append(have, '\n')
+		}
+		return slices.Concat(have, []byte("\n"+block)), ""
 	}
-	if !bytes.HasSuffix(have, []byte("\n")) {
-		have = append(have, '\n')
-	}
-	return slices.Concat(have, []byte("\n"+block)), ""
 }
 
 // Write writes every file that differs and ship can render; it returns the paths written.

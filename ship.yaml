@@ -15,6 +15,9 @@ allow:
   - rule: scaffold
     path: .github/dependabot.yaml
     why: ship's dependabot also bumps the testdata/ui fixture
+  - rule: scaffold
+    path: AGENTS.md
+    why: ship gates with go run . and no pre-push hook, releases from CI on every master push; the block says neither
   - rule: workflows
     why: ship calls its reusable workflows by path, at the commit under test; cleanup-images.yaml is the retention policy itself
   - rule: handrolled

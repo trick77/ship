@@ -1,0 +1,4 @@
+# ship:begin (owned by ship init; repo-specific lines go outside the markers)
+# Playwright MCP's snapshots and screenshots.
+/.playwright-mcp/
+# ship:end

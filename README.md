@@ -73,8 +73,8 @@ it), and its changed lines in the patch gate; `go.exclude` applies, `go.coverpkg
 cleaned like go.dir (`./kit/auth/` is `kit/auth`); one outside the repo (absolute or through `..`), the root or a
 duplicate fails.
 
-The Go coverage report lives in the git dir (`.git/ship/`), never in the tree. Gitignore the UI test runner's
-coverage output.
+The Go coverage report lives in the git dir (`.git/ship/`), never in the tree. The UI test runner's (`ui.lcov`'s
+dir) is in `.gitignore`'s ship block.
 
 ## Commands
 
@@ -176,8 +176,18 @@ what is left is by hand.
 
 `ship init` writes the files ship owns, rendered from `ship.yaml` and the repo (origin, visibility, Containerfiles):
 `.github/workflows/ci.yaml`, `release.yaml`, `cleanup-images.yaml` (images), `.github/dependabot.yaml`,
-`<ui.dir>/eslint.config.js`, `tsconfig.node.json` and `.npmrc` (UI), and in `.dockerignore` (images) and `Makefile`
-(apps, or one that exists) only the block between `# ship:begin` and `# ship:end`; the rest of those two is the repo's. Owned means byte-equal.
+`<ui.dir>/eslint.config.js`, `tsconfig.node.json` and `.npmrc` (UI), and in four files only a block, the rest of
+each is the repo's. Owned means byte-equal.
+
+| file | block | where | holds |
+|---|---|---|---|
+| `Makefile` | `# ship:begin` … `# ship:end` | last (the default goal stays the repo's) | `check`, `hooks`, `lint` on master's ship; apps, or one that exists. Its own `check:`/`hooks:`/`lint:`/`SHIP_CMD` outside the block: moved in by hand |
+| `.dockerignore` | `# ship:begin` … `# ship:end` | first (later lines win) | the build context; images |
+| `.gitignore` | `# ship:begin` … `# ship:end` | last | `/.playwright-mcp/`, the UI coverage dir; always |
+| `AGENTS.md` | `<!-- ship:begin -->` … `<!-- ship:end -->` | last | gate (`make check`, or `ship check` without a Makefile), hooks, CI, owned files, kit (images), release command, commit subjects; always |
+
+A missing file is created holding only its block; a file without one gets it appended (prepended), an existing
+block is replaced in place.
 The CI caller's `node-version` is the Containerfile's `node:N` builder major (26 without one): Dependabot moves the
 builder, `ship init` moves CI after it.
 `ship init -diff` prints the difference, writes nothing, exits 1 when anything differs.
@@ -196,7 +206,7 @@ builder, `ship init` moves CI after it.
 | `gomod` | `go x.y.z` ≥ 1.27.0 in go.dir and every go.modules module; kit's version is Dependabot's to move | yes |
 | `kit` | a repo with images requires kit | yes |
 | `handrolled` | no `internal/version` package, `/health`, `/healthz` or `/readyz` route (a method pattern such as `"GET /healthz"`, or a `Handle`/`HandleFunc` argument; a URL such as `LocalURL(addr, "/healthz")` is none; another router's methods and a path held in a constant are not seen), `signal.Notify`/`NotifyContext`, `github.com/coreos/go-oidc` import outside tests: kit (kit/auth) has them | per `path` |
-| `agents` | AGENTS.md has the commit-subject line | yes |
+| `agents` | AGENTS.md has the commit-subject line (its ship block carries it; the backstop for an allowed `scaffold` diff) | yes |
 | `postgres` | `compose:<service>` resolves; a literal `postgres:` (a version too) names no repository a root compose service's `image:` names (`duplicates compose service <s>'s image, use compose:<s>`): two pins drift | yes |
 
 An exception lives in `ship.yaml`, its why required (an entry without one fails the parse):
@@ -213,10 +223,10 @@ allow:
 A repo moving to ship, in one PR (its own subject already Go style: the new gate checks it):
 
 1. `ship.yaml` at the root: only the keys that differ from the defaults above.
-2. `ship init`: the workflow callers, dependabot, `.dockerignore` and `Makefile` blocks, the UI's ESLint config,
-   tsconfig.node.json and .npmrc. Drop the repo's own gate scripts and hooks.
-3. `ship conform`: what init cannot write (Containerfile, package.json scripts and devDependencies, vite config, kit, AGENTS.md)
-   by hand, or an `allow` entry with its why. AGENTS.md, verbatim with the repo's own areas:
-   ``- Commit subjects + PR titles: Go style `area: what` (`<area>: …`, `<area>: …`), gated by ship; release notes list them by area.``
+2. `ship init`: the workflow callers, dependabot, the `Makefile`, `.dockerignore`, `.gitignore` and `AGENTS.md`
+   blocks, the UI's ESLint config, tsconfig.node.json and .npmrc. Drop the repo's own gate scripts and hooks, and
+   the AGENTS.md lines the block now says (gate, hooks, release, commit subjects).
+3. `ship conform`: what init cannot write (Containerfile, package.json scripts and devDependencies, vite config, kit)
+   by hand, or an `allow` entry with its why.
 4. `ship hooks` in every clone.
 5. `ship check` green locally, then push: the hook runs it.

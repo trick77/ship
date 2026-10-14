@@ -21,7 +21,7 @@ import (
 // KitModule is ship's library of the code every service had hand-rolled (version, health, graceful shutdown).
 const KitModule = "github.com/trick77/ship/kit"
 
-// AgentsLine is the start of AGENTS.md's commit-subject line (README, Adopting ship); the areas are the repo's.
+// AgentsLine is the start of AGENTS.md's commit-subject line, in ship's block (templates/agents.md).
 const AgentsLine = "Commit subjects + PR titles: Go style `area: what`"
 
 // listed is git's view of the tree (tracked and untracked, not ignored), read once.
@@ -447,8 +447,8 @@ func (e *env) agents() result {
 	case b == nil:
 		return result{findings: []finding{{what: "missing", file: "AGENTS.md"}}}
 	case !bytes.Contains(b, []byte(AgentsLine)):
-		return result{findings: []finding{{what: "no commit-subject line (README, Adopting ship: `- " + AgentsLine +
-			" (…), gated by ship; …`)", file: "AGENTS.md"}}}
+		return result{findings: []finding{{what: "no commit-subject line (`- " + AgentsLine +
+			" …`, as ship init's AGENTS.md block has it)", file: "AGENTS.md"}}}
 	}
 	return result{}
 }

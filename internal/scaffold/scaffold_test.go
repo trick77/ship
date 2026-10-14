@@ -2,6 +2,7 @@ package scaffold
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -105,7 +106,8 @@ func TestFiles_whenApp_thenEveryOwnedFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{CI, Release, Cleanup, Dependabot, Ignore, "ui/" + ESLint, "ui/" + TSConfigNode, "ui/" + NPMRC, Makefile}
+	want := []string{CI, Release, Cleanup, Dependabot, Ignore, "ui/" + ESLint, "ui/" + TSConfigNode, "ui/" + NPMRC, Makefile,
+		GitIgnore, Agents}
 	if got := paths(files); strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Fatalf("files %v", got)
 	}
@@ -149,7 +151,7 @@ func TestFiles_whenPublicLibrary_thenCallersOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := paths(files); strings.Join(got, " ") != strings.Join([]string{CI, Release, Dependabot}, " ") {
+	if got := paths(files); strings.Join(got, " ") != strings.Join([]string{CI, Release, Dependabot, GitIgnore, Agents}, " ") {
 		t.Fatalf("files %v", got)
 	}
 	if ci := byPath(t, files, CI); string(ci.Want) != publicLibCI {
@@ -308,8 +310,153 @@ func TestFiles_whenOwnTargetsOutsideBlock_thenManual(t *testing.T) {
 		t.Errorf("Makefile: %+v", mk)
 	}
 	wrote, err := Write(dir, files)
-	if err != nil || strings.Join(wrote, " ") != strings.Join([]string{CI, Release, Dependabot}, " ") {
+	if err != nil || strings.Join(wrote, " ") != strings.Join([]string{CI, Release, Dependabot, GitIgnore, Agents}, " ") {
 		t.Fatalf("wrote %v %v", wrote, err)
+	}
+}
+
+// AGENTS.md block lines, per variant.
+const (
+	agentsHead = "<!-- ship:begin -->\n<!-- Owned by ship init (github.com/trick77/ship), never edited by hand: " +
+		"repo-specific lines go outside the markers. -->\n## ship\n\n"
+	agentsMake = "- Gate: `make check` before every push, green. `make hooks` once per clone and again when ship says the hook is\n" +
+		"  stale: the pre-push hook runs the gate. GitHub is never the first to find a failure.\n"
+	agentsShip = "- Gate: `ship check` (the `ship()` function in github.com/trick77/ship's README) before every push, green.\n" +
+		"  `ship hooks` once per clone and again when ship says the hook is stale: the pre-push hook runs the gate. GitHub is\n" +
+		"  never the first to find a failure.\n"
+	agentsPrivate = "- CI: Dependabot PRs only (Actions minutes). A Dependabot PR: `%s check` on its branch before merging it.\n"
+	agentsPublic  = "- CI: every PR (Dependabot and outside contributors have no pre-push hook).\n"
+	agentsOwned   = "- Owned by ship, changed with `ship init`, never by hand: the `.github/workflows/` callers, `.github/dependabot.yaml`\n" +
+		"  and the ship blocks in %s.gitignore and AGENTS.md.\n%s" +
+		"  No `.golangci.yaml`: ship's config is the family's.\n"
+	agentsKit = "- kit (github.com/trick77/ship/kit): version, `/healthz` `/readyz`, signals and graceful shutdown come from kit,\n" +
+		"  never hand-rolled. Dependabot bumps it in its own group: a v0.x minor may break.\n"
+	agentsRelease = "- Release: by hand only, `gh workflow run Release -f bump=auto` (patch, or the highest `Release: minor|major` line\n" +
+		"  since the last tag; a minor or major needs a `Release-note: …` line too).\n"
+	agentsImages = "  Images are built, scanned and signed on GitHub only, never from a laptop.\n"
+	agentsTail   = "- Commit subjects + PR titles: Go style `area: what` (go.dev/doc/contribute), gated by ship; release notes group\n" +
+		"  them by area.\n<!-- ship:end -->\n"
+)
+
+func TestFiles_whenAgents_thenBlockPerVariant(t *testing.T) {
+	ui := "  In `ui/`: eslint.config.js, tsconfig.node.json and .npmrc.\n"
+	for _, tc := range []struct {
+		name, ship, visibility string
+		makefile               bool
+		want                   string
+	}{
+		{"private app", app, "private", false, agentsHead + agentsMake + fmt.Sprintf(agentsPrivate, "make") +
+			fmt.Sprintf(agentsOwned, "Makefile, .dockerignore, ", ui) + agentsKit + agentsRelease + agentsImages + agentsTail},
+		{"public app", "images:\n  - {}\n", "public", false, agentsHead + agentsMake + agentsPublic +
+			fmt.Sprintf(agentsOwned, "Makefile, .dockerignore, ", "") + agentsKit + agentsRelease + agentsImages + agentsTail},
+		{"private make library", "", "private", true, agentsHead + agentsMake + fmt.Sprintf(agentsPrivate, "make") +
+			fmt.Sprintf(agentsOwned, "Makefile, ", "") + agentsRelease + agentsTail},
+		{"public make library", "", "public", true, agentsHead + agentsMake + agentsPublic +
+			fmt.Sprintf(agentsOwned, "Makefile, ", "") + agentsRelease + agentsTail},
+		{"private library", "", "private", false, agentsHead + agentsShip + fmt.Sprintf(agentsPrivate, "ship") +
+			fmt.Sprintf(agentsOwned, "", "") + agentsRelease + agentsTail},
+		{"public library", "", "public", false, agentsHead + agentsShip + agentsPublic +
+			fmt.Sprintf(agentsOwned, "", "") + agentsRelease + agentsTail},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tc.makefile {
+				write(t, dir, Makefile, "build:\n\tgo build ./...\n")
+			}
+			files, err := Files(dir, parse(t, tc.ship), Facts{Repo: "r", Visibility: tc.visibility})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := string(byPath(t, files, Agents).Want); got != tc.want {
+				t.Errorf("AGENTS.md:\n%s\nwant:\n%s", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFiles_whenGitIgnore_thenPlaywrightAndUICoverage(t *testing.T) {
+	head := "# ship:begin (owned by ship init; repo-specific lines go outside the markers)\n" +
+		"# Playwright MCP's snapshots and screenshots.\n/.playwright-mcp/\n"
+	cover := "# The UI tests' coverage report (ui.lcov's dir); Go's lives in the git dir.\n"
+	for ship, want := range map[string]string{
+		"":                           head + "# ship:end\n",
+		"ui: {}\n":                   head + cover + "/coverage/ui/\n# ship:end\n",
+		"ui:\n  dir: backend/web\n":  head + cover + "/backend/coverage/ui/\n# ship:end\n",
+		"ui:\n  lcov: lcov.info\n":   head + "# ship:end\n",
+		"ui:\n  lcov: ui/cov/x.info": head + cover + "/ui/cov/\n# ship:end\n",
+	} {
+		files, err := Files(t.TempDir(), parse(t, ship), Facts{Visibility: "public"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := string(byPath(t, files, GitIgnore).Want); got != want {
+			t.Errorf("%q .gitignore:\n%s\nwant:\n%s", ship, got, want)
+		}
+	}
+}
+
+// AGENTS.md and .gitignore take the block last, no guard: a check: line in AGENTS.md is prose, not a target.
+func TestFiles_whenAgentsAndGitIgnoreExist_thenAppendedAndReplaced(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, Agents, "# AGENTS.md\n\ncheck: run the tests")
+	write(t, dir, GitIgnore, "/bin/\n")
+	files, err := Files(dir, parse(t, ""), Facts{Visibility: "public"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ag, gi := byPath(t, files, Agents), byPath(t, files, GitIgnore)
+	if ag.Manual != "" || !strings.HasPrefix(string(ag.Want), "# AGENTS.md\n\ncheck: run the tests\n\n"+MDBegin+"\n") ||
+		!strings.HasSuffix(string(ag.Want), MDEnd+"\n") {
+		t.Errorf("AGENTS.md: %q %s", ag.Manual, ag.Want)
+	}
+	if !strings.HasPrefix(string(gi.Want), "/bin/\n\n"+Begin) || !strings.HasSuffix(string(gi.Want), End+"\n") {
+		t.Errorf(".gitignore:\n%s", gi.Want)
+	}
+	if _, err := Write(dir, files); err != nil {
+		t.Fatal(err)
+	}
+	// A stale block is replaced in place, the repo's lines after it kept.
+	stale := strings.Replace(string(ag.Want), "## ship\n", "## old\n", 1) + "\n- repo line\n"
+	write(t, dir, Agents, stale)
+	files, err = Files(dir, parse(t, ""), Facts{Visibility: "public"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(byPath(t, files, Agents).Want); got != string(ag.Want)+"\n- repo line\n" {
+		t.Errorf("replaced block:\n%s", got)
+	}
+	if gi := byPath(t, files, GitIgnore); gi.Differs() {
+		t.Errorf(".gitignore differs after Write:\n%s", gi.Want)
+	}
+}
+
+// kit is v0.x: its own group, before the catch-alls, in go.dir's entry and every nested module's.
+const gomodGroups = `    groups:
+      # kit is v0.x: a minor may break. Its own PR, never inside the
+      # catch-all (first matching group wins).
+      kit:
+        patterns: ["github.com/trick77/ship/kit", "github.com/trick77/ship/kit/*"]
+      gomod-non-major:
+        patterns:
+          - "*"
+        update-types:
+          - patch
+          - minor
+      gomod-major:
+        patterns:
+          - "*"
+        update-types:
+          - major
+
+`
+
+func TestFiles_whenGomod_thenKitGroupFirst(t *testing.T) {
+	files, err := Files(t.TempDir(), parse(t, "go:\n  modules: [kit]\n"), Facts{Visibility: "public"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dep := string(byPath(t, files, Dependabot).Want); strings.Count(dep, gomodGroups) != 2 {
+		t.Errorf("gomod groups, want them under both gomod entries:\n%s", dep)
 	}
 }
 

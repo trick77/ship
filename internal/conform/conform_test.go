@@ -473,10 +473,15 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 			"FAIL handrolled: own health route: use kit's (backend/internal/api/ready.go)",
 			"FAIL handrolled: own shutdown signal handling: use kit's (run.Context, httpx.Serve) (backend/cmd/app/main.go)",
 			"FAIL handrolled: own OIDC: use github.com/trick77/ship/kit/auth (backend/internal/auth/oidc.go)"}},
-		{"agents", appShip, func(r *repo) { r.write("AGENTS.md", "# AGENTS.md\n") },
+		// AGENTS.md's ship block carries the line: the rule is the backstop for an allowed scaffold diff.
+		{"agents", appShip + allowScaffold(scaffold.Agents), func(r *repo) { r.write("AGENTS.md", "# AGENTS.md\n") },
 			[]string{"FAIL agents: no commit-subject line"}},
-		{"agents missing", appShip, func(r *repo) { r.remove("AGENTS.md") },
+		{"agents missing", appShip + allowScaffold(scaffold.Agents), func(r *repo) { r.remove("AGENTS.md") },
 			[]string{"FAIL agents: missing (AGENTS.md)"}},
+		{"agents block edited", appShip, func(r *repo) { r.edit("AGENTS.md", "## ship\n", "## gate\n") },
+			[]string{"FAIL scaffold: differs from ship's template (ship init -diff) (AGENTS.md)"}},
+		{"gitignore block missing", appShip, func(r *repo) { r.remove(scaffold.GitIgnore) },
+			[]string{"FAIL scaffold: missing (ship init) (.gitignore)"}},
 		{"unknown allow", appShip + "allow:\n  - { rule: scafold, why: typo }\n", func(*repo) {},
 			[]string{`FAIL allow: "scafold" names no conform rule (ship.yaml)`}},
 	} {
@@ -593,7 +598,7 @@ func TestRun_whenLibrary_thenAppRulesSkipped(t *testing.T) {
 		t.Fatal(err)
 	}
 	if r.out.String() != "ship: wrote .github/workflows/ci.yaml\nship: wrote .github/workflows/release.yaml\n"+
-		"ship: wrote .github/dependabot.yaml\n" {
+		"ship: wrote .github/dependabot.yaml\nship: wrote .gitignore\nship: wrote AGENTS.md\n" {
 		t.Errorf("init:\n%s", r.out.String())
 	}
 	out, err := r.run("")
@@ -851,7 +856,9 @@ func TestFix_whenManualLeft_thenListed(t *testing.T) {
 	err := Fix(r.dir, r.config(appShip), r.opts)
 	out := r.out.String()
 	if err == nil || !strings.Contains(out, "ship: wrote .github/dependabot.yaml\n") ||
-		!strings.Contains(out, "FAIL scaffold: Makefile has its own check") || !strings.Contains(out, "FAIL agents:") ||
+		!strings.Contains(out, "FAIL scaffold: Makefile has its own check") ||
+		// The block init appends carries the commit-subject line.
+		!strings.Contains(out, "ship: wrote AGENTS.md\n") || !strings.Contains(out, "ok agents\n") ||
 		strings.Contains(out, "FAIL dependabot") {
 		t.Errorf("%v\n%s", err, out)
 	}
