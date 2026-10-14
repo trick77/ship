@@ -217,7 +217,8 @@ func (e *env) reportOf(rs []rule) error {
 		scaff = rs[i].fn(e)
 		for _, f := range scaff.findings {
 			if _, ok := e.c.Allowed(Scaffold, f.image, f.file); f.rerender && !ok {
-				stale[slashClean(f.file)] = true
+				c, _ := config.CleanDir(f.file)
+				stale[c] = true
 			}
 		}
 	}
@@ -281,13 +282,11 @@ func (e *env) dropStale(rule string, fs []finding, stale map[string]bool) ([]fin
 		if _, ok := e.c.Allowed(rule, f.image, f.file); ok {
 			return false
 		}
-		return stale[slashClean(f.file)]
+		c, _ := config.CleanDir(f.file)
+		return stale[c]
 	})
 	return fs, n - len(fs)
 }
-
-// slashClean is p in clean slash form, as stale's keys and a rule's findings compare.
-func slashClean(p string) string { return path.Clean(filepath.ToSlash(p)) }
 
 // origin is the GitHub owner and repo of the origin remote; empty when there is none or it is not GitHub.
 func origin(root string) (owner, repo string) {
