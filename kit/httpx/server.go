@@ -27,7 +27,9 @@ func NewServer(addr string, h http.Handler) *http.Server {
 }
 
 // Serve runs srv until ctx ends or the process gets SIGINT/SIGTERM, then drains in-flight requests for up to
-// shutdownTimeout. A clean shutdown returns nil; a listener that cannot bind returns its error at once.
+// shutdownTimeout. A clean shutdown returns nil; a listener that cannot bind returns its error at once. A drain that
+// outlasts shutdownTimeout returns context.DeadlineExceeded after Close cuts the remaining connections; handlers it
+// cut may still be running when Serve returns, so a caller's cleanup must tolerate that.
 func Serve(ctx context.Context, srv *http.Server, shutdownTimeout time.Duration) error {
 	ctx, stop := run.Context(ctx)
 	defer stop()
@@ -42,6 +44,10 @@ func Serve(ctx context.Context, srv *http.Server, shutdownTimeout time.Duration)
 	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
 	defer cancel()
 	if err := srv.Shutdown(sctx); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			// Overrun: the handlers still running get their connections closed and their request contexts ended.
+			_ = srv.Close()
+		}
 		return err
 	}
 	if err := <-errc; err != nil && !errors.Is(err, http.ErrServerClosed) {

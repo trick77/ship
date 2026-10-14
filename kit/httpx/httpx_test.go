@@ -707,16 +707,69 @@ func TestServeShutsDownCleanly(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- Serve(ctx, srv, time.Second) }()
+	waitUp(t, "http://"+addr+"/")
+	cancel()
+	if err := <-done; err != nil {
+		t.Errorf("Serve = %v, want nil on clean shutdown", err)
+	}
+}
+
+// waitUp polls url until it answers, or fails the test.
+func waitUp(t *testing.T, url string) {
+	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
-	for healthcheck("http://"+addr+"/", io.Discard) != 0 {
+	for healthcheck(url, io.Discard) != 0 {
 		if time.Now().After(deadline) {
 			t.Fatal("server never came up")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+// holdServer serves /hold until its request's context ends or a minute passes; returned closes when it returns. up
+// waits for the running server, requests /hold and returns once the handler holds it.
+func holdServer(t *testing.T, addr string) (srv *http.Server, returned chan struct{}, up func()) {
+	entered := make(chan struct{})
+	returned = make(chan struct{})
+	srv = NewServer(addr, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/hold" {
+			return
+		}
+		close(entered)
+		defer close(returned)
+		select {
+		case <-r.Context().Done():
+		case <-time.After(time.Minute):
+		}
+	}))
+	up = func() {
+		waitUp(t, "http://"+addr+"/")
+		go func() {
+			resp, err := http.Get("http://" + addr + "/hold") //nolint:noctx // ends with the server
+			if err == nil {
+				_ = resp.Body.Close()
+			}
+		}()
+		<-entered
+	}
+	return srv, returned, up
+}
+
+func TestServe_whenDrainOverruns_thenClosesAndDeadlineExceeded(t *testing.T) {
+	addr := freeAddr(t)
+	srv, returned, up := holdServer(t, addr)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- Serve(ctx, srv, 50*time.Millisecond) }()
+	up()
 	cancel()
-	if err := <-done; err != nil {
-		t.Errorf("Serve = %v, want nil on clean shutdown", err)
+	if err := <-done; !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("Serve = %v, want context.DeadlineExceeded on an overrun", err)
+	}
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Error("the handler's connection was not closed on the overrun")
 	}
 }
 

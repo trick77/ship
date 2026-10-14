@@ -1,8 +1,7 @@
 // Package migrate applies numbered SQL files to a database/sql database, exactly once each, in order.
 //
-// The bookkeeping table is the one netra and noergler already run, schema_migrations(name TEXT PRIMARY KEY,
-// applied_at), keyed by file name, so either switches with no data step. A goose database (ipverse-core) converts
-// once with AdoptGoose.
+// The bookkeeping table is schema_migrations(name TEXT PRIMARY KEY, applied_at), keyed by file name, so a repo that
+// already runs that table switches with no data step. A goose database converts once with AdoptGoose.
 //
 // Files are *.sql at the root of the given fs.FS, ordered by their numeric prefix (0001_init.sql, 00002_runs.sql).
 // Each runs in its own transaction together with its bookkeeping row, so a failure leaves it unrecorded and it runs
@@ -12,6 +11,10 @@
 // Concurrent replicas are serialised by the dialect's lock (a Postgres session advisory lock), held on one dedicated
 // connection for the whole run, because a session lock belongs to one session and a pool hands out a different
 // connection per call.
+//
+// A pgx program opens a dedicated *sql.DB for the run (github.com/jackc/pgx/v5/stdlib: OpenDB on a pgx.ConnConfig,
+// or OpenDBFromPool on a separate small pool), passes it with Postgres(lockKey) and closes it afterwards: session
+// state (the advisory lock, a SET in a no-transaction file) then never returns to the app's pool.
 package migrate
 
 import (
@@ -82,7 +85,7 @@ type Options struct {
 	Dialect Dialect
 	// Log gets one line per applied file; nil is slog.Default.
 	Log *slog.Logger
-	// NoTxMarker overrides the package's marker, so a repo with its own spelling ("-- netra:no-transaction") need
+	// NoTxMarker overrides the package's marker, so a repo with its own spelling ("-- app:no-transaction") need
 	// not rewrite applied files.
 	NoTxMarker string
 	// LockTimeout bounds the wait for another migrator's lock: pg_advisory_lock blocks forever, and a wedged holder
@@ -388,8 +391,9 @@ func apply(ctx context.Context, conn *sql.Conn, m Migration, insert, marker stri
 	return tx.Commit()
 }
 
-// upSection is what to execute and whether outside a transaction. A goose-annotated file (ipverse-core's) runs its
-// "-- +goose Up" section only, never the Down below it; "-- +goose NO TRANSACTION" is honoured like the marker.
+// upSection is what to execute and whether outside a transaction. A goose-annotated file (a repo coming from goose)
+// runs its "-- +goose Up" section only, never the Down below it; "-- +goose NO TRANSACTION" is honoured like the
+// marker.
 func upSection(body, marker string) (string, bool) {
 	noTx := strings.HasPrefix(strings.TrimSpace(body), marker)
 	if i := strings.Index(body, "-- +goose Up"); i >= 0 {

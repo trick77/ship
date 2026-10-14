@@ -52,10 +52,10 @@ func TestUpPostgres(t *testing.T) {
 	db := newFake()
 	fsys := files(map[string]string{
 		"0001_init.sql":  "CREATE TABLE a (id int); CREATE TABLE b (id int);",
-		"0002_agg.sql":   "-- netra:no-transaction\nCREATE MATERIALIZED VIEW v AS SELECT 1; SELECT 'x;y';",
+		"0002_agg.sql":   "-- app:no-transaction\nCREATE MATERIALIZED VIEW v AS SELECT 1; SELECT 'x;y';",
 		"0003_empty.sql": "-- nothing yet\n",
 	})
-	o := Options{Dialect: Postgres(0x6E65747261), Log: quiet, NoTxMarker: "-- netra:no-transaction"}
+	o := Options{Dialect: Postgres(42), Log: quiet, NoTxMarker: "-- app:no-transaction"}
 	applied, err := Up(context.Background(), db.open(t), fsys, o)
 	if err != nil {
 		t.Fatal(err)
@@ -72,7 +72,7 @@ func TestUpPostgres(t *testing.T) {
 		"CREATE TABLE a (id int); CREATE TABLE b (id int);",
 		"INSERT INTO schema_migrations (name) VALUES ($1)",
 		"COMMIT",
-		"-- netra:no-transaction CREATE MATERIALIZED VIEW v AS SELECT 1",
+		"-- app:no-transaction CREATE MATERIALIZED VIEW v AS SELECT 1",
 		"SELECT 'x;y'",
 		"INSERT INTO schema_migrations (name) VALUES ($1)",
 		"BEGIN",
