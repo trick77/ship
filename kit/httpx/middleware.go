@@ -100,8 +100,9 @@ type AccessLogOptions struct {
 	ClientIP func(*http.Request) string
 	// Quiet paths are not logged while they succeed (polled endpoints); a failing one still is.
 	Quiet []string
-	// ProbePaths are never logged, whatever the status, and run no OnRecord: the orchestrator hits them every few
-	// seconds, and Health logs readiness when it changes, so a 503 line per probe is noise. nil means
+	// ProbePaths are not logged, whatever the status, and run no OnRecord: the orchestrator hits them every few
+	// seconds, and Health logs readiness when it changes, so a 503 line per probe is noise. A 404 there is no probe
+	// but a caller Health refused, logged like any 404. nil means
 	// DefaultProbePaths (where Health mounts them); an app mounting the probes elsewhere names its paths, and an
 	// empty non-nil slice logs probes like any path.
 	ProbePaths []string
@@ -178,7 +179,7 @@ func AccessLog(log *slog.Logger, opts AccessLogOptions) func(http.Handler) http.
 				if status == 0 {
 					status = http.StatusOK
 				}
-				if probe[r.URL.Path] || (quiet[r.URL.Path] && status < 400) || (opts.Skip != nil && opts.Skip(r, status)) {
+				if (probe[r.URL.Path] && status != http.StatusNotFound) || (quiet[r.URL.Path] && status < 400) || (opts.Skip != nil && opts.Skip(r, status)) {
 					return
 				}
 				lvl := routine.Level() // per request: a *slog.LevelVar may change at runtime
