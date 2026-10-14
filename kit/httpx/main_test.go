@@ -5,13 +5,11 @@ import (
 	"context"
 	"errors"
 	"flag"
-	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -343,7 +341,7 @@ func TestMain_whenServerAddrDiffers_thenOneWithoutServing(t *testing.T) {
 	if code := Main(context.Background(), mainFlags(), nil, o); code != 1 {
 		t.Errorf("Main with a server on %s, Addr %s = %d, want 1", other, addr, code)
 	}
-	if !strings.Contains(buf.String(), "not where -healthcheck probes") {
+	if log := buf.String(); !strings.Contains(log, "is not MainOptions.Addr") || !strings.Contains(log, other) || !strings.Contains(log, addr) {
 		t.Errorf("log = %q, want why", buf.String())
 	}
 	if !cleaned {
@@ -373,25 +371,37 @@ func stopDuringBuild(t *testing.T, ret func(ctx context.Context) (*http.Server, 
 	return code, buf.String(), cleaned
 }
 
-func TestMain_whenStopDuringBuild_thenZeroOnlyForTheStopsOwnError(t *testing.T) {
+func TestMain_whenStopDuringBuild_thenZeroWhateverBuildReturns(t *testing.T) {
+	orig := listen
+	listen = func(network, addr string) (net.Listener, error) {
+		t.Errorf("Main bound %s after a stop during Build", addr)
+		return orig(network, addr)
+	}
+	t.Cleanup(func() { listen = orig })
 	for _, tt := range []struct {
 		name string
 		ret  func(ctx context.Context) (*http.Server, error)
-		want int
+		warn string // in the log at WARN, "" for none
 	}{
-		{"no server", func(context.Context) (*http.Server, error) { return nil, nil }, 0},
-		{"canceled", func(ctx context.Context) (*http.Server, error) { return nil, fmt.Errorf("connect: %w", ctx.Err()) }, 0},
-		{"deadline", func(context.Context) (*http.Server, error) {
-			return nil, fmt.Errorf("ping: %w", context.DeadlineExceeded)
-		}, 0},
-		{"other failure", func(context.Context) (*http.Server, error) { return nil, errors.New("no DATABASE_URL") }, 1},
+		{"no server", func(context.Context) (*http.Server, error) { return nil, nil }, ""},
+		// The stop's error flattened by a driver: no context.Canceled left to find.
+		{"flattened error", func(context.Context) (*http.Server, error) {
+			return nil, errors.New("connect: operation was canceled")
+		}, "operation was canceled"},
+		// A Build that ignores ctx, on an Addr that is not MainOptions.Addr: never bound, never checked.
+		{"mismatched Addr", func(context.Context) (*http.Server, error) {
+			return NewServer("10.0.0.5:2", http.NotFoundHandler()), nil
+		}, ""},
 	} {
 		code, log, cleaned := stopDuringBuild(t, tt.ret)
-		if code != tt.want {
-			t.Errorf("%s: Main = %d, want %d", tt.name, code, tt.want)
+		if code != 0 {
+			t.Errorf("%s: Main = %d, want 0", tt.name, code)
 		}
-		if tt.want == 1 && !strings.Contains(log, "Startup failed") {
-			t.Errorf("%s: log = %q, want Startup failed", tt.name, log)
+		if !strings.Contains(log, "Stopped during startup") || strings.Contains(log, "Startup failed") {
+			t.Errorf("%s: log = %q, want the stop", tt.name, log)
+		}
+		if tt.warn != "" && (!strings.Contains(log, "level=WARN") || !strings.Contains(log, tt.warn)) {
+			t.Errorf("%s: log = %q, want Build's error at WARN", tt.name, log)
 		}
 		if !cleaned {
 			t.Errorf("%s: cleanup did not run", tt.name)
@@ -399,67 +409,69 @@ func TestMain_whenStopDuringBuild_thenZeroOnlyForTheStopsOwnError(t *testing.T) 
 	}
 }
 
-func TestMain_whenStopDuringBuildReturnsAServer_thenZeroWithoutBinding(t *testing.T) {
-	orig := listen
-	listen = func(network, addr string) (net.Listener, error) {
-		t.Errorf("Main bound %s after a stop during Build", addr)
-		return orig(network, addr)
-	}
-	t.Cleanup(func() { listen = orig })
-	code, log, cleaned := stopDuringBuild(t, func(context.Context) (*http.Server, error) {
-		return NewServer("127.0.0.1:1", http.NotFoundHandler()), nil // a Build that ignores ctx
-	})
-	if code != 0 {
-		t.Errorf("Main = %d, want 0", code)
-	}
-	if !strings.Contains(log, "Stopped during startup") {
-		t.Errorf("log = %q, want the stop", log)
-	}
-	if !cleaned {
-		t.Error("cleanup did not run")
-	}
-}
-
-func TestMain_whenProgramShutsDownTheServer_thenZeroAfterHandlersAndCleanup(t *testing.T) {
+func TestMain_whenAdminHandlerShutsDown_thenCleanupAfterTheHandlers(t *testing.T) {
 	addr := freeAddr(t)
-	release := make(chan struct{})
-	entered, returned := make(chan struct{}), make(chan struct{})
 	var srv *http.Server
-	handlerDone := make(chan bool, 1)
+	entered, release, returned := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	stopReturned := make(chan struct{})
+	handlersDone := make(chan bool, 1)
 	build := func(context.Context) (*http.Server, func(), error) {
-		srv = NewServer(addr, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/hold" {
+		srv = NewServer(addr, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/hold": // a Shutdown leaves r.Context() alone: only release ends it
+				close(entered)
+				defer close(returned)
+				<-release
+				return
+			case "/stop":
+			default:
 				return
 			}
-			close(entered)
-			defer close(returned)
-			select { // a Close ends r.Context(), a Shutdown does not
-			case <-release:
-			case <-r.Context().Done():
-			}
+			defer close(stopReturned)
+			go func() { _ = srv.Shutdown(context.Background()) }()
+			time.Sleep(200 * time.Millisecond) // answers while the Shutdown is under way
+			_, _ = io.WriteString(w, "stopping")
 		}))
+		var hooked atomic.Int32
+		srv.RegisterOnShutdown(func() {
+			if hooked.Add(1) > 1 {
+				panic("RegisterOnShutdown hook ran twice: a second Shutdown")
+			}
+		})
 		cleanup := func() {
 			select {
-			case <-returned:
-				handlerDone <- true
+			case <-stopReturned:
 			default:
-				handlerDone <- false
+				handlersDone <- false
+				return
+			}
+			select {
+			case <-returned:
+				handlersDone <- true
+			default:
+				handlersDone <- false
 			}
 		}
 		return srv, cleanup, nil
 	}
-	var buf bytes.Buffer
-	o := MainOptions{Addr: addr, Build: build, Drain: time.Minute, Log: slog.New(slog.NewTextHandler(&buf, nil))}
 	done := make(chan int, 1)
-	go func() { done <- Main(context.Background(), mainFlags(), nil, o) }()
+	go func() {
+		done <- Main(context.Background(), mainFlags(), nil, MainOptions{Addr: addr, Build: build, Drain: 5 * time.Second, Log: quietLog()})
+	}()
 	waitUp(t, "http://"+addr+"/")
-	getHold(addr)
+	getHold(addr) // another handler in flight
 	<-entered
-	go func() { _ = srv.Shutdown(context.Background()) }() // an admin endpoint's doing
+	go func() {
+		resp, err := http.Get("http://" + addr + "/stop") //nolint:noctx // the test's own server
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+	<-stopReturned
 	select {
 	case code := <-done:
-		t.Fatalf("Main = %d before the handler returned: the drain was cut", code)
-	case <-time.After(100 * time.Millisecond):
+		t.Fatalf("Main = %d with /hold in flight: it ran ahead of the handlers", code)
+	case <-time.After(200 * time.Millisecond):
 	}
 	close(release)
 	select {
@@ -467,138 +479,33 @@ func TestMain_whenProgramShutsDownTheServer_thenZeroAfterHandlersAndCleanup(t *t
 		if code != 0 {
 			t.Errorf("Main = %d, want 0 on the program's own Shutdown", code)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(15 * time.Second):
 		t.Fatal("Main hung after the Shutdown")
 	}
-	if !<-handlerDone {
-		t.Error("cleanup ran with the handler still in flight")
-	}
-	if log := buf.String(); strings.Contains(log, "Server failed") {
-		t.Errorf("log = %q, want no failure", log)
+	if !<-handlersDone {
+		t.Error("cleanup ran with a handler still in flight")
 	}
 }
 
-func TestMain_whenAdminHandlerShutsDown_thenCleanupAfterTheDrain(t *testing.T) {
+func TestMain_whenStopped_thenBackgroundWorkOnBuildsCtxSeesIt(t *testing.T) {
 	addr := freeAddr(t)
-	var srv *http.Server
-	var cleaned atomic.Bool
-	var accepted sync.Map // remote addresses
-	build := func(context.Context) (*http.Server, func(), error) {
-		srv = NewServer(addr, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/stop" {
-				go func() { _ = srv.Shutdown(context.Background()) }()
-				time.Sleep(50 * time.Millisecond) // answers while the Shutdown is under way
-				_, _ = io.WriteString(w, "stopping")
-			}
-		}))
-		srv.ConnState = func(c net.Conn, s http.ConnState) {
-			if s == http.StateNew {
-				accepted.Store(c.RemoteAddr().String(), true)
-			}
-		}
-		return srv, func() { cleaned.Store(true) }, nil
-	}
-	done := make(chan int, 1)
-	go func() {
-		done <- Main(context.Background(), mainFlags(), nil, MainOptions{Addr: addr, Build: build, Drain: time.Minute, Log: quietLog()})
-	}()
-	waitUp(t, "http://"+addr+"/")
-	// A client mid-headers: no handler runs, the count holds nothing; only Shutdown's wait for the connection does.
-	conn, err := net.Dial("tcp", addr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-	if _, err := io.WriteString(conn, "GET /x HTTP/1.1\r\nHost: a\r\n"); err != nil {
-		t.Fatal(err)
-	}
-	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
-		if _, ok := accepted.Load(conn.LocalAddr().String()); ok {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the server never accepted the connection")
-		}
-	}
-	resp, err := http.Get("http://" + addr + "/stop") //nolint:noctx // the test's own server
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, err := io.ReadAll(resp.Body)
-	_ = resp.Body.Close()
-	if err != nil || string(body) != "stopping" {
-		t.Errorf("/stop answered %q, %v, want its full response", body, err)
-	}
-	select {
-	case code := <-done:
-		t.Fatalf("Main = %d with a connection mid-request: it ran ahead of the drain", code)
-	case <-time.After(100 * time.Millisecond):
-	}
-	if cleaned.Load() {
-		t.Fatal("cleanup ran ahead of the drain")
-	}
-	// The headers complete: net/http drops a request read during a Shutdown and closes the connection, the drain's end.
-	if _, err := io.WriteString(conn, "\r\n"); err != nil {
-		t.Fatal(err)
-	}
-	_, _ = io.Copy(io.Discard, conn)
-	select {
-	case code := <-done:
-		if code != 0 {
-			t.Errorf("Main = %d, want 0", code)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("Main hung after the drain")
-	}
-	if !cleaned.Load() {
-		t.Error("cleanup did not run")
-	}
-}
-
-func TestMain_whenStopped_thenBuildsCtxLivesThroughTheDrain(t *testing.T) {
-	addr := freeAddr(t)
-	entered, release := make(chan struct{}), make(chan struct{})
-	var buildCtx context.Context
 	workerStopped := make(chan struct{})
-	aliveInDrain := make(chan bool, 1)
-	endedAtCleanup := make(chan bool, 1)
 	build := func(ctx context.Context) (*http.Server, func(), error) {
-		buildCtx = ctx
 		go func() { <-ctx.Done(); close(workerStopped) }() // background work, as on a scheduler
-		srv := NewServer(addr, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/hold" {
-				return
-			}
-			close(entered)
-			<-release
-			select {
-			case <-workerStopped:
-				aliveInDrain <- false
-			default:
-				aliveInDrain <- true
-			}
-		}))
-		return srv, func() { endedAtCleanup <- buildCtx.Err() != nil }, nil
+		return NewServer(addr, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})), nil, nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan int, 1)
-	go func() {
-		done <- Main(ctx, mainFlags(), nil, MainOptions{Addr: addr, Build: build, Drain: time.Minute, Log: quietLog()})
-	}()
+	go func() { done <- Main(ctx, mainFlags(), nil, MainOptions{Addr: addr, Build: build, Log: quietLog()}) }()
 	waitUp(t, "http://"+addr+"/")
-	getHold(addr)
-	<-entered
 	cancel()
-	time.Sleep(100 * time.Millisecond) // the stop is in, the drain waits for /hold
-	close(release)
-	if !<-aliveInDrain {
-		t.Error("Build's ctx ended with the stop: the worker was gone during the drain")
+	select {
+	case <-workerStopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Build's ctx did not end at the stop")
 	}
 	if code := <-done; code != 0 {
 		t.Errorf("Main = %d, want 0", code)
-	}
-	if !<-endedAtCleanup {
-		t.Error("Build's ctx still live at the cleanup")
 	}
 }
 
@@ -693,8 +600,9 @@ func TestMain_whenHandlerStuck_thenWarnsAndCleansUp(t *testing.T) {
 }
 
 func TestMain_whenDrainOverrunsOnAStuckHandler_thenStopTakesOneBudget(t *testing.T) {
-	// A short grace, so one budget (drain+grace) and two (2*drain, the wait taking its own Drain) lie far apart.
-	const drain, grace = 500 * time.Millisecond, 50 * time.Millisecond
+	// A short grace, so one budget (drain+grace, 1.05s) and two (2*drain, the wait taking its own Drain: 2s) lie far
+	// apart: the bound leaves 650ms for a slow runner and fails 300ms short of two budgets.
+	const drain, grace = time.Second, 50 * time.Millisecond
 	orig := handlerGrace
 	handlerGrace = grace
 	defer func() { handlerGrace = orig }()
@@ -731,9 +639,8 @@ func TestMain_whenDrainOverrunsOnAStuckHandler_thenStopTakesOneBudget(t *testing
 	case <-time.After(10 * time.Second):
 		t.Fatal("Main hung on a stuck handler")
 	}
-	// The drain takes the whole budget; the handler wait gets only the grace on top, not another Drain. The bound
-	// sits halfway between one budget (550ms) and two (1s).
-	if took, limit := time.Since(start), drain+drain/2+grace; took < drain || took > limit {
+	// The drain takes the whole budget; the handler wait gets only the grace on top, not another Drain.
+	if took, limit := time.Since(start), 2*drain-300*time.Millisecond; took < drain || took > limit {
 		t.Errorf("stop took %v, want about Drain+handlerGrace (%v), under %v", took, drain+grace, limit)
 	}
 }
@@ -806,78 +713,97 @@ func TestMain_whenListenerCloseFails_thenWarnsAndZero(t *testing.T) {
 	}
 }
 
-func TestProbeReaches(t *testing.T) {
-	// Server host (row) against MainOptions.Addr host (column): does the probe of LocalURL reach it?
-	hosts := []string{"", "0.0.0.0", "::", "::0", "0:0:0:0:0:0:0:0", "localhost", "127.0.0.1", "::ffff:127.0.0.1",
-		"127.0.0.2", "::1", "10.0.0.5", "fd00::5", "app"}
-	wildcards := []string{"", "0.0.0.0", "::", "::0", "0:0:0:0:0:0:0:0"}                    // the probe dials 127.0.0.1
-	loopV4 := append(slices.Clone(wildcards), "localhost", "127.0.0.1", "::ffff:127.0.0.1") // what reaches 127.0.0.1
-	reaches := map[string][]string{                                                         // per server host, the want hosts it answers
-		"":                 hosts,
-		"::":               hosts,
-		"::0":              hosts,
-		"0:0:0:0:0:0:0:0":  hosts,
-		"0.0.0.0":          append(slices.Clone(loopV4), "127.0.0.2", "10.0.0.5", "app"), // IPv4 and hostnames
-		"localhost":        loopV4,
-		"127.0.0.1":        loopV4,
-		"::ffff:127.0.0.1": loopV4,
-		"127.0.0.2":        {"127.0.0.2"}, // the probe of 127.0.0.1 or localhost dials another address
-		"::1":              {"localhost", "::1"},
-		"10.0.0.5":         {"10.0.0.5"},
-		"fd00::5":          {"fd00::5"},
-		"app":              {"app"},
-	}
-	for _, h := range hosts {
-		for _, w := range hosts {
-			want := slices.Contains(reaches[h], w)
-			addr, o := net.JoinHostPort(h, "8080"), net.JoinHostPort(w, "8080")
-			if err := probeReaches(addr, o); (err == nil) != want {
-				t.Errorf("probeReaches(%q, %q) = %v, want reaches %v", addr, o, err, want)
-			}
-		}
-	}
+func TestSplitAddr(t *testing.T) {
 	for _, tt := range []struct {
-		addr, want string
-		reaches    bool
-		why        string // in the error when it does not
+		addr, host string
+		port       int
+		err        bool
 	}{
-		{"127.0.0.1:8081", "127.0.0.1:8080", false, "port 8081, the probe dials 8080"},
-		{":8081", ":8080", false, "port 8081"},
-		{"example.com:8080", "127.0.0.1:8080", false, `host "example.com"`},
-		{"0.0.0.0:8080", "[fd00::5]:8080", false, `the probe's connection to "fd00::5"`},
-		{"0.0.0.0:8080", "app:8080", true, ""},
-		{"[::]:8080", "app:8080", true, ""},
-		{"8080", ":8080", false, "missing port"},
-		{":8080", "8080", false, "missing port"},
-		// Ports by number, not by spelling.
-		{":http", ":80", true, ""},
-		{":80", ":http", true, ""},
-		{"[::]:http", "127.0.0.1:80", true, ""},
-		{":08080", ":8080", true, ""},
-		{"127.0.0.1:8080", "localhost:08080", true, ""},
-		{":http", ":8080", false, "port 80, the probe dials 8080"},
-		{":nosuch", ":8080", false, "nosuch"},
-		{":8080", ":nosuch", false, "nosuch"},
+		{":8080", "", 8080, false},
+		{"0.0.0.0:8080", "", 8080, false},
+		{"[::]:8080", "", 8080, false},
+		{"[::0]:8080", "", 8080, false},
+		{"[0:0:0:0:0:0:0:0]:8080", "", 8080, false},
+		{"LocalHost:8080", "localhost", 8080, false},
+		{"[0:0::1]:8080", "::1", 8080, false},
+		{"[FD00::5]:8080", "fd00::5", 8080, false},
+		{":http", "", 80, false},
+		{":08080", "", 8080, false},
+		{"8080", "", 0, true},
+		{":nosuch", "", 0, true},
 	} {
-		err := probeReaches(tt.addr, tt.want)
-		if (err == nil) != tt.reaches || err != nil && !strings.Contains(err.Error(), tt.why) {
-			t.Errorf("probeReaches(%q, %q) = %v, want reaches %v (%s)", tt.addr, tt.want, err, tt.reaches, tt.why)
+		host, port, err := splitAddr(tt.addr)
+		if host != tt.host || port != tt.port || (err != nil) != tt.err {
+			t.Errorf("splitAddr(%q) = %q, %d, %v; want %q, %d, error %v", tt.addr, host, port, err, tt.host, tt.port, tt.err)
 		}
 	}
 }
 
-func TestMain_whenServerAddrEquivalent_thenServes(t *testing.T) {
+func TestMain_whenServerAddrEqualsAfterNormalizing_thenServesElseOne(t *testing.T) {
 	addr := freeAddr(t)
 	_, port, _ := net.SplitHostPort(addr)
-	build := func(context.Context) (*http.Server, func(), error) {
-		return NewServer("localhost:"+port, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})), nil, nil
+	for _, tt := range []struct {
+		srvAddr string
+		want    int
+	}{
+		{"127.0.0.1:" + port, 0},
+		{"127.0.0.1:0" + port, 0}, // the port by number
+		{"[::ffff:127.0.0.1]:" + port, 1},
+		{"localhost:" + port, 1}, // the same machine, not the same Addr
+		{"127.0.0.1:1", 1},
+	} {
+		build := func(context.Context) (*http.Server, func(), error) {
+			return NewServer(tt.srvAddr, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})), nil, nil
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan int, 1)
+		go func() { done <- Main(ctx, mainFlags(), nil, MainOptions{Addr: addr, Build: build, Log: quietLog()}) }()
+		if tt.want == 0 {
+			waitUp(t, "http://"+addr+"/")
+			cancel()
+		}
+		code := <-done
+		cancel()
+		if code != tt.want {
+			t.Errorf("Main with the server on %s, Addr %s = %d, want %d", tt.srvAddr, addr, code, tt.want)
+		}
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan int, 1)
-	go func() { done <- Main(ctx, mainFlags(), nil, MainOptions{Addr: addr, Build: build, Log: quietLog()}) }()
-	waitUp(t, "http://"+addr+"/")
-	cancel()
-	if code := <-done; code != 0 {
-		t.Errorf("Main with the server on localhost:%s, Addr %s = %d, want 0", port, addr, code)
+}
+
+func TestMain_whenAddrNotLoopbackOrAll_thenOne(t *testing.T) {
+	build := func(context.Context) (*http.Server, func(), error) {
+		t.Fatal("Build ran on an Addr no probe reaches")
+		return nil, nil, nil
+	}
+	for _, tt := range []struct {
+		addr string
+		ok   bool
+	}{
+		{":8080", true},
+		{"0.0.0.0:8080", true},
+		{"[::]:8080", true},
+		{"localhost:8080", true},
+		{"LOCALHOST:8080", true},
+		{"127.0.0.1:8080", true},
+		{"127.0.0.2:8080", true},
+		{"[::1]:8080", true},
+		{"[::ffff:127.0.0.1]:8080", true},
+		{"10.0.0.5:8080", false},
+		{"[fd00::5]:8080", false},
+		{"app:8080", false},
+		{"8080", false},
+	} {
+		var buf bytes.Buffer
+		o := MainOptions{Addr: tt.addr, Build: build, Log: slog.New(slog.NewTextHandler(&buf, nil))}
+		orig := probe
+		probe = func(string) int { return 0 }
+		code := Main(context.Background(), mainFlags(), []string{"-healthcheck"}, o)
+		probe = orig
+		if want := map[bool]int{true: 0, false: 1}[tt.ok]; code != want {
+			t.Errorf("Main -healthcheck on %s = %d, want %d", tt.addr, code, want)
+		}
+		if !tt.ok && tt.addr != "8080" && !strings.Contains(buf.String(), "must listen on loopback or all interfaces") {
+			t.Errorf("%s: log = %q, want why", tt.addr, buf.String())
+		}
 	}
 }

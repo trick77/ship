@@ -4,9 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
-	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/netip"
 	"sync"
@@ -28,17 +26,15 @@ var handlerGrace = time.Second
 // MainOptions shapes Main.
 type MainOptions struct {
 	// Addr is the listen address -healthcheck probes (its /healthz), required. Read it from the environment and
-	// nothing else: the probe must not fail on config it does not use. Build's server listens on it: an empty
-	// srv.Addr becomes Addr; any other must have Addr's port (by number) and a host the probe of Addr reaches: no
-	// host or :: (any spelling) takes every probe, 0.0.0.0 every probe but an IPv6 literal (a hostname in Addr, such
-	// as "app:8080", resolves to IPv4 there), localhost and 127.0.0.1 a probe of localhost, 127.0.0.1 or a wildcard,
-	// ::1 one of localhost or ::1, any other host only the same host. Anything else is a startup failure.
+	// nothing else: the probe must not fail on config it does not use. Its host must be loopback ("localhost", a
+	// loopback IP) or all interfaces (none, 0.0.0.0, :: in any spelling): probes answer local callers only. Build's
+	// server listens on it: an empty srv.Addr becomes Addr; any other must equal Addr after splitAddr's normalization
+	// (host case, any all-interfaces spelling as none, the port by number). Anything else is a startup failure.
 	Addr string
 	// Build makes the server, only when serving: config, secrets and the database belong here, never before Main, so
-	// the probe runs without them. ctx lives until the server has drained; start background work on it. A stop
-	// signal while Build runs ends ctx too, so a slow startup sees it; one after Build returned leaves ctx to the
-	// drain and the handler wait, and Main ends it right before the cleanup. cleanup, when not nil, runs once the
-	// server has stopped (close the store, stop a scheduler), also when Build fails.
+	// the probe runs without them. ctx ends at the stop; work handlers need during the drain must not stop on it — and
+	// handlers that hijack (WebSockets) should watch it to end. cleanup, when not nil, runs once the server has
+	// stopped and its handlers returned (close the store, stop a scheduler), also when Build fails.
 	Build func(ctx context.Context) (srv *http.Server, cleanup func(), err error)
 	// Drain is the stop budget, DefaultDrain when zero or negative: one deadline, counted from the stop signal, for
 	// the shutdown drain and then the wait for handlers still running, which gets at least a second (handlerGrace)
@@ -58,18 +54,17 @@ type MainOptions struct {
 // the server has stopped on its own, Main releases the signal handler: a further Ctrl-C or SIGTERM during a slow
 // Build, the drain, the handler wait or the cleanup kills the process at once.
 //
-// Exit codes: 0 on a stop, also one that arrives during Build (Build then returns an error wrapping
-// context.Canceled or context.DeadlineExceeded, no server, or a server Main then never binds; any other error stays a
-// failure), 1 when Build or the server fails (a port that cannot bind, a server not on o.Addr) or o is unusable (no
-// Addr, no Build, a -healthcheck flag that does not read as a bool), 2 on a bad command line. The -h (0) and bad flag
-// (2) returns are a ContinueOnError fs's: flag.CommandLine is ExitOnError, its Parse exits the process with those
-// codes itself.
+// Exit codes: 0 on a stop, also one that arrives during Build, whatever Build then returns (its error is logged), 1
+// when Build or the server fails (a port that cannot bind, a server not on o.Addr) or o is unusable (no Addr, one
+// not loopback or all interfaces, no Build, a -healthcheck flag that does not read as a bool), 2 on a bad command
+// line. The -h (0) and bad flag (2) returns are a ContinueOnError fs's: flag.CommandLine is ExitOnError, its Parse
+// exits the process with those codes itself.
 //
 // A drain that outlasts o.Drain closes the server (Serve), cutting off the requests still in flight, and exits 0
 // with a warning: the stop was asked for and happened, it only ran long. A non-zero exit would read as a crash to
 // the restart policy. Any other Shutdown error (a listener that fails to close after the drain) is a stop too: it
-// is logged and exits 0. So is a Shutdown the program calls itself (an admin endpoint): Main joins its drain, waits
-// for the handlers and runs the cleanup as on a signal.
+// is logged and exits 0. So is a Shutdown the program calls itself (an admin endpoint): that Shutdown owns its
+// drain; Main waits for the handlers and runs the cleanup as on a signal.
 //
 // Main counts the calls into the server's handler. Once the server has stopped it waits for every call to return,
 // for what is left of o.Drain since the stop but at least a second, then runs the cleanup: drain and wait share the
@@ -97,10 +92,18 @@ func Main(ctx context.Context, fs *flag.FlagSet, args []string, o MainOptions) i
 		}
 		return 2 // fs has printed the error and its usage
 	}
-	switch {
-	case o.Addr == "":
+	if o.Addr == "" {
 		// LocalURL would make it port 80: a probe of something else, or of nothing.
 		o.Log.ErrorContext(ctx, "MainOptions.Addr is empty")
+		return 1
+	}
+	host, port, err := splitAddr(o.Addr)
+	switch {
+	case err != nil:
+		o.Log.ErrorContext(ctx, "MainOptions.Addr is not host:port", "addr", o.Addr, logging.Err(err))
+		return 1
+	case !probeable(host):
+		o.Log.ErrorContext(ctx, "MainOptions.Addr must listen on loopback or all interfaces: probes answer local callers only", "addr", o.Addr)
 		return 1
 	case o.Build == nil:
 		o.Log.ErrorContext(ctx, "MainOptions.Build is nil")
@@ -109,75 +112,64 @@ func Main(ctx context.Context, fs *flag.FlagSet, args []string, o MainOptions) i
 	if healthcheck() {
 		return probe(LocalURL(o.Addr, "/healthz"))
 	}
-	// sig is the stop: Serve's context.
+	// sig is the stop: Build's and Serve's context.
 	sig, stop := run.Context(ctx)
 	defer stop()
 	// The handler goes as soon as the stop is in, not at return: a second signal must not wait out a slow Build, the
 	// drain or the cleanup. serve takes sig as is, with no signal handling of its own.
 	context.AfterFunc(sig, stop)
-	// life is Build's context, the lifetime of what Build starts. The stop ends it only while Build runs, so a slow
-	// startup sees it; after that it outlives the drain and the handler wait, whose handlers may need what it runs,
-	// and ends right before the cleanup.
-	life, endLife := context.WithCancel(context.WithoutCancel(ctx))
-	defer endLife()
-	endOnStop := context.AfterFunc(sig, endLife)
-	srv, cleanup, err := o.Build(life)
-	endOnStop()
+	srv, cleanup, err := o.Build(sig)
 	defer func() {
-		stop() // the server is done or never ran: a signal during the cleanup kills
-		endLife()
 		if cleanup != nil {
 			cleanup()
 		}
 	}()
-	// A stop's doing, not a crash: like the drain overrun, non-zero would read as one to the restart policy.
-	stopped := sig.Err() != nil
-	stopsOwn := stopped && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded))
+	if sig.Err() != nil {
+		// A stop's doing, whatever Build made of it: like the drain overrun, non-zero would read as a crash to the
+		// restart policy. A server Build returned anyway is not bound only to be shut down.
+		level := slog.LevelInfo
+		if err != nil {
+			level = slog.LevelWarn
+		}
+		o.Log.Log(ctx, level, "Stopped during startup", logging.Err(err))
+		return 0
+	}
 	switch {
-	case err != nil && !stopsOwn:
+	case err != nil:
 		o.Log.ErrorContext(ctx, "Startup failed", logging.Err(err))
 		return 1
-	case err != nil: // the stop's own error
-	case srv == nil && !stopped:
+	case srv == nil:
 		o.Log.ErrorContext(ctx, "Startup failed: Build returned no server")
 		return 1
-	case srv == nil:
 	case srv.Addr == "":
 		srv.Addr = o.Addr
 	default:
-		if err := probeReaches(srv.Addr, o.Addr); err != nil {
+		if h, p, err := splitAddr(srv.Addr); err != nil || h != host || p != port {
 			// -healthcheck would probe where nothing listens, and the runtime restart a working server.
-			o.Log.ErrorContext(ctx, "Startup failed: the server's Addr is not where -healthcheck probes MainOptions.Addr",
+			o.Log.ErrorContext(ctx, "Startup failed: the server's Addr is not MainOptions.Addr, where -healthcheck probes",
 				"addr", srv.Addr, "want", o.Addr, logging.Err(err))
 			return 1
 		}
 	}
-	if stopped {
-		// No server, the stop's own error, or a server Build returned ignoring ctx: binding it only to shut it down
-		// helps no one.
-		o.Log.InfoContext(ctx, "Stopped during startup", logging.Err(err))
-		return 0
-	}
 	var calls inflight
 	srv.Handler = calls.wrap(srv.Handler)
-	stoppedAt, stopped, err := serve(sig, srv, o.Drain)
-	// A server that failed on its own, or the program's own Shutdown, left the handler in place: the first signal
-	// during the handler wait or the cleanup must kill.
+	stoppedAt, shutdown, err := serve(sig, srv, o.Drain)
+	// Release the signal handler here, not at the deferred stop: a server that failed on its own, or the program's own
+	// Shutdown, left it in place, and the first signal during the handler wait or the cleanup must kill.
 	stop()
 	// Before the cleanup: the handlers still running would use what it closes.
 	if n := calls.wait(max(time.Until(stoppedAt.Add(o.Drain)), handlerGrace)); n > 0 {
 		o.Log.WarnContext(ctx, "Handlers still running after the server stopped, cleaning up under them", "handlers", n, "drain", o.Drain.String())
 	}
 	switch {
-	case err != nil && !stopped:
+	case err == nil:
+	case !shutdown:
 		o.Log.ErrorContext(ctx, "Server failed", logging.Err(err))
 		return 1
 	case errors.Is(err, context.DeadlineExceeded):
 		o.Log.WarnContext(ctx, "Shutdown drain exceeded, stopping with requests in flight", "drain", o.Drain.String())
-		return 0
-	case err != nil:
+	default:
 		o.Log.WarnContext(ctx, "Shutdown failed after the drain", logging.Err(err))
-		return 0
 	}
 	return 0
 }
@@ -204,70 +196,14 @@ func healthcheckFlag(fs *flag.FlagSet) (func() bool, bool) {
 	return func() bool { b, _ := g.Get().(bool); return b }, true
 }
 
-// probeReaches returns nil when a server listening on addr answers -healthcheck's probe of want, else why not: the
-// same port (by number: ":http" is ":80", ":08080" is ":8080"), and addr's host takes a connection to LocalURL's host
-// (hostReaches).
-func probeReaches(addr, want string) error {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return err
-	}
-	wantHost, wantPort, err := net.SplitHostPort(want)
-	if err != nil {
-		return err
-	}
-	p, err := net.LookupPort("tcp", port)
-	if err != nil {
-		return err
-	}
-	wp, err := net.LookupPort("tcp", wantPort)
-	if err != nil {
-		return err
-	}
-	if p != wp {
-		return fmt.Errorf("port %d, the probe dials %d", p, wp)
-	}
-	if !hostReaches(host, dialHost(wantHost)) {
-		return fmt.Errorf("host %q does not take the probe's connection to %q", host, dialHost(wantHost))
-	}
-	return nil
-}
-
-// hostReaches reports whether a server listening on host takes a connection to probe, a dialHost. IPs compare as
-// addresses, not spellings, and the probe dials exactly probe: a loopback server reaches only its own address
-// (127.0.0.2 is not 127.0.0.1). A probe of "localhost" dials ::1 and 127.0.0.1; a server on "localhost" binds
-// 127.0.0.1 (Go's Listen prefers IPv4). A hostname takes only the same hostname, or a wildcard.
-func hostReaches(host, probe string) bool {
-	if host == probe {
+// probeable reports whether a server on host, a splitAddr host, answers -healthcheck's probe: Health answers
+// loopback callers only, so the host must be all interfaces ("") or loopback.
+func probeable(host string) bool {
+	if host == "" || host == "localhost" {
 		return true
-	}
-	switch host {
-	case "":
-		host = "::"
-	case "localhost":
-		host = "127.0.0.1"
 	}
 	ip, err := netip.ParseAddr(host)
-	if err != nil {
-		return false // a hostname, not probe's
-	}
-	ip = ip.Unmap()
-	var pip netip.Addr // invalid: probe is a hostname
-	if p, err := netip.ParseAddr(probe); err == nil {
-		pip = p.Unmap()
-	}
-	switch {
-	// Dual-stack: a "tcp" wildcard listen is AF_INET6 with IPV6_V6ONLY set to 0 whatever the OS default (Go's
-	// net.favoriteAddrFamily, setDefaultSockopts); not on OpenBSD and DragonFly, which have no IPv4-mapped IPv6.
-	case ip.IsUnspecified() && ip.Is6():
-		return true
-	// IPv4 only: an IPv6 literal misses it; a hostname must resolve to IPv4 to reach it, as Addr's doc demands.
-	case ip.IsUnspecified():
-		return !pip.IsValid() || pip.Is4()
-	case probe == "localhost":
-		return ip == netip.AddrFrom4([4]byte{127, 0, 0, 1}) || ip == netip.IPv6Loopback()
-	}
-	return pip.IsValid() && ip == pip
+	return err == nil && ip.Unmap().IsLoopback()
 }
 
 // inflight counts the handler calls running. A mutex, not a sync.WaitGroup: a request may still arrive while wait

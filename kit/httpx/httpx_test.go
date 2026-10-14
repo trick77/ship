@@ -880,7 +880,7 @@ func TestServe_whenServerFailsOnItsOwn_thenClosesConnections(t *testing.T) {
 	}
 }
 
-func TestServe_whenProgramShutsDownTheServer_thenNilAfterTheDrain(t *testing.T) {
+func TestServe_whenProgramShutsDownTheServer_thenNilAsItBegins(t *testing.T) {
 	addr := freeAddr(t)
 	release := make(chan struct{})
 	entered, returned := make(chan struct{}), make(chan struct{})
@@ -900,47 +900,20 @@ func TestServe_whenProgramShutsDownTheServer_thenNilAfterTheDrain(t *testing.T) 
 	waitUp(t, "http://"+addr+"/")
 	getHold(addr)
 	<-entered
-	go func() { _ = srv.Shutdown(context.Background()) }() // an admin endpoint's doing
-	select {
-	case err := <-done:
-		t.Fatalf("Serve = %v with /hold in flight: it left the drain to run on after its return", err)
-	case <-returned:
-		t.Fatal("the handler in flight was cut: Serve closed the server")
-	case <-time.After(100 * time.Millisecond):
-	}
-	close(release)
+	go func() { _ = srv.Shutdown(context.Background()) }() // an admin endpoint's doing: its drain, not Serve's
+	defer close(release)
 	select {
 	case err := <-done:
 		if err != nil {
 			t.Errorf("Serve = %v, want nil on the program's own Shutdown", err)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("Serve did not return after the drain")
-	}
-}
-
-func TestServe_whenProgramsShutdownOverruns_thenClosesAndDeadlineExceeded(t *testing.T) {
-	addr := freeAddr(t)
-	h, entered, returned := holdHandler()
-	srv := NewServer(addr, h)
-	done := make(chan error, 1)
-	go func() { done <- Serve(context.Background(), srv, 50*time.Millisecond) }()
-	waitUp(t, "http://"+addr+"/")
-	getHold(addr)
-	<-entered
-	go func() { _ = srv.Shutdown(context.Background()) }()
-	select {
-	case err := <-done:
-		if !errors.Is(err, context.DeadlineExceeded) {
-			t.Errorf("Serve = %v, want context.DeadlineExceeded on an overrun", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Serve did not return on the overrun")
+		t.Fatal("Serve did not return when the Shutdown began")
 	}
 	select {
 	case <-returned:
-	case <-time.After(5 * time.Second):
-		t.Error("the handler's connection was not closed on the overrun")
+		t.Error("the handler in flight was cut: Serve closed the server")
+	default:
 	}
 }
 
