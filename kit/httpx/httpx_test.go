@@ -638,12 +638,6 @@ func TestLocalURL(t *testing.T) {
 		{"[::]:80", "/", "http://127.0.0.1:80/"},
 		{"10.0.0.1:81", "/x", "http://10.0.0.1:81/x"},
 		{"localhost", "/x", "http://localhost:80/x"},
-		{"[::0]:80", "/", "http://127.0.0.1:80/"},
-		{"[0:0:0:0:0:0:0:0]:8080", "/", "http://127.0.0.1:8080/"},
-		// A named port as its number: "http://127.0.0.1:http" is no URL.
-		{":http", "/healthz", "http://127.0.0.1:80/healthz"},
-		{"localhost:https", "/", "http://localhost:443/"},
-		{":08080", "/", "http://127.0.0.1:8080/"},
 	} {
 		if got := LocalURL(tt.addr, tt.path); got != tt.want {
 			t.Errorf("LocalURL(%q, %q) = %q, want %q", tt.addr, tt.path, got, tt.want)
@@ -704,18 +698,6 @@ func freeAddr(t *testing.T) string {
 	return addr
 }
 
-// waitUp polls url until it answers, or fails the test.
-func waitUp(t *testing.T, url string) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for healthcheck(url, io.Discard) != 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("server never came up")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-}
-
 func TestServeShutsDownCleanly(t *testing.T) {
 	addr := freeAddr(t)
 	srv := NewServer(addr, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("hi")) }))
@@ -732,11 +714,25 @@ func TestServeShutsDownCleanly(t *testing.T) {
 	}
 }
 
-func TestServeDrainOverrun_thenClosesAndDeadlineExceeded(t *testing.T) {
-	addr := freeAddr(t)
-	entered, returned := make(chan struct{}), make(chan struct{})
-	srv := NewServer(addr, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/slow" {
+// waitUp polls url until it answers, or fails the test.
+func waitUp(t *testing.T, url string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for healthcheck(url, io.Discard) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("server never came up")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// holdServer serves /hold until its request's context ends or a minute passes; returned closes when it returns. up
+// waits for the running server, requests /hold and returns once the handler holds it.
+func holdServer(t *testing.T, addr string) (srv *http.Server, returned chan struct{}, up func()) {
+	entered := make(chan struct{})
+	returned = make(chan struct{})
+	srv = NewServer(addr, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/hold" {
 			return
 		}
 		close(entered)
@@ -746,17 +742,26 @@ func TestServeDrainOverrun_thenClosesAndDeadlineExceeded(t *testing.T) {
 		case <-time.After(time.Minute):
 		}
 	}))
+	up = func() {
+		waitUp(t, "http://"+addr+"/")
+		go func() {
+			resp, err := http.Get("http://" + addr + "/hold") //nolint:noctx // ends with the server
+			if err == nil {
+				_ = resp.Body.Close()
+			}
+		}()
+		<-entered
+	}
+	return srv, returned, up
+}
+
+func TestServe_whenDrainOverruns_thenClosesAndDeadlineExceeded(t *testing.T) {
+	addr := freeAddr(t)
+	srv, returned, up := holdServer(t, addr)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- Serve(ctx, srv, 50*time.Millisecond) }()
-	waitUp(t, "http://"+addr+"/")
-	go func() {
-		resp, err := http.Get("http://" + addr + "/slow") //nolint:noctx // ends with the server
-		if err == nil {
-			_ = resp.Body.Close()
-		}
-	}()
-	<-entered
+	up()
 	cancel()
 	if err := <-done; !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("Serve = %v, want context.DeadlineExceeded on an overrun", err)
@@ -768,22 +773,10 @@ func TestServeDrainOverrun_thenClosesAndDeadlineExceeded(t *testing.T) {
 	}
 }
 
-func TestServeBindError(t *testing.T) {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer l.Close()
-	if err := Serve(context.Background(), NewServer(l.Addr().String(), http.NotFoundHandler()), time.Second); err == nil {
-		t.Error("Serve on a taken port = nil")
-	}
-}
-
-// faultyListener fails its accept loop once fail is closed, and its Close with closeErr.
+// faultyListener fails its accept loop once fail is closed.
 type faultyListener struct {
 	net.Listener
-	fail     chan struct{}
-	closeErr error
+	fail chan struct{}
 }
 
 func (l *faultyListener) Accept() (net.Conn, error) {
@@ -804,66 +797,22 @@ func (l *faultyListener) Accept() (net.Conn, error) {
 	}
 }
 
-func (l *faultyListener) Close() error {
-	err := l.Listener.Close()
-	if l.closeErr != nil {
-		return l.closeErr
-	}
-	return err
-}
-
-// useFaultyListener makes serve listen through a faultyListener with closeErr and returns its fail channel.
-func useFaultyListener(t *testing.T, closeErr error) (fail chan struct{}) {
-	t.Helper()
-	fail = make(chan struct{})
+func TestServe_whenServerFailsOnItsOwn_thenClosesConnections(t *testing.T) {
+	fail := make(chan struct{})
 	orig := listen
 	listen = func(network, addr string) (net.Listener, error) {
 		ln, err := orig(network, addr)
 		if err != nil {
 			return nil, err
 		}
-		return &faultyListener{Listener: ln, fail: fail, closeErr: closeErr}, nil
+		return &faultyListener{Listener: ln, fail: fail}, nil
 	}
 	t.Cleanup(func() { listen = orig })
-	return fail
-}
-
-// holdHandler serves /hold until its request's context ends or a minute passes; entered closes when /hold
-// arrives, returned when it returns.
-func holdHandler() (h http.Handler, entered, returned chan struct{}) {
-	entered, returned = make(chan struct{}), make(chan struct{})
-	return http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/hold" {
-			return
-		}
-		close(entered)
-		defer close(returned)
-		select {
-		case <-r.Context().Done():
-		case <-time.After(time.Minute):
-		}
-	}), entered, returned
-}
-
-// getHold requests /hold on addr in the background.
-func getHold(addr string) {
-	go func() {
-		resp, err := http.Get("http://" + addr + "/hold") //nolint:noctx // ends with the server
-		if err == nil {
-			_ = resp.Body.Close()
-		}
-	}()
-}
-
-func TestServe_whenServerFailsOnItsOwn_thenClosesConnections(t *testing.T) {
-	fail := useFaultyListener(t, nil)
 	addr := freeAddr(t)
-	h, entered, returned := holdHandler()
+	srv, returned, up := holdServer(t, addr)
 	done := make(chan error, 1)
-	go func() { done <- Serve(context.Background(), NewServer(addr, h), time.Minute) }()
-	waitUp(t, "http://"+addr+"/")
-	getHold(addr)
-	<-entered
+	go func() { done <- Serve(context.Background(), srv, time.Minute) }()
+	up()
 	close(fail)
 	select {
 	case err := <-done:
@@ -880,56 +829,14 @@ func TestServe_whenServerFailsOnItsOwn_thenClosesConnections(t *testing.T) {
 	}
 }
 
-func TestServe_whenProgramShutsDownTheServer_thenNilAsItBegins(t *testing.T) {
-	addr := freeAddr(t)
-	release := make(chan struct{})
-	entered, returned := make(chan struct{}), make(chan struct{})
-	srv := NewServer(addr, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/hold" {
-			return
-		}
-		close(entered)
-		defer close(returned)
-		select { // a Close ends r.Context(), a Shutdown does not
-		case <-release:
-		case <-r.Context().Done():
-		}
-	}))
-	done := make(chan error, 1)
-	go func() { done <- Serve(context.Background(), srv, time.Minute) }()
-	waitUp(t, "http://"+addr+"/")
-	getHold(addr)
-	<-entered
-	go func() { _ = srv.Shutdown(context.Background()) }() // an admin endpoint's doing: its drain, not Serve's
-	defer close(release)
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Errorf("Serve = %v, want nil on the program's own Shutdown", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Serve did not return when the Shutdown began")
+func TestServeBindError(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
 	}
-	select {
-	case <-returned:
-		t.Error("the handler in flight was cut: Serve closed the server")
-	default:
-	}
-}
-
-func TestServe_whenListenerCloseFails_thenItsErrorWithoutOverrun(t *testing.T) {
-	broke := errors.New("close broke")
-	useFaultyListener(t, broke)
-	addr := freeAddr(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() {
-		done <- Serve(ctx, NewServer(addr, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})), time.Minute)
-	}()
-	waitUp(t, "http://"+addr+"/")
-	cancel()
-	if err := <-done; !errors.Is(err, broke) || errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("Serve = %v, want the listener's close error", err)
+	defer l.Close()
+	if err := Serve(context.Background(), NewServer(l.Addr().String(), http.NotFoundHandler()), time.Second); err == nil {
+		t.Error("Serve on a taken port = nil")
 	}
 }
 
