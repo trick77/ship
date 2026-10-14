@@ -14,9 +14,12 @@ import (
 const Auto = "auto"
 
 // Shipped reports whether a change to path p reaches consumers: docs, tests and fixtures do not. A deny-list, so an
-// unknown file releases rather than ships untagged.
+// unknown file releases rather than ships untagged. scaffold's templates are canon whatever their name
+// (agents.md, gitignore): ship init writes them into every consumer.
 func Shipped(p string) bool {
 	switch {
+	case strings.HasPrefix(p, "internal/scaffold/templates/"):
+		return true
 	case strings.HasSuffix(p, ".md"), path.Base(p) == "LICENSE", strings.HasSuffix(p, "_test.go"),
 		strings.HasPrefix(p, "testdata/"), strings.Contains(p, "/testdata/"):
 		return false

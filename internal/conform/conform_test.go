@@ -864,7 +864,10 @@ func TestInit_whenScaffoldAllowed_thenKept(t *testing.T) {
 	}
 	ci := read(scaffold.CI)
 	r.out.Reset()
-	if err := Init(r.dir, r.config(ship), r.opts, true); err != nil || strings.Contains(r.out.String(), "@@") {
+	// -diff shows a kept file's canon, labelled, and does not fail on it.
+	if err := Init(r.dir, r.config(ship), r.opts, true); err != nil ||
+		!strings.Contains(r.out.String(), ".github/workflows/ci.yaml: allowed, kept: long CI\n--- a/.github/workflows/ci.yaml\n") ||
+		!strings.Contains(r.out.String(), "AGENTS.md: allowed, kept: own gate wording\n--- a/AGENTS.md\n") {
 		t.Errorf("diff: %v\n%s", err, r.out.String())
 	}
 	for _, fix := range []bool{false, true} {
@@ -884,6 +887,17 @@ func TestInit_whenScaffoldAllowed_thenKept(t *testing.T) {
 		if read(scaffold.CI) != ci || read("AGENTS.md") != agentsMD {
 			t.Errorf("fix %v: allowed file written", fix)
 		}
+	}
+}
+
+// A path-less scaffold allow excuses conform's check, names no file: init, the explicit write command, writes.
+func TestInit_whenPathlessScaffoldAllow_thenWritten(t *testing.T) {
+	r := app(t)
+	r.edit(scaffold.CI, "cancel-in-progress: true", "cancel-in-progress: false")
+	r.out.Reset()
+	if err := Init(r.dir, r.config(appShip+"allow:\n  - { rule: scaffold, why: any drift }\n"), r.opts, false); err != nil ||
+		r.out.String() != "ship: wrote .github/workflows/ci.yaml\n" {
+		t.Errorf("%v\n%s", err, r.out.String())
 	}
 }
 

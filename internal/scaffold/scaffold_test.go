@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/trick77/ship/internal/config"
+	"github.com/trick77/ship/internal/gitx"
 )
 
 func parse(t *testing.T, s string) *config.Config {
@@ -390,8 +391,9 @@ const (
 		"  No `.golangci.yaml`: ship's config is the family's.\n"
 	agentsKit = "- kit (github.com/trick77/ship/kit): version, `/healthz` `/readyz`, signals and graceful shutdown come from kit,\n" +
 		"  never hand-rolled. Dependabot bumps it in its own group: a v0.x minor may break.\n"
-	agentsRelease = "- Release: by hand only, `gh workflow run Release -f bump=auto` (patch, or the highest `Release: minor|major` line\n" +
-		"  since the last tag; a minor or major needs a `Release-note: …` line too).\n"
+	agentsRelease = "- Release: by hand only, `gh workflow run Release -f bump=auto`: the highest `Release: minor|major` line since the\n" +
+		"  last tag (with a `Release-note: …` line), else patch; nothing when only docs or tests changed. The first release\n" +
+		"  needs `-f bump=patch`: auto needs a previous tag.\n"
 	agentsImages = "  Images are built, scanned and signed on GitHub only, never from a laptop.\n"
 	agentsTail   = "- Commit subjects + PR titles: Go style `area: what` (go.dev/doc/contribute), gated by ship; release notes group\n" +
 		"  them by area.\n<!-- ship:end -->\n"
@@ -439,12 +441,12 @@ func TestFiles_whenGitIgnore_thenPlaywrightAndUICoverage(t *testing.T) {
 	cover := "# The UI tests' coverage report (ui.lcov's dir); Go's lives in the git dir.\n"
 	for ship, want := range map[string]string{
 		"":                          head + "# ship:end\n",
-		"ui: {}\n":                  head + cover + "/coverage/ui/\n# ship:end\n",
-		"ui:\n  dir: backend/web\n": head + cover + "/backend/coverage/ui/\n# ship:end\n",
+		"ui: {}\n":                  head + cover + "/coverage/ui/*\n# ship:end\n",
+		"ui:\n  dir: backend/web\n": head + cover + "/backend/coverage/ui/*\n# ship:end\n",
 		"ui:\n  lcov: lcov.info\n":  head + "# ship:end\n",
 		// Cleaned first; a coverage segment anywhere in the dir.
-		"ui:\n  lcov: ./backend/coverage/ui/../ui/x.info\n": head + cover + "/backend/coverage/ui/\n# ship:end\n",
-		"ui:\n  lcov: coverage/x.info\n":                    head + cover + "/coverage/\n# ship:end\n",
+		"ui:\n  lcov: ./backend/coverage/ui/../ui/x.info\n": head + cover + "/backend/coverage/ui/*\n# ship:end\n",
+		"ui:\n  lcov: coverage/x.info\n":                    head + cover + "/coverage/*\n# ship:end\n",
 		// A source dir or one outside the repo is never ignored.
 		"ui:\n  lcov: ui/cov/x.info\n":        head + "# ship:end\n",
 		"ui:\n  lcov: ui/x.info\n":            head + "# ship:end\n",
@@ -550,6 +552,108 @@ func TestPrintDiff(t *testing.T) {
 	}
 	if PrintDiff(&b, files[:1]) {
 		t.Error("same file reported")
+	}
+}
+
+// A kept file's diff shows the canon, labelled, but neither counts nor is written.
+func TestPrintDiff_whenKept_thenShownNotCounted(t *testing.T) {
+	dir := t.TempDir()
+	files := []File{{Path: "kept", Exists: true, Have: []byte("a\n"), Want: []byte("b\n"), Kept: "own wording"}}
+	var b strings.Builder
+	if PrintDiff(&b, files) {
+		t.Error("kept file counted")
+	}
+	if want := "kept: allowed, kept: own wording\n--- a/kept\n+++ b/kept (ship init)\n@@ -1,1 +1,1 @@\n-a\n+b\n"; b.String() != want {
+		t.Errorf("diff:\n%s\nwant:\n%s", b.String(), want)
+	}
+	if wrote, err := Write(dir, files); err != nil || len(wrote) != 0 {
+		t.Errorf("wrote %v %v", wrote, err)
+	}
+}
+
+// The block ignores the coverage dir's contents, not the dir: a negation after it re-includes a file (git never
+// looks inside an ignored dir).
+func TestFiles_whenGitIgnoreNegation_thenRepoLineWins(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := gitx.Git(dir, "init", "-q"); err != nil {
+		t.Fatal(err)
+	}
+	write(t, dir, GitIgnore, "!/coverage/ui/badge.svg\n")
+	files, err := Files(dir, parse(t, "ui: {}\n"), Facts{Visibility: "public"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Write(dir, files); err != nil {
+		t.Fatal(err)
+	}
+	for p, ignored := range map[string]bool{"coverage/ui/badge.svg": false, "coverage/ui/lcov.info": true,
+		"coverage/ui/html/index.html": true, ".playwright-mcp/x.png": true, "coverage/other.txt": false} {
+		write(t, dir, p, "x\n")
+		// check-ignore exits 0 for an ignored path, 1 for one that is not.
+		if _, err := gitx.Git(dir, "check-ignore", "-q", p); (err == nil) != ignored {
+			t.Errorf("%s ignored = %v, want %v", p, err == nil, ignored)
+		}
+	}
+}
+
+// Only a whole line is a marker (the begin line with a note in parentheses): a lookalike comment or a marker quoted
+// in prose is the repo's line, not a broken block.
+func TestFiles_whenMarkerLookalikes_thenRepoLines(t *testing.T) {
+	c := parse(t, "images:\n  - {}\n")
+	render := func(have map[string]string) []File {
+		t.Helper()
+		dir := t.TempDir()
+		for p, s := range have {
+			write(t, dir, p, s)
+		}
+		files, err := Files(dir, c, Facts{Repo: "r", Visibility: "public"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return files
+	}
+	files := render(map[string]string{
+		Makefile: "# ship:endpoint is the API's\nbuild:\n\tgo build ./...\n",
+		Agents:   "# AGENTS.md\n\nShip's block sits between `" + MDBegin + "` and `" + MDEnd + "`.\n",
+	})
+	mk, ag := byPath(t, files, Makefile), byPath(t, files, Agents)
+	if mk.Manual != "" || !strings.HasPrefix(string(mk.Want), "# ship:endpoint is the API's\nbuild:\n\tgo build ./...\n\n"+Begin) {
+		t.Errorf("Makefile: %q\n%s", mk.Manual, mk.Want)
+	}
+	if ag.Manual != "" || !strings.HasPrefix(string(ag.Want), "# AGENTS.md\n\nShip's block sits between `") ||
+		strings.Count(string(ag.Want), "\n"+MDBegin+"\n") != 1 {
+		t.Errorf("AGENTS.md: %q\n%s", ag.Manual, ag.Want)
+	}
+	// A rendered block with an older begin note and a `# ship:end of x` comment after it: the first pair is the
+	// block, replaced in place, the comment kept.
+	block := string(mk.Want[bytes.Index(mk.Want, []byte(Begin)):])
+	old := strings.Replace(block, Begin+" (owned by ship init)\n", Begin+" (old note)\n", 1)
+	if old == block {
+		t.Fatalf("Makefile begin line changed:\n%s", block)
+	}
+	have := "build:\n\tgo build ./...\n\n" + strings.Replace(old, "lint:\n", "lint: tidy\n", 1) + "# ship:end of x\n"
+	mk = byPath(t, render(map[string]string{Makefile: have}), Makefile)
+	if mk.Manual != "" || string(mk.Want) != "build:\n\tgo build ./...\n\n"+block+"# ship:end of x\n" {
+		t.Errorf("Makefile: %q\n%s", mk.Manual, mk.Want)
+	}
+}
+
+// A Makefile a scaffold allow names is the repo's: init never writes it, so no make check; a path-less allow names
+// no file.
+func TestFiles_whenMakefileAllowed_thenShipGate(t *testing.T) {
+	for allow, owned := range map[string]bool{
+		"  - { rule: scaffold, path: Makefile, why: own targets }\n": false,
+		"  - { rule: scaffold, why: any drift }\n":                   true,
+	} {
+		files, err := Files(t.TempDir(), parse(t, "images:\n  - {}\nallow:\n"+allow), Facts{Repo: "r", Visibility: "public"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ag := string(byPath(t, files, Agents).Want)
+		if strings.Contains(ag, agentsMake) != owned || strings.Contains(ag, agentsShip) == owned ||
+			strings.Contains(ag, "Makefile, ") != owned {
+			t.Errorf("%sAGENTS.md:\n%s", allow, ag)
+		}
 	}
 }
 

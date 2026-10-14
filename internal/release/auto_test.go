@@ -16,6 +16,8 @@ func TestShipped(t *testing.T) {
 		"testdata/ui/package.json": false, "internal/x/testdata/a": false,
 		"main.go": true, "go.mod": true, ".github/workflows/check.yaml": true, ".golangci.yaml": true,
 		"testdata.go": true,
+		// Canon, written into every consumer: whatever the extension.
+		"internal/scaffold/templates/agents.md": true, "internal/scaffold/templates/gitignore": true,
 	} {
 		if Shipped(p) != want {
 			t.Errorf("Shipped(%q) = %v", p, !want)

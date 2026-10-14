@@ -26,7 +26,7 @@ import (
 
 // Rule names, as ship.yaml allow entries spell them.
 const (
-	Scaffold      = "scaffold"
+	Scaffold      = scaffold.Rule
 	Workflows     = "workflows"
 	Visibility    = "visibility"
 	Dependabot    = "dependabot"
@@ -161,21 +161,25 @@ func Run(root string, c *config.Config, o Options) error {
 	return e.report()
 }
 
-// Init writes the owned files that differ from ship's templates, except those a scaffold allow keeps. diff: print
-// what would change, write nothing, error when anything differs.
+// Init writes the owned files that differ from ship's templates, except those a scaffold allow naming their path
+// keeps. diff: print what would change (a kept file's diff labelled), write nothing, error when anything init would
+// write or leaves by hand differs.
 func Init(root string, c *config.Config, o Options, diff bool) error {
 	e := newEnv(root, c, o)
 	if e.renderErr != nil {
 		return e.renderErr
 	}
-	// A scaffold allow means the repo owns that file's difference: init leaves it as it is.
-	files := slices.DeleteFunc(slices.Clone(e.files), func(f scaffold.File) bool {
-		a, ok := e.c.Allowed(Scaffold, nil, f.Path)
-		if ok && f.Differs() {
-			_, _ = fmt.Fprintf(e.o.Out, "ship: kept %s (allowed: %s)\n", f.Path, a.Why)
+	// An allow naming the file means the repo owns its difference: init leaves it as it is. A path-less scaffold
+	// allow excuses conform's check only: init is the explicit write command.
+	files := slices.Clone(e.files)
+	for i, f := range files {
+		if a, ok := e.c.AllowedPath(Scaffold, f.Path); ok {
+			files[i].Kept = a.Why
+			if !diff && f.Differs() {
+				_, _ = fmt.Fprintf(e.o.Out, "ship: kept %s (allowed: %s)\n", f.Path, a.Why)
+			}
 		}
-		return ok
-	})
+	}
 	if diff {
 		if scaffold.PrintDiff(e.o.Out, files) {
 			return errors.New("init -diff: owned files differ from ship's templates (ship init writes them)")
@@ -191,7 +195,7 @@ func Init(root string, c *config.Config, o Options, diff bool) error {
 	}
 	var manual []string
 	for _, f := range files {
-		if f.Manual != "" {
+		if f.Manual != "" && f.Kept == "" {
 			manual = append(manual, fmt.Sprintf("  %s: %s", f.Path, f.Manual))
 		}
 	}

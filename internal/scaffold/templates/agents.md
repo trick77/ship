@@ -28,8 +28,9 @@
 - kit (github.com/trick77/ship/kit): version, `/healthz` `/readyz`, signals and graceful shutdown come from kit,
   never hand-rolled. Dependabot bumps it in its own group: a v0.x minor may break.
 [[ end -]]
-- Release: by hand only, `gh workflow run Release -f bump=auto` (patch, or the highest `Release: minor|major` line
-  since the last tag; a minor or major needs a `Release-note: …` line too).
+- Release: by hand only, `gh workflow run Release -f bump=auto`: the highest `Release: minor|major` line since the
+  last tag (with a `Release-note: …` line), else patch; nothing when only docs or tests changed. The first release
+  needs `-f bump=patch`: auto needs a previous tag.
 [[- if .Images ]]
   Images are built, scanned and signed on GitHub only, never from a laptop.
 [[- end ]]

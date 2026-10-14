@@ -37,13 +37,27 @@ const (
 	MDEnd   = "<!-- ship:end -->"
 )
 
-// markers are a block's first and last line prefixes.
+// markers are a block's first and last lines. A line is a marker only as a whole (trimmed): the begin line may carry
+// a note in parentheses (`# ship:begin (owned by ship init)`), the end line nothing; `# ship:endpoint`, `# ship:end
+// of x` or a marker quoted inside other text are the repo's lines.
 type markers struct{ begin, end string }
+
+// isBegin and isEnd report whether line is the begin or end marker.
+func (m markers) isBegin(line string) bool {
+	l := strings.TrimSpace(line)
+	return l == m.begin || strings.HasPrefix(l, m.begin+" (") && strings.HasSuffix(l, ")")
+}
+
+func (m markers) isEnd(line string) bool { return strings.TrimSpace(line) == m.end }
 
 var (
 	hashMarks = markers{Begin, End}
 	mdMarks   = markers{MDBegin, MDEnd}
 )
+
+// Rule is conform's rule for the owned files, as ship.yaml allow entries spell it: an entry naming a file's path
+// keeps that file the repo's (ship init never writes it).
+const Rule = "scaffold"
 
 // Owned file paths, repo-relative.
 const (
@@ -89,6 +103,8 @@ type File struct {
 	Want   []byte
 	// Manual is set when ship cannot write the file itself (Want is then unset).
 	Manual string
+	// Kept is the why of the scaffold allow naming this file: the repo's, never written; a diff still shows the canon.
+	Kept string
 }
 
 // Differs reports whether the file needs ship init (or a hand fix).
@@ -99,7 +115,7 @@ type data struct {
 	Compose                                 bool
 	// MakefileOwned: the Makefile carries ship's block, so its gate is make check (else ship check).
 	MakefileOwned bool
-	// UICoverage is the UI test runner's report dir, anchored (/coverage/ui/): the only coverage ship's gate writes
+	// UICoverage is the UI test runner's report dir's contents, anchored (/coverage/ui/*): the only coverage ship's gate writes
 	// into the tree (Go's lives in the git dir).
 	UICoverage                                 string
 	Branches, GoDir, GoDirAbs, UIDir, UIDirAbs string
@@ -140,23 +156,24 @@ func Files(root string, c *config.Config, f Facts) ([]File, error) {
 		d.UICoverage = uiCoverage(c.UI.Lcov)
 	}
 	var files []File
-	add := func(p, tmpl, manual string, block blockFunc) error {
+	// add renders p and returns the File it appended.
+	add := func(p, tmpl, manual string, block blockFunc) (File, error) {
 		fl := File{Path: p}
 		b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(p))) //nolint:gosec // the repo's own files
 		switch {
 		case err == nil:
 			fl.Have, fl.Exists = b, true
 		case !errors.Is(err, fs.ErrNotExist):
-			return err
+			return fl, err
 		}
 		if manual != "" {
 			fl.Manual = manual
 			files = append(files, fl)
-			return nil
+			return fl, nil
 		}
 		want, err := render(tmpl, d)
 		if err != nil {
-			return err
+			return fl, err
 		}
 		if block != nil {
 			fl.Want, fl.Manual = block(fl.Have, want)
@@ -164,16 +181,16 @@ func Files(root string, c *config.Config, f Facts) ([]File, error) {
 			fl.Want = []byte(want)
 		}
 		files = append(files, fl)
-		return nil
+		return fl, nil
 	}
 	visibility := ""
 	if f.Visibility == "" {
 		visibility = "repo visibility unknown (set ship.yaml visibility: or fix the lookup), ci.yaml cannot be rendered"
 	}
-	if err := add(CI, "ci.yaml", visibility, nil); err != nil {
+	if _, err := add(CI, "ci.yaml", visibility, nil); err != nil {
 		return nil, err
 	}
-	if err := add(Release, "release.yaml", "", nil); err != nil {
+	if _, err := add(Release, "release.yaml", "", nil); err != nil {
 		return nil, err
 	}
 	if d.Images {
@@ -182,35 +199,38 @@ func Files(root string, c *config.Config, f Facts) ([]File, error) {
 			pkgs = "no GitHub origin remote: the image package names are unknown"
 		}
 		d.Packages = packages(f.Repo, c.Images)
-		if err := add(Cleanup, "cleanup-images.yaml", pkgs, nil); err != nil {
+		if _, err := add(Cleanup, "cleanup-images.yaml", pkgs, nil); err != nil {
 			return nil, err
 		}
 	}
-	if err := add(Dependabot, "dependabot.yaml", "", nil); err != nil {
+	if _, err := add(Dependabot, "dependabot.yaml", "", nil); err != nil {
 		return nil, err
 	}
 	if d.Images {
-		if err := add(Ignore, "dockerignore", "", prepend); err != nil {
+		if _, err := add(Ignore, "dockerignore", "", prepend(hashMarks)); err != nil {
 			return nil, err
 		}
 	}
 	if d.UI {
 		for _, t := range []struct{ name, tmpl string }{{ESLint, "eslint.config.js"},
 			{TSConfigNode, "tsconfig.node.json"}, {NPMRC, "npmrc"}} {
-			if err := add(path.Join(d.UIDir, t.name), t.tmpl, "", nil); err != nil {
+			if _, err := add(path.Join(d.UIDir, t.name), t.tmpl, "", nil); err != nil {
 				return nil, err
 			}
 		}
 	}
 	// A library without a Makefile needs none; an app (images or a UI) gets the gate's targets.
 	if _, err := os.Stat(filepath.Join(root, Makefile)); err == nil || d.Images || d.UI {
-		if err := add(Makefile, "Makefile", "", appendBlock(hashMarks, makeTargets)); err != nil {
+		mk, err := add(Makefile, "Makefile", "", appendBlock(hashMarks, makeTargets))
+		if err != nil {
 			return nil, err
 		}
-		// Owned only once the block merges: a Makefile left by hand has no make check yet, AGENTS.md says ship's.
-		d.MakefileOwned = files[len(files)-1].Manual == ""
+		// Owned only once the block merges and init may write it: a Makefile left by hand or kept by a scaffold
+		// allow has no make check yet, AGENTS.md says ship's.
+		_, kept := c.AllowedPath(Rule, Makefile)
+		d.MakefileOwned = mk.Manual == "" && !kept
 	}
-	if err := add(GitIgnore, "gitignore", "", prepend); err != nil {
+	if _, err := add(GitIgnore, "gitignore", "", prepend(hashMarks)); err != nil {
 		return nil, err
 	}
 	agents := ""
@@ -218,7 +238,7 @@ func Files(root string, c *config.Config, f Facts) ([]File, error) {
 		agents = "repo visibility unknown (set ship.yaml visibility: or fix the lookup), AGENTS.md's CI line cannot " +
 			"be rendered"
 	}
-	if err := add(Agents, "agents.md", agents, appendBlock(mdMarks, nil)); err != nil {
+	if _, err := add(Agents, "agents.md", agents, appendBlock(mdMarks, nil)); err != nil {
 		return nil, err
 	}
 	return files, nil
@@ -226,7 +246,8 @@ func Files(root string, c *config.Config, f Facts) ([]File, error) {
 
 func abs(dir string) string { return path.Join("/", filepath.ToSlash(dir)) }
 
-// uiCoverage is ui.lcov's dir, anchored, for .gitignore: only a report dir in the repo (a coverage segment in its
+// uiCoverage is ui.lcov's dir's contents, anchored, for .gitignore (`/coverage/ui/*`, not the dir: git never looks
+// inside an ignored dir, so a later `!/coverage/ui/badge.svg` would re-include nothing): only a report dir in the repo (a coverage segment in its
 // path), never a source dir (ui.lcov: ui/lcov.info would ignore /ui/) nor one outside the repo; else none.
 func uiCoverage(lcov string) string {
 	c, escapes := config.CleanDir(lcov)
@@ -234,7 +255,7 @@ func uiCoverage(lcov string) string {
 	if escapes || dir == "." || !slices.Contains(strings.Split(dir, "/"), "coverage") {
 		return ""
 	}
-	return abs(dir) + "/"
+	return abs(dir) + "/*"
 }
 
 // packages is the cleanup caller's JSON list: ghcr.io/<owner>/<repo><suffix>, as ship release names the images.
@@ -279,7 +300,7 @@ func render(name string, d data) (string, error) {
 // block's extent is unknown, so ship neither splices nor appends (a second block would follow the half one).
 func blockRange(have []byte, m markers) (start, end int, found bool, broken string) {
 	s := string(have)
-	begins, ends := lineStarts(s, m.begin), lineStarts(s, m.end)
+	begins, ends := lineStarts(s, m.isBegin), lineStarts(s, m.isEnd)
 	switch {
 	case len(begins) == 0 && len(ends) == 0:
 		return 0, 0, false, ""
@@ -295,14 +316,18 @@ func blockRange(have []byte, m markers) (start, end int, found bool, broken stri
 	return i, j + k + 1, true, ""
 }
 
-// lineStarts are the offsets of the lines starting with prefix.
-func lineStarts(s, prefix string) []int {
+// lineStarts are the offsets of the lines is matches.
+func lineStarts(s string, is func(line string) bool) []int {
 	var at []int
 	for i := 0; i < len(s); {
-		if strings.HasPrefix(s[i:], prefix) {
+		n := strings.IndexByte(s[i:], '\n')
+		line := s[i:]
+		if n >= 0 {
+			line = s[i : i+n]
+		}
+		if is(line) {
 			at = append(at, i)
 		}
-		n := strings.IndexByte(s[i:], '\n')
 		if n < 0 {
 			break
 		}
@@ -325,18 +350,20 @@ func replaceBlock(have []byte, block string, m markers) (b []byte, found bool, b
 type blockFunc func(have []byte, block string) ([]byte, string)
 
 // prepend puts the block first, so the repo's own lines after it win: a .dockerignore allowlist (`*`) narrowed by
-// the repo, a .gitignore negation (`!/coverage/ui/badge.svg`).
-func prepend(have []byte, block string) ([]byte, string) {
-	b, found, broken := replaceBlock(have, block, hashMarks)
-	switch {
-	case broken != "":
-		return nil, broken
-	case found:
-		return b, ""
-	case len(have) == 0:
-		return []byte(block), ""
+// the repo, a .gitignore negation (`!/coverage/ui/badge.svg`, which the block's `/coverage/ui/*` lets through).
+func prepend(m markers) blockFunc {
+	return func(have []byte, block string) ([]byte, string) {
+		b, found, broken := replaceBlock(have, block, m)
+		switch {
+		case broken != "":
+			return nil, broken
+		case found:
+			return b, ""
+		case len(have) == 0:
+			return []byte(block), ""
+		}
+		return slices.Concat([]byte(block+"\n"), have), ""
 	}
-	return slices.Concat([]byte(block+"\n"), have), ""
 }
 
 // makeTargets: the Makefile's lines the block defines. Targets of the same name outside the block would override
@@ -379,11 +406,11 @@ func appendBlock(m markers, guard func(have []byte) string) blockFunc {
 	}
 }
 
-// Write writes every file that differs and ship can render; it returns the paths written.
+// Write writes every file that differs, ship can render and no allow keeps; it returns the paths written.
 func Write(root string, files []File) ([]string, error) {
 	var wrote []string
 	for _, f := range files {
-		if f.Manual != "" || !f.Differs() {
+		if f.Manual != "" || f.Kept != "" || !f.Differs() {
 			continue
 		}
 		p := filepath.Join(root, filepath.FromSlash(f.Path))
@@ -398,14 +425,19 @@ func Write(root string, files []File) ([]string, error) {
 	return wrote, nil
 }
 
-// PrintDiff writes a diff of every differing file to w and reports whether any differs.
+// PrintDiff writes a diff of every differing file to w and reports whether any differs that ship init writes or
+// leaves by hand. A kept file's diff is shown, labelled, so the canon stays visible, but does not count.
 func PrintDiff(w io.Writer, files []File) bool {
 	differs := false
 	for _, f := range files {
 		if !f.Differs() {
 			continue
 		}
-		differs = true
+		if f.Kept != "" {
+			_, _ = fmt.Fprintf(w, "%s: allowed, kept: %s\n", f.Path, f.Kept)
+		} else {
+			differs = true
+		}
 		if f.Manual != "" {
 			_, _ = fmt.Fprintf(w, "%s: %s\n", f.Path, f.Manual)
 			continue

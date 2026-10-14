@@ -74,7 +74,7 @@ cleaned like go.dir (`./kit/auth/` is `kit/auth`); one outside the repo (absolut
 duplicate fails.
 
 The Go coverage report lives in the git dir (`.git/ship/`), never in the tree. The UI test runner's (`ui.lcov`'s
-dir) is in `.gitignore`'s ship block.
+dir) is in `.gitignore`'s ship block when that dir has a `coverage` segment; else gitignore it yourself.
 
 ## Commands
 
@@ -183,15 +183,19 @@ each is the repo's. Owned means byte-equal.
 |---|---|---|---|
 | `Makefile` | `# ship:begin` … `# ship:end` | last (the default goal stays the repo's) | `check`, `hooks`, `lint` on master's ship; apps, or one that exists. Its own `check:`/`hooks:`/`lint:`/`SHIP_CMD` outside the block: moved in by hand |
 | `.dockerignore` | `# ship:begin` … `# ship:end` | first (later lines win) | the build context; images |
-| `.gitignore` | `# ship:begin` … `# ship:end` | first (later lines win: a negation like `!/coverage/ui/badge.svg`) | `/.playwright-mcp/`, the UI coverage dir (`ui.lcov`'s, only in the repo with a `coverage` segment); always |
+| `.gitignore` | `# ship:begin` … `# ship:end` | first (later lines win: a negation like `!/coverage/ui/badge.svg`) | `/.playwright-mcp/`, the UI coverage dir's contents (`ui.lcov`'s dir + `/*`, so a negation reaches in; only in the repo with a `coverage` segment); always |
 | `AGENTS.md` | `<!-- ship:begin -->` … `<!-- ship:end -->` | last | gate (`make check` once the Makefile's block is ship's, else `ship check`), hooks, CI (by visibility: unknown = by hand), owned files, kit (images), release command, commit subjects; always |
 
 A missing file is created holding only its block; a file without one gets it appended (prepended), an existing
-block is replaced in place. Broken markers (a lone begin or end, an end before the begin, a second block) are by
-hand: ship neither splices nor appends. A file `allow`ed for `scaffold` is the repo's: `ship init` keeps it.
+block is replaced in place. A marker is a whole line (the begin line may end in a `(…)` note); `# ship:endpoint` or
+a marker quoted in prose is the repo's line. Broken markers (a lone begin or end, an end before the begin, a second
+block) are by hand: ship neither splices nor appends. A file a `scaffold` allow names by `path` is the repo's:
+`ship init` keeps it (`-diff` still shows its canon, labelled, not failing); a path-less one only excuses conform. A
+kept Makefile has no `make check`: AGENTS.md says `ship check`.
 The CI caller's `node-version` is the Containerfile's `node:N` builder major (26 without one): Dependabot moves the
 builder, `ship init` moves CI after it.
-`ship init -diff` prints the difference, writes nothing, exits 1 when anything differs.
+`ship init -diff` prints the difference, writes nothing, exits 1 when anything it would write (or leaves by hand)
+differs.
 
 | rule | what | allowable |
 |---|---|---|
