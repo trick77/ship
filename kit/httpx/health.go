@@ -2,11 +2,11 @@ package httpx
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/netip"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/trick77/ship/kit/logging"
@@ -23,176 +23,98 @@ type Check struct {
 // it until the orchestrator's own timeout reports something vaguer.
 const CheckTimeout = 5 * time.Second
 
-// DefaultReadyInterval is how long /readyz serves one run of the checks: shorter than any orchestrator's probe
-// period, long enough that a probe storm on a public /readyz costs the dependencies one run per interval.
-const DefaultReadyInterval = 2 * time.Second
-
-// HealthOptions shapes HealthWith. The zero value is Health.
-type HealthOptions struct {
-	// ReadyInterval is how long one run's result answers /readyz, DefaultReadyInterval when zero. Negative runs the
-	// checks for every probe; concurrent probes still share one run.
-	ReadyInterval time.Duration
-}
-
-// Health registers the probes on mux with the default HealthOptions.
+// Health registers the probes on mux.
 //
 // GET /healthz is liveness: 200 "ok" while the process serves. It checks nothing, because a dependency outage is not
 // fixed by a restart, and a liveness probe that fails on one restarts every replica into the same outage.
 //
 // GET /readyz is readiness: every check in order, 503 at the first failure with the check's name. The error itself
-// goes to log, never the body: the probe answers unauthenticated callers, and errors carry DSNs and host names.
+// goes to log.
 //
-// The checks run at most once per ReadyInterval (2s): a /readyz reachable from outside must not let anyone hammer a
-// database or daemon by probing it. Within the interval a probe gets the last run's result; after it, the next probe
-// runs the checks and waits for them, a stale result is never served past the interval. Probes arriving during a run
-// wait for that run instead of starting their own. The run belongs to no probe: a prober that hangs up stops waiting,
-// the run finishes under CheckTimeout for the rest, and its result is cached all the same.
+// Both answer only a direct caller on this host: the peer is loopback and the request carries no X-Forwarded-For,
+// Forwarded or X-Real-IP. Anyone else gets 404, as for a path that does not exist. The probes are the
+// orchestrator's, which probes from inside (Healthcheck, an exec probe); nobody else needs to know they exist. A
+// proxy in the same network namespace (a sidecar) connects from loopback too, its forwarding header refuses it.
 //
 // The log reports transitions, not probes: an orchestrator probes every few seconds, so a line per failing probe
 // buries the log for as long as a dependency is down. One warn when a check starts failing (its name and error),
 // one info when the probe passes again; the same check failing again stays silent, a different one warns anew.
 // AccessLog leaves both paths out (AccessLogOptions.ProbePaths): this log is their record.
 func Health(mux *http.ServeMux, log *slog.Logger, checks ...Check) {
-	HealthWith(mux, log, HealthOptions{}, checks...)
-}
-
-// HealthWith registers the probes Health describes, shaped by o.
-func HealthWith(mux *http.ServeMux, log *slog.Logger, o HealthOptions, checks ...Check) {
 	if log == nil {
 		log = slog.Default()
 	}
-	if o.ReadyInterval == 0 {
-		o.ReadyInterval = DefaultReadyInterval
-	}
-	rd := &readiness{checks: checks, log: log, interval: o.ReadyInterval}
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+	rd := &readiness{checks: checks, log: log}
+	mux.HandleFunc("GET /healthz", local(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		_, _ = w.Write([]byte("ok\n"))
-	})
-	mux.HandleFunc("GET /readyz", rd.serve)
+	}))
+	mux.HandleFunc("GET /readyz", local(rd.serve))
 }
 
-// readiness runs the checks for /readyz: one run at a time, its result cached for interval.
+// local serves h to a direct caller on this host only, 404 to anyone else (see Health).
+func local(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !isLocal(r) {
+			http.NotFound(w, r)
+			return
+		}
+		h(w, r)
+	}
+}
+
+// isLocal: the TCP peer is loopback and no proxy forwarded the request. A forwarding header only ever refuses, so
+// a caller cannot add one to get in.
+func isLocal(r *http.Request) bool {
+	for _, h := range []string{"X-Forwarded-For", "Forwarded", "X-Real-Ip"} {
+		if _, ok := r.Header[h]; ok {
+			return false
+		}
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return false
+	}
+	ip, err := netip.ParseAddr(host)
+	return err == nil && ip.Unmap().IsLoopback()
+}
+
+// readiness runs the checks for /readyz and remembers the last state for the transition log.
 type readiness struct {
-	checks   []Check
-	log      *slog.Logger
-	interval time.Duration
+	checks []Check
+	log    *slog.Logger
 
 	mu      sync.Mutex
-	last    readyResult
-	at      time.Time     // when last was recorded; zero before the first run
-	flight  chan struct{} // closed when the run in progress ends; nil when none runs
-	down    bool          // the last logged transition was a failure
-	failing string        // the check it named
-}
-
-type readyResult struct {
-	failed bool
-	check  string // the failing check's name
+	down    bool   // the last logged transition was a failure
+	failing string // the check it named
 }
 
 func (rd *readiness) serve(w http.ResponseWriter, r *http.Request) {
-	// A prober already gone starts no run on its behalf. Answered 503 all the same: a handler that writes nothing
-	// sends 200, and nothing may read as ready that no check confirmed.
+	ctx, cancel := context.WithTimeout(r.Context(), CheckTimeout)
+	defer cancel()
 	var (
-		res readyResult
-		ok  = r.Context().Err() == nil
+		check string
+		err   error
 	)
-	if ok {
-		res, ok = rd.result(r.Context())
+	for _, c := range rd.checks {
+		if err = c.Run(ctx); err != nil {
+			check = c.Name
+			break
+		}
 	}
-	if !ok {
-		WriteJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable"})
-		return
-	}
-	if res.failed {
-		WriteJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable", "check": res.check})
+	rd.transition(ctx, check, err)
+	if err != nil {
+		WriteJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable", "check": check})
 		return
 	}
 	WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// result is the cached result while fresh, else the result of the run in progress, started if none is. false: ctx
-// ended before the run did.
-func (rd *readiness) result(ctx context.Context) (readyResult, bool) {
-	rd.mu.Lock()
-	if !rd.at.IsZero() && rd.interval > 0 && time.Since(rd.at) < rd.interval {
-		defer rd.mu.Unlock()
-		return rd.last, true
-	}
-	done := rd.flight
-	if done == nil {
-		done = make(chan struct{})
-		rd.flight = done
-		// Detached from the prober: its hang-up must not fail the run every waiter shares. Values (trace ids) stay
-		// for the transition log.
-		go rd.run(context.WithoutCancel(ctx), done)
-	}
-	rd.mu.Unlock()
-	select {
-	case <-done:
-	case <-ctx.Done():
-		return readyResult{}, false
-	}
-	rd.mu.Lock()
-	defer rd.mu.Unlock()
-	return rd.last, true
-}
-
-// run runs the checks, logs a transition, records the result and ends the flight.
-func (rd *readiness) run(ctx context.Context, done chan struct{}) {
-	ctx, cancel := context.WithTimeout(ctx, CheckTimeout)
-	defer cancel()
-	type outcome struct {
-		check string
-		err   error
-	}
-	out := make(chan outcome, 1) // buffered: a check that outlives the run must not block on sending
-	var current atomic.Int32     // index of the check running
-	go func() {
-		for i, c := range rd.checks {
-			current.Store(int32(i))
-			if err := runCheck(ctx, c); err != nil {
-				out <- outcome{c.Name, err}
-				return
-			}
-		}
-		out <- outcome{}
-	}()
-	var o outcome
-	select {
-	case o = <-out:
-	case <-ctx.Done():
-		// A check that ignores its context fails at the deadline all the same and is left behind: the flight must
-		// end, or one hung call would hold every later probe for good.
-		select {
-		case o = <-out:
-		default:
-			o = outcome{rd.checks[current.Load()].Name, ctx.Err()}
-		}
-	}
-	res := readyResult{failed: o.err != nil, check: o.check}
-	rd.mu.Lock()
-	defer rd.mu.Unlock()
-	rd.transition(ctx, o.check, o.err)
-	rd.last, rd.at, rd.flight = res, time.Now(), nil
-	close(done)
-}
-
-// runCheck runs c, a panic counting as its failure: the run is no request's goroutine, net/http would not recover
-// it, and one broken check must not take the process down.
-func runCheck(ctx context.Context, c Check) (err error) {
-	defer func() {
-		if p := recover(); p != nil {
-			err = fmt.Errorf("check panicked: %v", p)
-		}
-	}()
-	return c.Run(ctx)
-}
-
-// transition logs a change of state, under rd.mu. A nil err is ready.
+// transition logs a change of state. A nil err is ready.
 func (rd *readiness) transition(ctx context.Context, check string, err error) {
+	rd.mu.Lock()
+	defer rd.mu.Unlock()
 	switch {
 	case err != nil && (!rd.down || check != rd.failing):
 		rd.log.WarnContext(ctx, "Readiness check failed", "check", check, logging.Err(err))

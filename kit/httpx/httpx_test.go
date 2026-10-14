@@ -159,6 +159,10 @@ func TestAccessLog(t *testing.T) {
 	if !slices.Equal(records, []string{"/status"}) {
 		t.Errorf("OnRecord ran for %q, want the failing quiet path only", records)
 	}
+	// A 404 on a probe path is a caller Health refused, logged like any 404.
+	if l, _ = do("/healthz", ""); l.Status != 404 {
+		t.Errorf("refused probe not logged: %+v", l)
+	}
 	// ProbePaths replaces the default: a probe mounted elsewhere is silent, /readyz is an ordinary path again.
 	opts.ProbePaths = []string{"/probe"}
 	h = AccessLog(log, opts)(mux)
