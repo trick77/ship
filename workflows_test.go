@@ -1,0 +1,114 @@
+package main
+
+import (
+	"os"
+	"slices"
+	"strings"
+	"testing"
+
+	"go.yaml.in/yaml/v3"
+
+	"github.com/trick77/ship/internal/config"
+)
+
+// ship-release's dir choices and CI's release matrix cannot be computed (workflow_dispatch options and a matrix
+// without an extra job are literals): both follow ship.yaml's go.modules.
+func TestShipRelease_whenDispatched_thenEveryModuleOffered(t *testing.T) {
+	c, err := config.Load(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(".github/workflows/ship-release.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var w struct {
+		On struct {
+			WorkflowDispatch struct {
+				Inputs struct {
+					Dir struct {
+						Options []string `yaml:"options"`
+					} `yaml:"dir"`
+				} `yaml:"inputs"`
+			} `yaml:"workflow_dispatch"`
+		} `yaml:"on"`
+	}
+	if err := yaml.Unmarshal(b, &w); err != nil {
+		t.Fatal(err)
+	}
+	// config cleans go.modules: options equal to the cleaned list reach release -dir clean (kit/auth).
+	want := append([]string{"ship"}, c.Go.Modules...)
+	if got := w.On.WorkflowDispatch.Inputs.Dir.Options; !slices.Equal(got, want) {
+		t.Errorf("ship-release dir options %v, want %v (ship + ship.yaml go.modules)", got, want)
+	}
+}
+
+// CI releases on master each module ship.yaml lists, ship itself as "": a module missing here is never tagged.
+func TestCIRelease_whenMaster_thenEveryModuleReleased(t *testing.T) {
+	c, err := config.Load(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(".github/workflows/ci.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var w struct {
+		Jobs struct {
+			Release struct {
+				Strategy struct {
+					Matrix struct {
+						Dir []string `yaml:"dir"`
+					} `yaml:"matrix"`
+				} `yaml:"strategy"`
+			} `yaml:"release"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(b, &w); err != nil {
+		t.Fatal(err)
+	}
+	want := append([]string{""}, c.Go.Modules...)
+	if got := w.Jobs.Release.Strategy.Matrix.Dir; !slices.Equal(got, want) {
+		t.Errorf("ci.yaml release matrix dir %q, want %q (\"\" + ship.yaml go.modules)", got, want)
+	}
+}
+
+// resolve is how everything that runs master's ship finds its sha, before any ship runs: exactly refs/heads/master
+// (ls-remote matches by suffix), a 40-hex sha or a stop with the error. Each copy is shell of its own (a workflow
+// step, the hook, a Makefile, README's function), none can call another; this keeps them one.
+const (
+	resolve = `git ls-remote https://github.com/trick77/ship refs/heads/master | awk '$2 == "refs/heads/master" { print $1 }'`
+	// The guard: bash in the workflows, POSIX sh elsewhere.
+	hexBash = `[[ "$sha" =~ ^[0-9a-f]{40}$ ]] ||`
+	hexSh   = `| grep -Eqx '[0-9a-f]{40}' ||`
+	fail    = `cannot resolve ship's master on GitHub: '$sha'`
+)
+
+func TestMasterResolver_whenCopied_thenSame(t *testing.T) {
+	workflow := `sha="$(` + resolve + `)" ` + hexBash + ` { echo "::error::` + fail + `"; exit 1; } ` +
+		`SHIP="go run github.com/trick77/ship@$sha"`
+	for f, want := range map[string]string{
+		".github/workflows/check.yaml":   workflow,
+		".github/workflows/release.yaml": workflow,
+		"internal/hook/hook.go": `sha="$(` + resolve + `)" printf '%s\n' "$sha" ` + hexSh + ` { echo "pre-push: ` + fail +
+			` (git ls-remote, error above)"; exit 1; } printf '%s\n' "$refs" | go run "github.com/trick77/ship@$sha" pre-push "$@"`,
+		"internal/scaffold/templates/Makefile": `sha=$(` + resolve + `); echo "$sha" ` + hexSh + ` { echo "` + fail +
+			` (git ls-remote, error above)"; exit 1; }; go run github.com/trick77/ship@$sha`,
+		"README.md": `sha="$(` + resolve + `)" printf '%s\n' "$sha" ` + hexSh + ` { echo "ship: ` + fail +
+			` (git ls-remote, error above)" >&2; return 1; } go run "github.com/trick77/ship@$sha" "$@"`,
+	} {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := string(b)
+		if strings.HasSuffix(f, "Makefile") {
+			s = strings.ReplaceAll(s, "$$", "$") // make's $
+		}
+		// A continued line, indentation and line breaks are layout, not the block.
+		s = strings.Join(strings.Fields(strings.ReplaceAll(s, "\\\n", " ")), " ")
+		if !strings.Contains(s, want) {
+			t.Errorf("%s: no resolver block\n%s", f, want)
+		}
+	}
+}

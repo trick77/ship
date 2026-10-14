@@ -15,8 +15,9 @@ as the hook does, and run that.
 ```sh
 ship() {
   local sha
-  sha="$(git ls-remote https://github.com/trick77/ship refs/heads/master | cut -f1)"
-  [ -n "$sha" ] || { echo "ship: cannot resolve ship's master on GitHub (git ls-remote, error above)" >&2; return 1; }
+  sha="$(git ls-remote https://github.com/trick77/ship refs/heads/master | awk '$2 == "refs/heads/master" { print $1 }')"
+  printf '%s\n' "$sha" | grep -Eqx '[0-9a-f]{40}' ||
+    { echo "ship: cannot resolve ship's master on GitHub: '$sha' (git ls-remote, error above)" >&2; return 1; }
   go run "github.com/trick77/ship@$sha" "$@"
 }
 ship hooks   # once per clone: the pre-push hook (runs master's ship on every push)
@@ -36,14 +37,14 @@ go:
   dir: .              # module dir, e.g. backend
   floor: 75           # min line coverage, %
   race: true
-  coverpkg: ./internal/...
+  coverpkg: ./...     # go test -coverpkg (cross-package attribution); e.g. ./internal/... to narrow, "" or null = none
   exclude: [cmd/]     # not counted by either coverage gate
   modules: [kit, kit/auth]   # nested modules (own go.mod), gated like go.dir; see below
 ui:                   # omit for no UI
   dir: ui
   floor: 75
   build: npm ci && npm run build      # tsc -b && vite build: the typecheck
-  lint: npm run lint                  # the default: eslint / prettier --check; "" = none
+  lint: npm run lint                  # eslint / prettier --check, the only value conform passes; "" = none, needs a ui allow
   test: npm run test -- --coverage --coverage.reporter=lcov --coverage.reporter=text-summary  # must write lcov
   lcov: coverage/ui/lcov.info         # repo-relative, vite reportsDirectory "../coverage/ui"; SF: paths relative to ui.dir
   embed: backend/web/dist             # go:embed dir, emptied but for .gitkeep before ui.build; omit for none
@@ -68,7 +69,9 @@ times slower, inside the release job's 30 minutes. Cross-compile Go on the build
 `vendor/`) is listed, or check fails: `go ./...` stops at a nested go.mod, so nothing else would build, lint or test
 it. Each listed module gets go.dir's gates (mod verify, tidy, build, govulncheck, golangci-lint, go test with
 `go.race`), its own floor at `go.floor` (a module is released and imported on its own: the root's lines never carry
-it), and its changed lines in the patch gate; `go.exclude` applies, `go.coverpkg` is go.dir's alone.
+it), and its changed lines in the patch gate; `go.exclude` applies, `go.coverpkg` is go.dir's alone. Entries are
+cleaned like go.dir (`./kit/auth/` is `kit/auth`); one outside the repo (absolute or through `..`), the root or a
+duplicate fails.
 
 The Go coverage report lives in the git dir (`.git/ship/`), never in the tree. Gitignore the UI test runner's
 coverage output.
@@ -140,7 +143,8 @@ intersected with the coverage reports; comment and blank lines never count. `[sk
 message skips it (floors still apply). A report path that names no file of the repo, exactly spelled, fails the
 gate (paths off: wrong `go.dir`, `ui.dir`, `ui.lcov` or vitest root); with a report broken or missing, the patch
 gate does not run rather than pass over the other side alone. Scope is the reports': Go packages outside
-`go.coverpkg` and UI files outside vitest's `coverage.include` are not measured.
+`go.coverpkg` and UI files outside vitest's `coverage.include` are not measured. The default `./...` instruments
+every package for every test binary, the slower run; `./internal/...` or `""` narrows it.
 
 Pre-push: deletes and tags pass; anything else must be HEAD with a clean tree (check tests the tree), then
 `ship check`. A tree with no `ship.yaml` in the index (a branch cut before ship) is refused: rebase it. A hook
@@ -155,7 +159,7 @@ Reusable, for running the same commands on GitHub:
 ```yaml
 jobs:
   check:
-    uses: trick77/ship/.github/workflows/check.yaml@master      # inputs: go-dir, node-version, ui-dir, postgres
+    uses: trick77/ship/.github/workflows/check.yaml@master      # inputs: go-dir, node-version, ui-dir, postgres (deprecated: ship.yaml postgres:)
   release:
     uses: trick77/ship/.github/workflows/release.yaml@master    # inputs: bump, go-dir, dir
   cleanup:
@@ -180,10 +184,10 @@ builder, `ship init` moves CI after it.
 
 | rule | what | allowable |
 |---|---|---|
-| `scaffold` | every owned file equals ship's template | per `path` |
-| `workflows` | ci/release/cleanup callers use `trick77/ship/.github/workflows/<x>.yaml@master`; release: `packages: write` ⇔ images, bump options include `auto`; no other image cleanup action | yes |
+| `scaffold` | every owned file equals ship's template. The rules below read the owned files too; on one `scaffold` fails, not allowed, their findings are dropped (`ship init` rewrites it); an allowed diff keeps them | per `path` |
+| `workflows` | ci/release/cleanup callers use `trick77/ship/.github/workflows/<x>.yaml@master`; release: `packages: write` and `id-token: write` (cosign) ⇔ images, bump options include `auto`; no other image cleanup action, in any workflow | yes |
 | `visibility` | GitHub's visibility (Actions event, else the API unauthenticated, cached a day in the git dir) matches `visibility:`; a failed lookup: `visibility:` stands (a note), unset = FAIL; public: CI on every PR (no `if:`); private: Dependabot-only `if:`, every npm/docker/docker-compose update grouped, ≤ 5 open PRs, cleanup caller with images | yes |
-| `dependabot` | `commit-message: { prefix: deps }` everywhere; gomod, github-actions, npm (UI), docker (Containerfile), docker-compose `/` (a root `compose*.yaml` naming an image by a version tag) present | yes |
+| `dependabot` | `commit-message: { prefix: deps }` everywhere; gomod (go.dir, go.modules), github-actions, npm (UI), docker (Containerfile), docker-compose `/` (a root `compose*.yaml` naming an image by a version tag) present | yes |
 | `containerfile` | per image: `ARG VERSION` into `-X github.com/trick77/ship/kit/version.Version=${VERSION}`, `-trimpath`, non-root final stage, builder `golang:X.Y` = go.mod's and ≥ ship's Go floor (1.27), builder `node:N` ≥ ship's Node floor (26), every base (not a stage, `scratch` or `${ARG}`) with a tag or digest (untagged = a floating `:latest` Dependabot cannot track) | per `image` |
 | `distroless` | final stage on `gcr.io/distroless/` | per `image` |
 | `dockerignore` | exists with images; excludes `<ui.dir>/node_modules` and `<ui.dir>/dist` | yes |

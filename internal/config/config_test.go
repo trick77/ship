@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -17,8 +18,25 @@ func TestParse_whenEmpty_thenFamilyDefaults(t *testing.T) {
 	if c.Base != "master" || c.Lint != pins.Golangci || c.Patch != 75 || c.Go.Dir != "." || c.Go.Floor != 75 {
 		t.Fatalf("defaults: %+v", c)
 	}
-	if !c.Go.RaceOn() || len(c.Go.Exclude) != 1 || c.Go.Exclude[0] != "cmd/" || c.UI != nil {
+	if !c.Go.RaceOn() || len(c.Go.Exclude) != 1 || c.Go.Exclude[0] != "cmd/" || c.Go.CoverpkgArg() != "./..." || c.UI != nil {
 		t.Fatalf("go defaults: %+v", c.Go)
+	}
+}
+
+// An empty or null coverpkg is no -coverpkg, unset the default, the narrow one stays as written.
+func TestParse_whenCoverpkgSet_thenItWins(t *testing.T) {
+	for in, want := range map[string]string{
+		"go:\n  coverpkg: \"\"\n":           "",
+		"go:\n  coverpkg:\n":                "",
+		"go:\n  coverpkg: ~\n":              "",
+		"go:\n  coverpkg: null\n":           "",
+		"go:\n  dir: .\n":                   "./...",
+		"go:\n  coverpkg: ./internal/...\n": "./internal/...",
+	} {
+		c, err := Parse([]byte(in))
+		if err != nil || c.Go.CoverpkgArg() != want {
+			t.Errorf("%q: %q %v", in, c.Go.CoverpkgArg(), err)
+		}
 	}
 }
 
@@ -28,7 +46,7 @@ func TestParse_whenUIAndImages_thenTheirDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if c.UI.Dir != "ui" || c.UI.Floor != 75 || c.UI.Lcov != filepath.Join("coverage", "ui", "lcov.info") ||
-		!strings.Contains(c.UI.Build, "npm ci") || c.UI.Lint != "npm run lint" || c.UI.Embed != "" || !strings.Contains(c.UI.Test, "--coverage") {
+		!strings.Contains(c.UI.Build, "npm ci") || c.UI.Lint != "npm run lint" || c.UI.Embed != "" || !strings.Contains(c.UI.Test, "--coverage.reporter=lcov") {
 		t.Fatalf("ui: %+v", c.UI)
 	}
 	im := c.Images[0]
@@ -91,6 +109,11 @@ func TestParse_whenUnknownKeyOrBadValue_thenError(t *testing.T) {
 		"ui:\n  embed: ../x\n",
 		"shell: [\".\"]\n", // the root itself
 		"go:\n  modules: [../x]\n",
+		"go:\n  modules: [kit/../../x]\n",
+		"go:\n  modules: [/kit]\n",
+		"go:\n  dir: /backend\n",
+		"go:\n  dir: ../backend\n",
+		"go:\n  dir: backend/../..\n",
 		"go:\n  modules: [.]\n",                        // go.dir itself
 		"go:\n  dir: backend\n  modules: [backend/]\n", // go.dir itself
 		"go:\n  modules: [kit, ./kit]\n",               // twice
@@ -132,6 +155,91 @@ func TestParse_whenModules_thenListed(t *testing.T) {
 	c, err := Parse([]byte("go:\n  modules: [kit, kit/auth]\n"))
 	if err != nil || len(c.Go.Modules) != 2 || c.Go.Modules[1] != "kit/auth" {
 		t.Fatalf("%+v %v", c, err)
+	}
+}
+
+// go.dir reaches the rendered callers as listed: cleaned once here, ./backend/ is backend; backend and the default
+// . stay as written.
+func TestParse_whenGoDirUnclean_thenCleaned(t *testing.T) {
+	c, err := Parse([]byte("go:\n  dir: ./backend/\n  modules: [kit/auth, lib]\n"))
+	if err != nil || c.Go.Dir != "backend" || !slices.Equal(c.Go.Modules, []string{"kit/auth", "lib"}) {
+		t.Fatalf("%q %q %v", c.Go.Dir, c.Go.Modules, err)
+	}
+	for in, want := range map[string]string{"": ".", "go:\n  dir: backend\n": "backend", "go:\n  dir: .\n": "."} {
+		if c, err := Parse([]byte(in)); err != nil || c.Go.Dir != want {
+			t.Errorf("%q: %v %v", in, c, err)
+		}
+	}
+}
+
+// ui.dir is cleaned like go.dir, and the lcov default follows the clean form.
+func TestParse_whenUIDirUnclean_thenCleaned(t *testing.T) {
+	c, err := Parse([]byte("ui:\n  dir: ./backend/ui/\n"))
+	if err != nil || c.UI.Dir != "backend/ui" || c.UI.Lcov != filepath.Join("backend", "coverage", "ui", "lcov.info") {
+		t.Fatalf("%+v %v", c.UI, err)
+	}
+}
+
+// An escaping dir is quoted as written, not as cleaned: backend/../.. is what the user finds in ship.yaml.
+func TestParse_whenDirEscapes_thenRawQuoted(t *testing.T) {
+	for in, want := range map[string]string{
+		"go:\n  dir: backend/../..\n": `go.dir: "backend/../.." is not a directory inside the repo`,
+		"ui:\n  dir: ui/../../x\n":    `ui.dir: "ui/../../x" is not a directory inside the repo`,
+		"ui:\n  dir: /ui\n":           `ui.dir: "/ui" is not a directory inside the repo`,
+	} {
+		if _, err := Parse([]byte(in)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: %v, want %q", in, err, want)
+		}
+	}
+}
+
+// go.modules is cleaned like go.dir, as before the clean dirs: ./lib and lib/ keep parsing, release and CI's release
+// matrix get the clean form.
+func TestParse_whenModuleUnclean_thenCleaned(t *testing.T) {
+	for in, want := range map[string]string{
+		"./kit":      "kit",
+		"kit/":       "kit",
+		"./kit/":     "kit",
+		"kit//auth":  "kit/auth",
+		"kit/./auth": "kit/auth",
+		"kit/../lib": "lib",
+		"kit/auth":   "kit/auth",
+	} {
+		c, err := Parse([]byte("go:\n  modules: [" + in + "]\n"))
+		if err != nil || !slices.Equal(c.Go.Modules, []string{want}) {
+			t.Errorf("%s: %v, want [%s]", in, err, want)
+		}
+	}
+}
+
+// Only what escapes the repo, the root (go.dir's default) and a duplicate after cleaning fail; an escaping entry gets
+// go.dir's message, quoted as written.
+func TestParse_whenModuleInvalid_thenError(t *testing.T) {
+	for in, want := range map[string]string{
+		"/kit":        `go.modules: "/kit" is not a directory inside the repo`,
+		"..":          `go.modules: ".." is not a directory inside the repo`,
+		"../x":        `go.modules: "../x" is not a directory inside the repo`,
+		"kit/../../x": `go.modules: "kit/../../x" is not a directory inside the repo`,
+		".":           `go.modules: "." is the repo root, want a dir inside the repo like kit/auth`,
+		`""`:          `go.modules: "" is the repo root, want a dir inside the repo like kit/auth`,
+		"./":          `go.modules: "./" is the repo root, want a dir inside the repo like kit/auth`,
+		"kit, kit":    `go.modules: "kit", want a dir inside the repo, not go.dir, listed once`,
+		"kit, ./kit/": `go.modules: "./kit/", want a dir inside the repo, not go.dir, listed once`,
+		"kit/auth, x": "",
+	} {
+		_, err := Parse([]byte("go:\n  modules: [" + in + "]\n"))
+		if want == "" && err != nil || want != "" && (err == nil || !strings.Contains(err.Error(), want)) {
+			t.Errorf("%s: %v, want %q", in, err, want)
+		}
+	}
+}
+
+func TestCleanDir_whenOutside_thenEscapes(t *testing.T) {
+	for p, want := range map[string]bool{"kit": false, "kit/auth": false, ".": false, "./kit/": false,
+		"kit/../lib": false, "..": true, "../x": true, "kit/../../x": true, "/kit": true} {
+		if _, got := CleanDir(p); got != want {
+			t.Errorf("CleanDir(%q) escapes = %v, want %v", p, got, want)
+		}
 	}
 }
 

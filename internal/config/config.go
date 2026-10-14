@@ -62,27 +62,30 @@ type Go struct {
 	Floor float64 `yaml:"floor"`
 	// Race runs the tests with -race (needs cgo; CGO_ENABLED=1 is set for the test run only).
 	Race *bool `yaml:"race"`
-	// Coverpkg is passed to go test -coverpkg when set, e.g. ./internal/...
-	Coverpkg string `yaml:"coverpkg"`
+	// Coverpkg is passed to go test -coverpkg: default ./... (a package's lines count as covered by any package's
+	// tests, every package instrumented), ./internal/... to narrow, "" or null = none. A pointer, set to the
+	// default before decoding: a null sets it nil (a string keeps its value on null, the default would win).
+	Coverpkg *string `yaml:"coverpkg"`
 	// Exclude lists Go path prefixes, relative to the repo root, that neither coverage gate counts. A prefix also
 	// matches as a path segment anywhere ("cmd/" excludes backend/cmd/x.go). UI coverage scope is the test
 	// runner's own (vitest coverage include/exclude).
 	Exclude []string `yaml:"exclude"`
 	// Modules are repo-relative dirs of nested Go modules (each its own go.mod), gated like Dir: same commands,
 	// the same floor each on its own, their lines in the patch gate. Coverpkg is Dir's alone. A nested go.mod not
-	// listed fails check: no module is ever silently ungated.
+	// listed fails check: no module is ever silently ungated. Cleaned like Dir (./kit/auth/ is kit/auth).
 	Modules []string `yaml:"modules"`
 }
 
 // UI configures the frontend side of the gate.
 type UI struct {
+	// Dir is the UI's directory relative to the repo root, cleaned (./ui/ is ui).
 	Dir   string  `yaml:"dir"`
 	Floor float64 `yaml:"floor"`
 	// Build runs first in check, so the Go packages embed a fresh dist, never a stale one. The family's
 	// `npm run build` is `tsc -b && vite build`: the typecheck.
 	Build string `yaml:"build"`
 	// Lint is the UI's lint/format check (eslint, prettier --check), run after the Go lint; default npm run lint,
-	// an explicit "" = none.
+	// the only value conform passes; "" runs none, needs a ui allow.
 	Lint string `yaml:"lint"`
 	// Test runs the UI tests with coverage and must write Lcov.
 	Test string `yaml:"test"`
@@ -114,6 +117,14 @@ type Image struct {
 // RaceOn reports whether go test runs with -race.
 func (g Go) RaceOn() bool { return g.Race == nil || *g.Race }
 
+// CoverpkgArg is go test's -coverpkg value, "" for none.
+func (g Go) CoverpkgArg() string {
+	if g.Coverpkg == nil {
+		return ""
+	}
+	return *g.Coverpkg
+}
+
 // Load reads root/ship.yaml and fills the defaults. A missing file is an error: a repo without one has no gate.
 func Load(root string) (*Config, error) {
 	b, err := os.ReadFile(filepath.Join(root, File)) //nolint:gosec // the repo's own ship.yaml
@@ -129,11 +140,12 @@ func Load(root string) (*Config, error) {
 // Parse decodes ship.yaml, rejecting unknown keys so a typo never silently disables a gate. Defaults are set before
 // decoding, so an explicit value, 0 included (`floor: 0` while paying down debt), always wins over the default.
 func Parse(b []byte) (*Config, error) {
+	coverpkg := "./..."
 	c := Config{
 		Base:  "master",
 		Lint:  pins.Golangci,
 		Patch: 75,
-		Go:    Go{Dir: ".", Floor: 75, Exclude: []string{"cmd/"}},
+		Go:    Go{Dir: ".", Floor: 75, Coverpkg: &coverpkg, Exclude: []string{"cmd/"}},
 	}
 	// yaml fills an already set pointer in place: a ui: block keeps the defaults it does not override. A bare
 	// `ui:` (null) decodes to nil and is put back: naming the key means a UI, never a silently skipped gate.
@@ -155,15 +167,42 @@ func Parse(b []byte) (*Config, error) {
 	if hasUI && c.UI == nil {
 		c.UI = uiDefaults()
 	}
-	c.defaults()
+	if err := c.defaults(); err != nil {
+		return nil, err
+	}
 	return &c, c.validate()
 }
 
-// defaults fills what depends on other values or lives in lists.
-func (c *Config) defaults() {
-	if c.UI != nil && c.UI.Lcov == "" {
-		// conform's vite reportsDirectory "../coverage/ui", seen from the repo root.
-		c.UI.Lcov = filepath.Join(filepath.Dir(c.UI.Dir), "coverage", "ui", "lcov.info")
+// defaults fills what depends on other values or lives in lists. go.dir, ui.dir and go.modules are cleaned here,
+// once (backend, never ./backend/): dependabot directories, the rendered callers, conform's paths and release's -dir
+// are spelled from them, every user takes them as is. An escaping dir fails here, quoted as written.
+func (c *Config) defaults() error {
+	var err error
+	if c.Go.Dir, err = cleanDir("go.dir", c.Go.Dir); err != nil {
+		return err
+	}
+	seen := map[string]bool{c.Go.Dir: true}
+	for i, m := range c.Go.Modules {
+		d, err := cleanDir("go.modules", m)
+		if err != nil {
+			return err
+		}
+		if d == "." {
+			return fmt.Errorf("%s: go.modules: %q is the repo root, want a dir inside the repo like kit/auth", File, m)
+		}
+		if seen[d] {
+			return fmt.Errorf("%s: go.modules: %q, want a dir inside the repo, not go.dir, listed once", File, m)
+		}
+		c.Go.Modules[i], seen[d] = d, true
+	}
+	if c.UI != nil {
+		if c.UI.Dir, err = cleanDir("ui.dir", c.UI.Dir); err != nil {
+			return err
+		}
+		if c.UI.Lcov == "" {
+			// conform's vite reportsDirectory "../coverage/ui", seen from the repo root.
+			c.UI.Lcov = filepath.Join(filepath.Dir(c.UI.Dir), "coverage", "ui", "lcov.info")
+		}
 	}
 	for i := range c.Images {
 		im := &c.Images[i]
@@ -177,6 +216,16 @@ func (c *Config) defaults() {
 			im.Platforms = []string{"linux/amd64"}
 		}
 	}
+	return nil
+}
+
+// cleanDir is dir in clean slash form; an error, quoting dir as written, when it leaves the repo.
+func cleanDir(key, dir string) (string, error) {
+	c, out := CleanDir(dir)
+	if out {
+		return "", fmt.Errorf("%s: %s: %q is not a directory inside the repo", File, key, dir)
+	}
+	return c, nil
 }
 
 func (c *Config) validate() error {
@@ -200,14 +249,6 @@ func (c *Config) validate() error {
 		!pgCompose.MatchString(c.Postgres) {
 		return fmt.Errorf("%s: postgres: %q, want a version like \"17\", an image like "+
 			"\"timescale/timescaledb:2.29.1-pg17\" or a compose service like \"compose:db\"", File, c.Postgres)
-	}
-	seen := map[string]bool{path.Clean(filepath.ToSlash(c.Go.Dir)): true}
-	for _, m := range c.Go.Modules {
-		d := path.Clean(filepath.ToSlash(m))
-		if !inRepo(m) || seen[d] {
-			return fmt.Errorf("%s: go.modules: %q, want a dir inside the repo, not go.dir, listed once", File, m)
-		}
-		seen[d] = true
 	}
 	for _, s := range c.Shell {
 		if !inRepo(s) {
@@ -245,8 +286,16 @@ func (c *Config) PostgresImage() string {
 	return c.Postgres
 }
 
-// inRepo reports whether p is a repo-relative path below the root, lexically: no absolute path, no "..".
+// CleanDir is p in clean slash form and whether it leaves the repo, lexically: an absolute path or one through "..".
+// Slash semantics on every OS (ship.yaml and Git spell paths with /); filepath.IsAbs still catches a Windows drive
+// path (C:\x).
+func CleanDir(p string) (c string, escapes bool) {
+	c = path.Clean(filepath.ToSlash(p))
+	return c, filepath.IsAbs(p) || path.IsAbs(c) || c == ".." || strings.HasPrefix(c, "../")
+}
+
+// inRepo reports whether p is a repo-relative path below the root: it does not escape and is not the root itself.
 func inRepo(p string) bool {
-	c := filepath.ToSlash(filepath.Clean(p))
-	return p != "" && !filepath.IsAbs(p) && c != "." && c != ".." && !strings.HasPrefix(c, "../")
+	c, out := CleanDir(p)
+	return !out && c != "."
 }

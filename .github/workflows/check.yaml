@@ -43,9 +43,10 @@ on:
         default: ui
       postgres:
         description: >-
-          Postgres for go test: a version (postgres:<v>-alpine) or a tagged image ref, DSN in SHIP_TEST_DSN; empty =
-          none here. Redundant with a ship.yaml postgres key: ship check starts that container itself (and resolves
-          compose:<service>, which this input does not take).
+          Deprecated, still works: set ship.yaml postgres: instead. Postgres for go test: a version
+          (postgres:<v>-alpine) or a tagged image ref, DSN in SHIP_TEST_DSN; empty = none here. Redundant with a
+          ship.yaml postgres key: ship check starts that container itself (and resolves compose:<service>, which this
+          input does not take).
         type: string
         default: ""
       ship:
@@ -82,6 +83,7 @@ jobs:
         env:
           PG: ${{ inputs.postgres }}
         run: |
+          echo "::warning::postgres input is deprecated: set ship.yaml postgres:"
           if [[ "$PG" == compose:* ]]; then
             echo "::error::postgres input '$PG': compose:<service> is ship.yaml's postgres key, not this input; drop the input, ship check resolves it"; exit 1
           elif [[ "$PG" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then

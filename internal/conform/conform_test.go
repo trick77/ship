@@ -1,6 +1,7 @@
 package conform
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -235,24 +236,30 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 	}{
 		{"scaffold edited", appShip, func(r *repo) { r.edit(scaffold.CI, "cancel-in-progress: true", "cancel-in-progress: false") },
 			[]string{"FAIL scaffold: differs from ship's template (ship init -diff) (.github/workflows/ci.yaml)"}},
+		// A stale owned file, not allowed: scaffold's finding alone, workflows' and visibility's dropped.
 		{"scaffold missing", appShip, func(r *repo) { r.remove(scaffold.Cleanup) }, []string{
-			"FAIL scaffold: missing (ship init) (.github/workflows/cleanup-images.yaml)",
+			"FAIL scaffold: missing (ship init) (.github/workflows/cleanup-images.yaml)"}},
+		{"caller pinned", appShip, func(r *repo) { r.edit(scaffold.CI, "check.yaml@master", "check.yaml@v1") },
+			[]string{"FAIL scaffold: differs from ship's template (ship init -diff) (.github/workflows/ci.yaml)"}},
+		// An allowed scaffold diff keeps every rule's findings there: its one guard.
+		{"scaffold missing allowed", appShip + allowScaffold(scaffold.Cleanup), func(r *repo) { r.remove(scaffold.Cleanup) }, []string{
 			"FAIL workflows: missing (ship init) (.github/workflows/cleanup-images.yaml)",
 			"FAIL visibility: private repo with images: the cleanup-images caller is missing"}},
-		{"caller pinned", appShip, func(r *repo) { r.edit(scaffold.CI, "check.yaml@master", "check.yaml@v1") },
+		{"caller pinned allowed", appShip + allowScaffold(scaffold.CI), func(r *repo) { r.edit(scaffold.CI, "check.yaml@master", "check.yaml@v1") },
 			[]string{"FAIL workflows: trick77/ship/.github/workflows/check.yaml@v1: call it @master"}},
-		{"caller gone", appShip, func(r *repo) { r.edit(scaffold.Release, "trick77/ship/.github/workflows/release.yaml", "./x.yaml") },
-			[]string{"FAIL workflows: no job calls trick77/ship/.github/workflows/release.yaml@master"}},
-		{"release perms and bumps", appShip, func(r *repo) {
+		{"caller gone", appShip + allowScaffold(scaffold.Release), func(r *repo) {
+			r.edit(scaffold.Release, "trick77/ship/.github/workflows/release.yaml", "./x.yaml")
+		}, []string{"FAIL workflows: no job calls trick77/ship/.github/workflows/release.yaml@master"}},
+		{"release perms and bumps", appShip + allowScaffold(scaffold.Release), func(r *repo) {
 			r.edit(scaffold.Release, "      packages: write\n", "")
 			r.edit(scaffold.Release, ", auto]", "]")
 		}, []string{"FAIL workflows: ship.yaml has images: the release job needs permissions packages: write",
 			"FAIL workflows: workflow_dispatch bump options lack auto"}},
 		// An allowed scaffold diff still needs the grant cosign signs with.
-		{"release without id-token", appShip + "allow:\n  - { rule: scaffold, path: .github/workflows/release.yaml, why: own }\n",
+		{"release without id-token", appShip + allowScaffold(scaffold.Release),
 			func(r *repo) { r.edit(scaffold.Release, "      id-token: write\n", "") },
 			[]string{"FAIL workflows: ship.yaml has images: the release job needs permissions id-token: write (cosign)"}},
-		{"release id-token without images", "go:\n  dir: backend\nui:\n  lint: npm run lint\n", func(*repo) {},
+		{"release id-token without images", "go:\n  dir: backend\nui:\n  lint: npm run lint\n" + allowScaffold(scaffold.Release), func(*repo) {},
 			[]string{"FAIL workflows: id-token: write without images in ship.yaml: drop it",
 				"FAIL workflows: packages: write without images in ship.yaml: drop it"}},
 		{"foreign cleanup", appShip, func(r *repo) {
@@ -261,8 +268,13 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 		{"broken workflow", appShip, func(r *repo) { r.write(".github/workflows/x.yaml", "jobs: [\n") },
 			[]string{"FAIL workflows: .github/workflows/x.yaml: yaml"}},
 		{"private without if", appShip, func(r *repo) { r.edit(scaffold.CI, "    if: github", "    x-if: github") },
+			[]string{"FAIL scaffold: differs from ship's template (ship init -diff) (.github/workflows/ci.yaml)"}},
+		{"private without if allowed", appShip + allowScaffold(scaffold.CI), func(r *repo) { r.edit(scaffold.CI, "    if: github", "    x-if: github") },
 			[]string{"FAIL visibility: private repo: the check job needs if:"}},
 		{"private ungrouped", appShip, func(r *repo) {
+			r.edit(scaffold.Dependabot, "open-pull-requests-limit: 5", "open-pull-requests-limit: 10")
+		}, []string{"FAIL scaffold: differs from ship's template (ship init -diff) (.github/dependabot.yaml)"}},
+		{"private ungrouped allowed", appShip + allowScaffold(scaffold.Dependabot), func(r *repo) {
 			r.edit(scaffold.Dependabot, "      npm-major:", "      npm-x:")
 			r.edit(scaffold.Dependabot, "      - major\n    ignore", "      - premajor\n    ignore")
 			r.edit(scaffold.Dependabot, "open-pull-requests-limit: 5", "open-pull-requests-limit: 10")
@@ -271,34 +283,38 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 			[]string{"FAIL visibility: visibility: public, GitHub says private (ship.yaml)"}},
 		{"dependabot prefix and docker", appShip, func(r *repo) {
 			r.edit(scaffold.Dependabot, "{ prefix: deps }", "{ prefix: chore }")
+		}, []string{"FAIL scaffold: differs from ship's template (ship init -diff) (.github/dependabot.yaml)"}},
+		{"dependabot prefix and docker allowed", appShip + allowScaffold(scaffold.Dependabot), func(r *repo) {
+			r.edit(scaffold.Dependabot, "{ prefix: deps }", "{ prefix: chore }")
 			r.edit(scaffold.Dependabot, "package-ecosystem: docker", "package-ecosystem: dockerx")
 		}, []string{`FAIL dependabot: gomod /backend: commit-message prefix "chore", want deps`,
 			"FAIL dependabot: no docker entry for /"}},
 		// transmission-ui's dev compose pins the daemon's image: only the docker-compose ecosystem bumps it.
-		{"dependabot compose", appShip, func(r *repo) {
+		{"dependabot compose", appShip + allowScaffold(scaffold.Dependabot), func(r *repo) {
 			r.write("compose.yaml", "services:\n  app:\n    image: ghcr.io/o/app:latest\n")
 			r.write("compose.dev.yaml", "services:\n  d:\n    image: \"ghcr.io/linuxserver/transmission:4.1.3-r0-ls360\"\n")
 		}, []string{"FAIL dependabot: no docker-compose entry for /"}},
 		// netra's drift: the compose pin bumped, ship.yaml's not.
 		{"postgres duplicated", appShip + "postgres: timescale/timescaledb:2.29.0-pg17\n", func(r *repo) {
 			r.write("compose.yaml", "services:\n  db:\n    image: timescale/timescaledb:2.29.1-pg17\n  app:\n    build: .\n")
-		}, []string{"FAIL dependabot: no docker-compose entry for /",
-			"FAIL postgres: duplicates compose service db's image, use compose:db (ship.yaml)"}},
+		}, []string{"FAIL postgres: duplicates compose service db's image, use compose:db (ship.yaml)"}},
 		{"postgres version duplicated", appShip + "postgres: \"17\"\n", func(r *repo) {
 			r.write("compose.yaml", "services:\n  pg:\n    image: docker.io/library/postgres:17-alpine\n")
 			r.write("compose.override.yaml", "services:\n  pg:\n    image: postgres:17-alpine\n")
-		}, []string{"FAIL dependabot: no docker-compose entry for /",
-			"FAIL postgres: duplicates compose service pg's image, use compose:pg (ship.yaml)"}},
+		}, []string{"FAIL postgres: duplicates compose service pg's image, use compose:pg (ship.yaml)"}},
 		{"postgres compose unresolved", appShip + "postgres: compose:db\n", func(*repo) {},
 			[]string{"FAIL postgres: compose:db: no compose file at the repo root (ship.yaml)"}},
 		{"postgres compose broken", appShip + "postgres: \"17\"\n", func(r *repo) { r.write("compose.yaml", "services: [\n") },
 			[]string{"FAIL postgres: compose.yaml: yaml"}},
-		{"dependabot nested module", strings.Replace(appShip, "dir: backend\n", "dir: backend\n  modules: [lib]\n", 1),
+		{"dependabot nested module", strings.Replace(appShip, "dir: backend\n", "dir: backend\n  modules: [lib]\n", 1) +
+			allowScaffold(scaffold.Dependabot),
 			func(r *repo) { r.write("lib/go.mod", "module example.com/lib\n\ngo 1.27.1\n") },
 			[]string{"FAIL dependabot: no gomod entry for /lib"}},
 		{"dependabot yml", appShip, func(r *repo) { r.write(".github/dependabot.yml", "") },
 			[]string{"FAIL dependabot: rename to dependabot.yaml"}},
 		{"dependabot missing", appShip, func(r *repo) { r.remove(scaffold.Dependabot) },
+			[]string{"FAIL scaffold: missing (ship init) (.github/dependabot.yaml)"}},
+		{"dependabot missing allowed", appShip + allowScaffold(scaffold.Dependabot), func(r *repo) { r.remove(scaffold.Dependabot) },
 			[]string{"FAIL dependabot: missing (ship init)"}},
 		{"containerfile", appShip, func(r *repo) {
 			r.edit("Containerfile", "-trimpath", "")
@@ -341,8 +357,12 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 			[]string{`FAIL distroless: image "": final stage base alpine:3.24, not gcr.io/distroless/ (Containerfile)`,
 				`FAIL containerfile: image "": final stage runs as root`}},
 		{"dockerignore", appShip, func(r *repo) { r.write(scaffold.Ignore, "*\n") },
+			[]string{"FAIL scaffold: differs from ship's template (ship init -diff) (.dockerignore)"}},
+		{"dockerignore allowed", appShip + allowScaffold(scaffold.Ignore), func(r *repo) { r.write(scaffold.Ignore, "*\n") },
 			[]string{"FAIL dockerignore: does not exclude ui/node_modules", "FAIL dockerignore: does not exclude ui/dist"}},
 		{"dockerignore missing", appShip, func(r *repo) { r.remove(scaffold.Ignore) },
+			[]string{"FAIL scaffold: missing (ship init) (.dockerignore)"}},
+		{"dockerignore missing allowed", appShip + allowScaffold(scaffold.Ignore), func(r *repo) { r.remove(scaffold.Ignore) },
 			[]string{"FAIL dockerignore: missing (ship init) (.dockerignore)"}},
 		{"ui", strings.Replace(appShip, "npm run lint", "npm run format:check", 1), func(r *repo) {
 			r.write("ui/package.json", `{"scripts": {"build": "tsc --noEmit && vite build", "lint": "eslint ."},
@@ -356,7 +376,9 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 			"FAIL ui: devDependency typescript missing", "FAIL ui: devDependency eslint missing",
 			"FAIL ui: devDependency typescript-eslint missing", "FAIL ui: devDependency eslint-config-prettier missing",
 			"FAIL ui: devDependency @eslint/js missing", "FAIL ui: devDependency eslint-plugin-react-hooks missing",
-			"FAIL ui: missing (ship init) (ui/eslint.config.js)"}},
+			"FAIL scaffold: missing (ship init) (ui/eslint.config.js)"}},
+		{"ui eslint config missing allowed", appShip + allowScaffold("ui/"+scaffold.ESLint), func(r *repo) { r.remove("ui/" + scaffold.ESLint) },
+			[]string{"FAIL ui: missing (ship init) (ui/eslint.config.js)"}},
 		// Dependabot moves a version per repo: any exact one passes, a range or TypeScript 6.1+ does not.
 		{"ui devDependency versions", appShip, func(r *repo) {
 			r.edit("ui/package.json", `"eslint": "10.12.0"`, `"eslint": "~10.13.0"`)
@@ -407,8 +429,7 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 		{"go.modules", strings.Replace(appShip, "dir: backend\n", "dir: backend\n  modules: [backend/tools, lib]\n", 1), func(r *repo) {
 			r.write("backend/tools/go.mod", "module tools\n\ngo 1.26.0\n")
 		}, []string{"FAIL gomod: go 1.26.0: want at least go 1.27.0 (pins.GoMin) (backend/tools/go.mod)",
-			"FAIL gomod: missing (ship.yaml go.modules) (lib/go.mod)",
-			"FAIL dependabot: no gomod entry for /backend/tools", "FAIL dependabot: no gomod entry for /lib"}},
+			"FAIL gomod: missing (ship.yaml go.modules) (lib/go.mod)"}},
 		{"node below floor", appShip, func(r *repo) { r.edit("Containerfile", "node:26-alpine", "node:24-alpine") },
 			[]string{`FAIL containerfile: image "": builder node:24, want at least 26 (pins.NodeMin)`,
 				`FAIL containerfile: image "-ui": builder node:24, want at least 26 (pins.NodeMin)`}},
@@ -585,10 +606,118 @@ func TestRun_whenLibrary_thenAppRulesSkipped(t *testing.T) {
 			t.Errorf("no %q in:\n%s", s, out)
 		}
 	}
+	// A public repo's CI runs every PR: the if: is scaffold's finding alone; an allowed diff, visibility's.
 	r.edit(scaffold.CI, "  check:\n", "  check:\n    if: false\n")
-	if out, _ := r.run(""); !strings.Contains(out, "FAIL visibility: public repo: every PR runs CI, drop the check job's if:") {
+	if out, _ := r.run(""); !strings.Contains(out, "FAIL scaffold: differs from ship's template (ship init -diff) (.github/workflows/ci.yaml)") ||
+		strings.Contains(out, "FAIL visibility") {
 		t.Errorf("public with if:\n%s", out)
 	}
+	if out, _ := r.run(allowScaffold(scaffold.CI)); !strings.Contains(out, "FAIL visibility: public repo: every PR runs CI, drop the check job's if:") {
+		t.Errorf("public with if, allowed:\n%s", out)
+	}
+}
+
+// Every rule reads the owned files as rendered: a value wrong in a template fails its rule (the conforming app run
+// proves the templates pass). On a stale owned file report shows scaffold's finding alone.
+func TestRules_whenOwnedFileBroken_thenRuleFailsReportShowsScaffold(t *testing.T) {
+	for _, tc := range []struct {
+		name, rule string
+		mut        func(r *repo)
+		want       string
+	}{
+		{"caller pinned", Workflows, func(r *repo) { r.edit(scaffold.CI, "check.yaml@master", "check.yaml@v1") },
+			"check.yaml@v1: call it @master"},
+		{"release without id-token", Workflows, func(r *repo) { r.edit(scaffold.Release, "      id-token: write\n", "") },
+			"needs permissions id-token: write (cosign)"},
+		{"private without if", Visibility, func(r *repo) { r.edit(scaffold.CI, "    if: github", "    x-if: github") },
+			"private repo: the check job needs if:"},
+		{"cleanup missing", Visibility, func(r *repo) { r.remove(scaffold.Cleanup) },
+			"private repo with images: the cleanup-images caller is missing"},
+		{"dependabot prefix", Dependabot, func(r *repo) { r.edit(scaffold.Dependabot, "{ prefix: deps }", "{ prefix: chore }") },
+			`commit-message prefix "chore", want deps`},
+		{"dockerignore", Dockerignore, func(r *repo) { r.write(scaffold.Ignore, "*\n") }, "does not exclude ui/node_modules"},
+		{"eslint config missing", UI, func(r *repo) { r.remove("ui/" + scaffold.ESLint) }, "missing (ship init)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := app(t)
+			tc.mut(r)
+			e := newEnv(r.dir, r.config(appShip), r.opts)
+			i := slices.IndexFunc(rules(), func(rl rule) bool { return rl.name == tc.rule })
+			if i < 0 {
+				t.Fatalf("no rule %q", tc.rule)
+			}
+			fs := rules()[i].fn(e).findings
+			if !slices.ContainsFunc(fs, func(f finding) bool { return strings.Contains(f.what, tc.want) }) {
+				t.Errorf("%s: no %q", tc.rule, tc.want)
+			}
+			// The rule's findings are dropped, not hidden: its ok line counts them.
+			out, _ := r.run(appShip)
+			note := fmt.Sprintf("ok %s: %d finding(s) on owned files scaffold re-renders\n", tc.rule, len(fs))
+			if !strings.Contains(out, "FAIL scaffold: ") || !strings.Contains(out, note) {
+				t.Errorf("want scaffold's finding alone:\n%s", out)
+			}
+		})
+	}
+}
+
+// A rule still failing on a file of its own counts what it dropped on a stale owned file too.
+func TestReport_whenStaleAndForeignFinding_thenFailAndDroppedCount(t *testing.T) {
+	r := app(t)
+	r.edit(scaffold.CI, "check.yaml@master", "check.yaml@v1")
+	r.write(".github/workflows/prune.yaml",
+		"on: push\njobs:\n  x:\n    steps:\n      - uses: dataaxiom/ghcr-cleanup-action@v1\n")
+	out, err := r.run(appShip)
+	for _, s := range []string{
+		"FAIL scaffold: differs from ship's template (ship init -diff) (.github/workflows/ci.yaml)",
+		"FAIL workflows: image cleanup by dataaxiom/ghcr-cleanup-action: use the cleanup-images caller " +
+			"(.github/workflows/prune.yaml)",
+		"also workflows: 1 finding(s) on owned files scaffold re-renders",
+	} {
+		if err == nil || !strings.Contains(out, s+"\n") {
+			t.Errorf("no %q (%v):\n%s", s, err, out)
+		}
+	}
+	if strings.Contains(out, "check.yaml@v1") {
+		t.Errorf("stale ci.yaml's workflows finding shown:\n%s", out)
+	}
+}
+
+// A finding the repo allows for its rule stays allowed on a stale owned file: reported, never counted as dropped.
+func TestReport_whenStaleAndAllowedFinding_thenAllowedNotDropped(t *testing.T) {
+	r := app(t)
+	r.edit(scaffold.CI, "check.yaml@master", "check.yaml@v1")
+	out, err := r.run(appShip + "allow:\n  - { rule: workflows, why: x }\n")
+	if err == nil || !strings.Contains(out, "FAIL scaffold: differs from ship's template (ship init -diff) "+
+		"(.github/workflows/ci.yaml)\n") || !strings.Contains(out, "allowed workflows: x\n") ||
+		strings.Contains(out, "re-renders") {
+		t.Errorf("want workflows allowed, nothing dropped (%v):\n%s", err, out)
+	}
+}
+
+// Scaffold's stale set is known before any rule runs, whatever its place. Paths compare as they are: an unclean
+// ui.dir (./ui/) is cleaned by config, so scaffold's file and a rule's uiPath spell the same ui/eslint.config.js.
+func TestReport_whenScaffoldLastAndUncleanUIDir_thenDropped(t *testing.T) {
+	r := app(t)
+	r.remove("ui/" + scaffold.ESLint)
+	e := newEnv(r.dir, r.config(strings.Replace(appShip, "ui:\n", "ui:\n  dir: ./ui/\n", 1)), r.opts)
+	r.out.Reset()
+	other := rule{"other", func(e *env) result {
+		return result{findings: []finding{{what: "x", file: e.uiPath(scaffold.ESLint)}}}
+	}}
+	scaff := rule{Scaffold, (*env).scaffold}
+	if err := e.reportOf([]rule{other, scaff}); err == nil {
+		t.Fatal("no error")
+	}
+	out := r.out.String()
+	if !strings.Contains(out, "ok other: 1 finding(s) on owned files scaffold re-renders\n") ||
+		!strings.Contains(out, "FAIL scaffold: ") {
+		t.Errorf("want other's finding dropped:\n%s", out)
+	}
+}
+
+// allowScaffold is a ship.yaml allow entry for a scaffold diff on p.
+func allowScaffold(p string) string {
+	return "allow:\n  - { rule: scaffold, path: " + p + ", why: own }\n"
 }
 
 // Any kit version passes: Dependabot moves it, a kit release never fails a consumer's push.

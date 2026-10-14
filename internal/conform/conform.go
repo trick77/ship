@@ -76,6 +76,8 @@ func (o Options) withDefaults() Options {
 type finding struct {
 	what, file string
 	image      *string
+	// rerender: a scaffold finding ship init fixes by rewriting file (missing or differing, never Manual).
+	rerender bool
 }
 
 // result is a rule's verdict: findings, or skip (the rule does not apply), or an ok with a note.
@@ -200,12 +202,37 @@ func Fix(root string, c *config.Config, o Options) error {
 	return Run(root, c, o)
 }
 
-func (e *env) report() error {
+func (e *env) report() error { return e.reportOf(rules()) }
+
+// reportOf runs rs and prints their verdicts in order.
+func (e *env) reportOf(rs []rule) error {
 	known := map[string]bool{}
 	fails := 0
-	for _, r := range rules() {
+	// stale are the owned files scaffold fails, not allowed: ship init rewrites them, so another rule's finding there
+	// only doubles scaffold's. Scaffold runs before every other rule whatever its place in rs. An allowed diff keeps
+	// every rule's findings, its one guard; a Manual file too (ship writes none of it). scaffold is run once, here.
+	var scaff result
+	stale := map[string]bool{}
+	if i := slices.IndexFunc(rs, func(r rule) bool { return r.name == Scaffold }); i >= 0 {
+		scaff = rs[i].fn(e)
+		for _, f := range scaff.findings {
+			if _, ok := e.c.Allowed(Scaffold, f.image, f.file); f.rerender && !ok {
+				c, _ := config.CleanDir(f.file)
+				stale[c] = true
+			}
+		}
+	}
+	for _, r := range rs {
 		known[r.name] = true
-		res := r.fn(e)
+		res, dropped := scaff, 0
+		if r.name != Scaffold {
+			res = r.fn(e)
+			res.findings, dropped = e.dropStale(r.name, res.findings, stale)
+		}
+		if dropped > 0 && len(res.findings) == 0 {
+			res.note = strings.TrimSuffix(fmt.Sprintf("%d finding(s) on owned files scaffold re-renders; %s",
+				dropped, res.note), "; ")
+		}
 		switch {
 		case res.skip != "":
 			_, _ = fmt.Fprintf(e.o.Out, "skip %s: %s\n", r.name, res.skip)
@@ -229,6 +256,10 @@ func (e *env) report() error {
 			fails++
 			_, _ = fmt.Fprintf(e.o.Out, "FAIL %s: %s (%s)\n", r.name, f.what, f.file)
 		}
+		// Dropped, not hidden: counted on the FAIL path too.
+		if dropped > 0 {
+			_, _ = fmt.Fprintf(e.o.Out, "also %s: %d finding(s) on owned files scaffold re-renders\n", r.name, dropped)
+		}
 	}
 	for _, a := range e.c.Allow {
 		if !known[a.Rule] {
@@ -241,6 +272,20 @@ func (e *env) report() error {
 			"ship.yaml allow entry with its why)", fails)
 	}
 	return nil
+}
+
+// dropStale removes rule's findings on a stale file and counts them. A finding the repo allows for rule stays: it
+// is reported allowed, as on a fresh file. Paths compare in clean slash form.
+func (e *env) dropStale(rule string, fs []finding, stale map[string]bool) ([]finding, int) {
+	n := len(fs)
+	fs = slices.DeleteFunc(fs, func(f finding) bool {
+		if _, ok := e.c.Allowed(rule, f.image, f.file); ok {
+			return false
+		}
+		c, _ := config.CleanDir(f.file)
+		return stale[c]
+	})
+	return fs, n - len(fs)
 }
 
 // origin is the GitHub owner and repo of the origin remote; empty when there is none or it is not GitHub.
@@ -279,9 +324,9 @@ func (e *env) exists(p string) bool {
 	return err == nil
 }
 
-func (e *env) goPath(p string) string { return path.Join(filepath.ToSlash(e.c.Go.Dir), p) }
+func (e *env) goPath(p string) string { return path.Join(e.c.Go.Dir, p) }
 
-func (e *env) uiPath(p string) string { return path.Join(filepath.ToSlash(e.c.UI.Dir), p) }
+func (e *env) uiPath(p string) string { return path.Join(e.c.UI.Dir, p) }
 
 // packageJSON is the UI's package.json, the parts conform reads.
 type packageJSON struct {
