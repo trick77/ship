@@ -179,7 +179,7 @@ what is left is by hand.
 `<ui.dir>/eslint.config.js`, `tsconfig.node.json` and `.npmrc` (UI), and in `.dockerignore` (images) and `Makefile`
 (apps, or one that exists) only the block between `# ship:begin` and `# ship:end`; the rest of those two is the repo's. Owned means byte-equal.
 The CI caller's `node-version` is the Containerfile's `node:N` builder major (26 without one): Dependabot moves the
-builder, `ship init` moves CI after it.
+builder, `ship init` moves CI after it. Dependabot updates kit in its own group (v0.x: a minor may break).
 `ship init -diff` prints the difference, writes nothing, exits 1 when anything differs.
 
 | rule | what | allowable |

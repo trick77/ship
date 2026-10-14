@@ -313,6 +313,36 @@ func TestFiles_whenOwnTargetsOutsideBlock_thenManual(t *testing.T) {
 	}
 }
 
+// kit is v0.x: its own group, before the catch-alls, in go.dir's entry and every nested module's.
+const gomodGroups = `    groups:
+      # kit is v0.x: a minor may break. Its own PR, never inside the
+      # catch-all (first matching group wins).
+      kit:
+        patterns: ["github.com/trick77/ship/kit", "github.com/trick77/ship/kit/*"]
+      gomod-non-major:
+        patterns:
+          - "*"
+        update-types:
+          - patch
+          - minor
+      gomod-major:
+        patterns:
+          - "*"
+        update-types:
+          - major
+
+`
+
+func TestFiles_whenGomod_thenKitGroupFirst(t *testing.T) {
+	files, err := Files(t.TempDir(), parse(t, "go:\n  modules: [kit]\n"), Facts{Visibility: "public"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dep := string(byPath(t, files, Dependabot).Want); strings.Count(dep, gomodGroups) != 2 {
+		t.Errorf("gomod groups, want them under both gomod entries:\n%s", dep)
+	}
+}
+
 func TestPrintDiff(t *testing.T) {
 	files := []File{
 		{Path: "same", Have: []byte("a\n"), Exists: true, Want: []byte("a\n")},

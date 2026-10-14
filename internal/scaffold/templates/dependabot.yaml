@@ -7,6 +7,12 @@
       timezone: Europe/Zurich
     open-pull-requests-limit: 5
 [[- end ]]
+[[- define "kit" ]]
+      # kit is v0.x: a minor may break. Its own PR, never inside the
+      # catch-all (first matching group wins).
+      kit:
+        patterns: ["github.com/trick77/ship/kit", "github.com/trick77/ship/kit/*"]
+[[- end ]]
 [[- define "split" ]]
       [[ . ]]-non-major:
         patterns:
@@ -41,6 +47,7 @@ updates:
     directory: [[ .GoDirAbs ]]
 [[- template "head" ]]
     groups:
+[[- template "kit" ]]
 [[- template "split" "gomod" ]]
 [[- template "ignore" (index .Ignore "gomod") ]]
 [[- range .GoModules ]]
@@ -50,6 +57,7 @@ updates:
     directory: [[ . ]]
 [[- template "head" ]]
     groups:
+[[- template "kit" ]]
 [[- template "split" "gomod" ]]
 [[- template "ignore" (index $.Ignore "gomod") ]]
 [[- end ]]
