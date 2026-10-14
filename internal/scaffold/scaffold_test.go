@@ -2,14 +2,12 @@ package scaffold
 
 import (
 	"bytes"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/trick77/ship/internal/config"
-	"github.com/trick77/ship/internal/gitx"
 )
 
 func parse(t *testing.T, s string) *config.Config {
@@ -107,8 +105,7 @@ func TestFiles_whenApp_thenEveryOwnedFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{CI, Release, Cleanup, Dependabot, Ignore, "ui/" + ESLint, "ui/" + TSConfigNode, "ui/" + NPMRC, Makefile,
-		GitIgnore, Agents}
+	want := []string{CI, Release, Cleanup, Dependabot, Ignore, "ui/" + ESLint, "ui/" + TSConfigNode, "ui/" + NPMRC, Makefile}
 	if got := paths(files); strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Fatalf("files %v", got)
 	}
@@ -152,7 +149,7 @@ func TestFiles_whenPublicLibrary_thenCallersOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := paths(files); strings.Join(got, " ") != strings.Join([]string{CI, Release, Dependabot, GitIgnore, Agents}, " ") {
+	if got := paths(files); strings.Join(got, " ") != strings.Join([]string{CI, Release, Dependabot}, " ") {
 		t.Fatalf("files %v", got)
 	}
 	if ci := byPath(t, files, CI); string(ci.Want) != publicLibCI {
@@ -260,48 +257,6 @@ func TestFiles_whenFactsMissing_thenManual(t *testing.T) {
 	if f := byPath(t, files, Cleanup); !strings.Contains(f.Manual, "origin") {
 		t.Errorf("cleanup: %+v", f)
 	}
-	// AGENTS.md's CI line is per visibility: never the public wording on a guess.
-	if f := byPath(t, files, Agents); !strings.Contains(f.Manual, "visibility unknown") || f.Want != nil {
-		t.Errorf("AGENTS.md: %+v", f)
-	}
-}
-
-// A half block's extent is unknown: the file is by hand, never spliced or given a second block.
-func TestFiles_whenMarkersBroken_thenManual(t *testing.T) {
-	for _, tc := range []struct {
-		file       string
-		begin, end string
-	}{{Makefile, Begin, End}, {Ignore, Begin, End}, {GitIgnore, Begin, End}, {Agents, MDBegin, MDEnd}} {
-		for name, have := range map[string]string{
-			"begin only":       "a\n" + tc.begin + "\nb\n",
-			"end only":         "a\n" + tc.end + "\n",
-			"two begins":       tc.begin + "\n" + tc.begin + "\nb\n" + tc.end + "\n",
-			"two ends":         tc.begin + "\nb\n" + tc.end + "\n" + tc.end + "\n",
-			"end before begin": tc.end + "\nb\n" + tc.begin + "\n",
-		} {
-			dir := t.TempDir()
-			write(t, dir, tc.file, have)
-			files, err := Files(dir, parse(t, "images:\n  - {}\n"), Facts{Repo: "r", Visibility: "public"})
-			if err != nil {
-				t.Fatal(err)
-			}
-			f := byPath(t, files, tc.file)
-			if !strings.HasPrefix(f.Manual, "ship block markers broken: restore "+tc.end+" ") || f.Want != nil {
-				t.Errorf("%s %s: %+v", tc.file, name, f)
-			}
-			if _, err := Write(dir, files); err != nil {
-				t.Fatal(err)
-			}
-			if b, _ := os.ReadFile(filepath.Join(dir, tc.file)); string(b) != have {
-				t.Errorf("%s %s written:\n%s", tc.file, name, b)
-			}
-			// A Makefile by hand has no make check: AGENTS.md says ship's gate and lists no Makefile block.
-			if ag := string(byPath(t, files, Agents).Want); tc.file == Makefile &&
-				(!strings.Contains(ag, agentsShip) || strings.Contains(ag, "Makefile")) {
-				t.Errorf("AGENTS.md with a broken Makefile:\n%s", ag)
-			}
-		}
-	}
 }
 
 func TestFiles_whenBlocks_thenRepoLinesKept(t *testing.T) {
@@ -353,151 +308,8 @@ func TestFiles_whenOwnTargetsOutsideBlock_thenManual(t *testing.T) {
 		t.Errorf("Makefile: %+v", mk)
 	}
 	wrote, err := Write(dir, files)
-	if err != nil || strings.Join(wrote, " ") != strings.Join([]string{CI, Release, Dependabot, GitIgnore, Agents}, " ") {
+	if err != nil || strings.Join(wrote, " ") != strings.Join([]string{CI, Release, Dependabot}, " ") {
 		t.Fatalf("wrote %v %v", wrote, err)
-	}
-	// The block did not merge: no make check yet, so AGENTS.md says ship's gate and lists no Makefile block.
-	if ag := string(byPath(t, files, Agents).Want); ag != agentsHead+agentsShip+agentsPublic+
-		fmt.Sprintf(agentsOwned, "", "")+agentsRelease+agentsTail {
-		t.Errorf("AGENTS.md:\n%s", ag)
-	}
-}
-
-func TestFiles_whenUIAtRoot_thenAgentsSaysRepoRoot(t *testing.T) {
-	files, err := Files(t.TempDir(), parse(t, "ui:\n  dir: .\n"), Facts{Visibility: "public"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ag := string(byPath(t, files, Agents).Want)
-	if !strings.Contains(ag, "\n  At the repo root: eslint.config.js, tsconfig.node.json and .npmrc.\n") ||
-		strings.Contains(ag, "In `") {
-		t.Errorf("AGENTS.md:\n%s", ag)
-	}
-}
-
-// AGENTS.md block lines, per variant.
-const (
-	agentsHead = "<!-- ship:begin -->\n<!-- Owned by ship init (github.com/trick77/ship), never edited by hand: " +
-		"repo-specific lines go outside the markers. -->\n## ship\n\n"
-	agentsMake = "- Gate: `make check` before every push, green. `make hooks` once per clone and again when ship says the hook is\n" +
-		"  stale: the pre-push hook runs the gate. GitHub is never the first to find a failure.\n"
-	agentsShip = "- Gate: `ship check` (the `ship()` function in github.com/trick77/ship's README) before every push, green.\n" +
-		"  `ship hooks` once per clone and again when ship says the hook is stale: the pre-push hook runs the gate. GitHub is\n" +
-		"  never the first to find a failure.\n"
-	agentsPrivate = "- CI: Dependabot PRs only (Actions minutes). A Dependabot PR: `%s check` on its branch before merging it.\n"
-	agentsPublic  = "- CI: every PR (Dependabot and outside contributors have no pre-push hook).\n"
-	agentsOwned   = "- Owned by ship, changed with `ship init`, never by hand: the `.github/workflows/` callers, `.github/dependabot.yaml`\n" +
-		"  and the ship blocks in %s.gitignore and AGENTS.md.\n%s" +
-		"  No `.golangci.yaml`: ship's config is the family's.\n"
-	agentsKit = "- kit (github.com/trick77/ship/kit): version, `/healthz` `/readyz`, signals and graceful shutdown come from kit,\n" +
-		"  never hand-rolled. Dependabot bumps it in its own group: a v0.x minor may break.\n"
-	agentsRelease = "- Release: by hand only, `gh workflow run Release -f bump=auto`: the highest `Release: minor|major` line since the\n" +
-		"  last tag (with a `Release-note: …` line), else patch; nothing when only docs or tests changed. The first release\n" +
-		"  needs `-f bump=patch`: auto needs a previous tag.\n"
-	agentsImages = "  Images are built, scanned and signed on GitHub only, never from a laptop.\n"
-	agentsTail   = "- Commit subjects + PR titles: Go style `area: what` (go.dev/doc/contribute), gated by ship; release notes group\n" +
-		"  them by area.\n<!-- ship:end -->\n"
-)
-
-func TestFiles_whenAgents_thenBlockPerVariant(t *testing.T) {
-	ui := "  In `ui/`: eslint.config.js, tsconfig.node.json and .npmrc.\n"
-	for _, tc := range []struct {
-		name, ship, visibility string
-		makefile               bool
-		want                   string
-	}{
-		{"private app", app, "private", false, agentsHead + agentsMake + fmt.Sprintf(agentsPrivate, "make") +
-			fmt.Sprintf(agentsOwned, "Makefile, .dockerignore, ", ui) + agentsKit + agentsRelease + agentsImages + agentsTail},
-		{"public app", "images:\n  - {}\n", "public", false, agentsHead + agentsMake + agentsPublic +
-			fmt.Sprintf(agentsOwned, "Makefile, .dockerignore, ", "") + agentsKit + agentsRelease + agentsImages + agentsTail},
-		{"private make library", "", "private", true, agentsHead + agentsMake + fmt.Sprintf(agentsPrivate, "make") +
-			fmt.Sprintf(agentsOwned, "Makefile, ", "") + agentsRelease + agentsTail},
-		{"public make library", "", "public", true, agentsHead + agentsMake + agentsPublic +
-			fmt.Sprintf(agentsOwned, "Makefile, ", "") + agentsRelease + agentsTail},
-		{"private library", "", "private", false, agentsHead + agentsShip + fmt.Sprintf(agentsPrivate, "ship") +
-			fmt.Sprintf(agentsOwned, "", "") + agentsRelease + agentsTail},
-		{"public library", "", "public", false, agentsHead + agentsShip + agentsPublic +
-			fmt.Sprintf(agentsOwned, "", "") + agentsRelease + agentsTail},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
-			if tc.makefile {
-				write(t, dir, Makefile, "build:\n\tgo build ./...\n")
-			}
-			files, err := Files(dir, parse(t, tc.ship), Facts{Repo: "r", Visibility: tc.visibility})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := string(byPath(t, files, Agents).Want); got != tc.want {
-				t.Errorf("AGENTS.md:\n%s\nwant:\n%s", got, tc.want)
-			}
-		})
-	}
-}
-
-func TestFiles_whenGitIgnore_thenPlaywrightAndUICoverage(t *testing.T) {
-	head := "# ship:begin (owned by ship init; repo-specific lines go outside the markers)\n" +
-		"# Playwright MCP's snapshots and screenshots.\n/.playwright-mcp/\n"
-	cover := "# The UI tests' coverage report (ui.lcov's dir); Go's lives in the git dir.\n"
-	for ship, want := range map[string]string{
-		"":                          head + "# ship:end\n",
-		"ui: {}\n":                  head + cover + "/coverage/ui/*\n# ship:end\n",
-		"ui:\n  dir: backend/web\n": head + cover + "/backend/coverage/ui/*\n# ship:end\n",
-		"ui:\n  lcov: lcov.info\n":  head + "# ship:end\n",
-		// Cleaned first; a coverage segment anywhere in the dir.
-		"ui:\n  lcov: ./backend/coverage/ui/../ui/x.info\n": head + cover + "/backend/coverage/ui/*\n# ship:end\n",
-		"ui:\n  lcov: coverage/x.info\n":                    head + cover + "/coverage/*\n# ship:end\n",
-		// A source dir or one outside the repo is never ignored.
-		"ui:\n  lcov: ui/cov/x.info\n":        head + "# ship:end\n",
-		"ui:\n  lcov: ui/x.info\n":            head + "# ship:end\n",
-		"ui:\n  lcov: backend/lcov.info\n":    head + "# ship:end\n",
-		"ui:\n  lcov: ../coverage/x.info\n":   head + "# ship:end\n",
-		"ui:\n  lcov: /tmp/coverage/x.info\n": head + "# ship:end\n",
-	} {
-		files, err := Files(t.TempDir(), parse(t, ship), Facts{Visibility: "public"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := string(byPath(t, files, GitIgnore).Want); got != want {
-			t.Errorf("%q .gitignore:\n%s\nwant:\n%s", ship, got, want)
-		}
-	}
-}
-
-// AGENTS.md takes the block last, no guard: a check: line in AGENTS.md is prose, not a target. .gitignore's goes
-// first: the repo's negations after it win.
-func TestFiles_whenAgentsAndGitIgnoreExist_thenAppendedAndReplaced(t *testing.T) {
-	dir := t.TempDir()
-	write(t, dir, Agents, "# AGENTS.md\n\ncheck: run the tests")
-	write(t, dir, GitIgnore, "/bin/\n!/coverage/ui/badge.svg\n")
-	files, err := Files(dir, parse(t, ""), Facts{Visibility: "public"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ag, gi := byPath(t, files, Agents), byPath(t, files, GitIgnore)
-	if ag.Manual != "" || !strings.HasPrefix(string(ag.Want), "# AGENTS.md\n\ncheck: run the tests\n\n"+MDBegin+"\n") ||
-		!strings.HasSuffix(string(ag.Want), MDEnd+"\n") {
-		t.Errorf("AGENTS.md: %q %s", ag.Manual, ag.Want)
-	}
-	if !strings.HasPrefix(string(gi.Want), Begin) ||
-		!strings.HasSuffix(string(gi.Want), End+"\n\n/bin/\n!/coverage/ui/badge.svg\n") {
-		t.Errorf(".gitignore:\n%s", gi.Want)
-	}
-	if _, err := Write(dir, files); err != nil {
-		t.Fatal(err)
-	}
-	// A stale block is replaced in place, the repo's lines after it kept.
-	stale := strings.Replace(string(ag.Want), "## ship\n", "## old\n", 1) + "\n- repo line\n"
-	write(t, dir, Agents, stale)
-	files, err = Files(dir, parse(t, ""), Facts{Visibility: "public"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := string(byPath(t, files, Agents).Want); got != string(ag.Want)+"\n- repo line\n" {
-		t.Errorf("replaced block:\n%s", got)
-	}
-	if gi := byPath(t, files, GitIgnore); gi.Differs() {
-		t.Errorf(".gitignore differs after Write:\n%s", gi.Want)
 	}
 }
 
@@ -552,108 +364,6 @@ func TestPrintDiff(t *testing.T) {
 	}
 	if PrintDiff(&b, files[:1]) {
 		t.Error("same file reported")
-	}
-}
-
-// A kept file's diff shows the canon, labelled, but neither counts nor is written.
-func TestPrintDiff_whenKept_thenShownNotCounted(t *testing.T) {
-	dir := t.TempDir()
-	files := []File{{Path: "kept", Exists: true, Have: []byte("a\n"), Want: []byte("b\n"), Kept: "own wording"}}
-	var b strings.Builder
-	if PrintDiff(&b, files) {
-		t.Error("kept file counted")
-	}
-	if want := "kept: allowed, kept: own wording\n--- a/kept\n+++ b/kept (ship init)\n@@ -1,1 +1,1 @@\n-a\n+b\n"; b.String() != want {
-		t.Errorf("diff:\n%s\nwant:\n%s", b.String(), want)
-	}
-	if wrote, err := Write(dir, files); err != nil || len(wrote) != 0 {
-		t.Errorf("wrote %v %v", wrote, err)
-	}
-}
-
-// The block ignores the coverage dir's contents, not the dir: a negation after it re-includes a file (git never
-// looks inside an ignored dir).
-func TestFiles_whenGitIgnoreNegation_thenRepoLineWins(t *testing.T) {
-	dir := t.TempDir()
-	if _, err := gitx.Git(dir, "init", "-q"); err != nil {
-		t.Fatal(err)
-	}
-	write(t, dir, GitIgnore, "!/coverage/ui/badge.svg\n")
-	files, err := Files(dir, parse(t, "ui: {}\n"), Facts{Visibility: "public"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Write(dir, files); err != nil {
-		t.Fatal(err)
-	}
-	for p, ignored := range map[string]bool{"coverage/ui/badge.svg": false, "coverage/ui/lcov.info": true,
-		"coverage/ui/html/index.html": true, ".playwright-mcp/x.png": true, "coverage/other.txt": false} {
-		write(t, dir, p, "x\n")
-		// check-ignore exits 0 for an ignored path, 1 for one that is not.
-		if _, err := gitx.Git(dir, "check-ignore", "-q", p); (err == nil) != ignored {
-			t.Errorf("%s ignored = %v, want %v", p, err == nil, ignored)
-		}
-	}
-}
-
-// Only a whole line is a marker (the begin line with a note in parentheses): a lookalike comment or a marker quoted
-// in prose is the repo's line, not a broken block.
-func TestFiles_whenMarkerLookalikes_thenRepoLines(t *testing.T) {
-	c := parse(t, "images:\n  - {}\n")
-	render := func(have map[string]string) []File {
-		t.Helper()
-		dir := t.TempDir()
-		for p, s := range have {
-			write(t, dir, p, s)
-		}
-		files, err := Files(dir, c, Facts{Repo: "r", Visibility: "public"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return files
-	}
-	files := render(map[string]string{
-		Makefile: "# ship:endpoint is the API's\nbuild:\n\tgo build ./...\n",
-		Agents:   "# AGENTS.md\n\nShip's block sits between `" + MDBegin + "` and `" + MDEnd + "`.\n",
-	})
-	mk, ag := byPath(t, files, Makefile), byPath(t, files, Agents)
-	if mk.Manual != "" || !strings.HasPrefix(string(mk.Want), "# ship:endpoint is the API's\nbuild:\n\tgo build ./...\n\n"+Begin) {
-		t.Errorf("Makefile: %q\n%s", mk.Manual, mk.Want)
-	}
-	if ag.Manual != "" || !strings.HasPrefix(string(ag.Want), "# AGENTS.md\n\nShip's block sits between `") ||
-		strings.Count(string(ag.Want), "\n"+MDBegin+"\n") != 1 {
-		t.Errorf("AGENTS.md: %q\n%s", ag.Manual, ag.Want)
-	}
-	// A rendered block with an older begin note and a `# ship:end of x` comment after it: the first pair is the
-	// block, replaced in place, the comment kept.
-	block := string(mk.Want[bytes.Index(mk.Want, []byte(Begin)):])
-	old := strings.Replace(block, Begin+" (owned by ship init)\n", Begin+" (old note)\n", 1)
-	if old == block {
-		t.Fatalf("Makefile begin line changed:\n%s", block)
-	}
-	have := "build:\n\tgo build ./...\n\n" + strings.Replace(old, "lint:\n", "lint: tidy\n", 1) + "# ship:end of x\n"
-	mk = byPath(t, render(map[string]string{Makefile: have}), Makefile)
-	if mk.Manual != "" || string(mk.Want) != "build:\n\tgo build ./...\n\n"+block+"# ship:end of x\n" {
-		t.Errorf("Makefile: %q\n%s", mk.Manual, mk.Want)
-	}
-}
-
-// A Makefile a scaffold allow names is the repo's: init never writes it, so no make check; a path-less allow names
-// no file.
-func TestFiles_whenMakefileAllowed_thenShipGate(t *testing.T) {
-	for allow, owned := range map[string]bool{
-		"  - { rule: scaffold, path: Makefile, why: own targets }\n": false,
-		"  - { rule: scaffold, why: any drift }\n":                   true,
-	} {
-		files, err := Files(t.TempDir(), parse(t, "images:\n  - {}\nallow:\n"+allow), Facts{Repo: "r", Visibility: "public"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		ag := string(byPath(t, files, Agents).Want)
-		if strings.Contains(ag, agentsMake) != owned || strings.Contains(ag, agentsShip) == owned ||
-			strings.Contains(ag, "Makefile, ") != owned {
-			t.Errorf("%sAGENTS.md:\n%s", allow, ag)
-		}
 	}
 }
 

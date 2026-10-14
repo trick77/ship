@@ -26,7 +26,7 @@ import (
 
 // Rule names, as ship.yaml allow entries spell them.
 const (
-	Scaffold      = scaffold.Rule
+	Scaffold      = "scaffold"
 	Workflows     = "workflows"
 	Visibility    = "visibility"
 	Dependabot    = "dependabot"
@@ -161,32 +161,20 @@ func Run(root string, c *config.Config, o Options) error {
 	return e.report()
 }
 
-// Init writes the owned files that differ from ship's templates, except those a scaffold allow naming their path
-// keeps. diff: print what would change (a kept file's diff labelled), write nothing, error when anything init would
-// write or leaves by hand differs.
+// Init writes the owned files that differ from ship's templates. diff: print what would change, write nothing,
+// error when anything differs.
 func Init(root string, c *config.Config, o Options, diff bool) error {
 	e := newEnv(root, c, o)
 	if e.renderErr != nil {
 		return e.renderErr
 	}
-	// An allow naming the file means the repo owns its difference: init leaves it as it is. A path-less scaffold
-	// allow excuses conform's check only: init is the explicit write command.
-	files := slices.Clone(e.files)
-	for i, f := range files {
-		if a, ok := e.c.AllowedPath(Scaffold, f.Path); ok {
-			files[i].Kept = a.Why
-			if !diff && f.Differs() {
-				_, _ = fmt.Fprintf(e.o.Out, "ship: kept %s (allowed: %s)\n", f.Path, a.Why)
-			}
-		}
-	}
 	if diff {
-		if scaffold.PrintDiff(e.o.Out, files) {
+		if scaffold.PrintDiff(e.o.Out, e.files) {
 			return errors.New("init -diff: owned files differ from ship's templates (ship init writes them)")
 		}
 		return nil
 	}
-	wrote, err := scaffold.Write(root, files)
+	wrote, err := scaffold.Write(root, e.files)
 	for _, p := range wrote {
 		_, _ = fmt.Fprintln(e.o.Out, "ship: wrote", p)
 	}
@@ -194,8 +182,8 @@ func Init(root string, c *config.Config, o Options, diff bool) error {
 		return err
 	}
 	var manual []string
-	for _, f := range files {
-		if f.Manual != "" && f.Kept == "" {
+	for _, f := range e.files {
+		if f.Manual != "" {
 			manual = append(manual, fmt.Sprintf("  %s: %s", f.Path, f.Manual))
 		}
 	}

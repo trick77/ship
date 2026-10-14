@@ -27,17 +27,6 @@ func (c *Config) Allowed(rule string, image *string, path string) (Allow, bool) 
 	return Allow{}, false
 }
 
-// AllowedPath returns the entry excusing rule for exactly path: a path-less entry excuses a check, never names a
-// file (ship init keeps only a file an entry names).
-func (c *Config) AllowedPath(rule, path string) (Allow, bool) {
-	for _, a := range c.Allow {
-		if a.Rule == rule && a.Path != "" && a.Path == path {
-			return a, true
-		}
-	}
-	return Allow{}, false
-}
-
 func (c *Config) validateConform() error {
 	switch c.Visibility {
 	case "", "public", "private":

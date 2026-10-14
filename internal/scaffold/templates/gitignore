@@ -1,8 +1,0 @@
-# ship:begin (owned by ship init; repo-specific lines go outside the markers)
-# Playwright MCP's snapshots and screenshots.
-/.playwright-mcp/
-[[- if .UICoverage ]]
-# The UI tests' coverage report (ui.lcov's dir); Go's lives in the git dir.
-[[ .UICoverage ]]
-[[- end ]]
-# ship:end

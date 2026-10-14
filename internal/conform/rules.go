@@ -21,7 +21,7 @@ import (
 // KitModule is ship's library of the code every service had hand-rolled (version, health, graceful shutdown).
 const KitModule = "github.com/trick77/ship/kit"
 
-// AgentsLine is the start of AGENTS.md's commit-subject line, in ship's block (templates/agents.md).
+// AgentsLine is the start of AGENTS.md's commit-subject line (README, Adopting ship); the areas are the repo's.
 const AgentsLine = "Commit subjects + PR titles: Go style `area: what`"
 
 // listed is git's view of the tree (tracked and untracked, not ignored), read once.
@@ -377,8 +377,11 @@ var (
 	// httpx.Healthcheck(httpx.LocalURL(addr, "/healthz")), names one.
 	healthRoute = regexp.MustCompile(`(?:["` + "`" + `][A-Z]+(?:[ \t]|\\t)+[^"` + "`" + `/ \t\\]*|Handle(?:Func)?\(\s*["` +
 		"`" + `])/(?:api/(?:v1/)?)?` + `(?:healthz?|readyz)["` + "`]")
-	signalWait = regexp.MustCompile(`signal\.` + `Notify(?:Context)?\(`)
-	oidcImport = regexp.MustCompile(`"github\.com/coreos/` + `go-oidc[/"]`)
+	// kit's probes registered in the file: a probe route there mounts them (a sub-mux under a prefix). One written
+	// by hand beside them on the same mux would panic at startup as a duplicate pattern.
+	healthMount = regexp.MustCompile(`\bhttpx\.` + `Health\(`)
+	signalWait  = regexp.MustCompile(`signal\.` + `Notify(?:Context)?\(`)
+	oidcImport  = regexp.MustCompile(`"github\.com/coreos/` + `go-oidc[/"]`)
 )
 
 // handrolled: version stamping, health routes, shutdown signals and OIDC sign-in come from kit, never a copy.
@@ -404,7 +407,7 @@ func (e *env) handrolled() result {
 			fs = append(fs, finding{what: err.Error(), file: f})
 			continue
 		}
-		if healthRoute.Match(b) {
+		if healthRoute.Match(b) && !healthMount.Match(b) {
 			fs = append(fs, finding{what: "own health route: use kit's", file: f})
 		}
 		if signalWait.Match(b) {
@@ -447,8 +450,8 @@ func (e *env) agents() result {
 	case b == nil:
 		return result{findings: []finding{{what: "missing", file: "AGENTS.md"}}}
 	case !bytes.Contains(b, []byte(AgentsLine)):
-		return result{findings: []finding{{what: "no commit-subject line (`- " + AgentsLine +
-			" …`, as ship init's AGENTS.md block has it)", file: "AGENTS.md"}}}
+		return result{findings: []finding{{what: "no commit-subject line (README, Adopting ship: `- " + AgentsLine +
+			" (…), gated by ship; …`)", file: "AGENTS.md"}}}
 	}
 	return result{}
 }

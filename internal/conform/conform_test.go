@@ -458,6 +458,9 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 			// A path named as a URL, not a route: kit's own probe call, a client of someone's /health. Never a finding.
 			r.write("backend/cmd/app/probe.go", "package main\n\nfunc g() {\n\thttpx.Healthcheck(httpx.LocalURL(addr, \"/"+
 				"healthz\"))\n\t_, _ = http.Get(base + \"/"+"health\")\n}\n")
+			// kit's probes on a sub-mux, mounted under a prefix (transmission-ui): a route to kit's, never a finding.
+			r.write("backend/internal/api/mount.go", "package api\n\nfunc f() {\n\thttpx."+"Health(probes, log)\n"+
+				"\tmux.Handle(p(\"GET /"+"healthz\"), http.StripPrefix(base, probes))\n}\n")
 			r.write("backend/cmd/app/main.go", "package main\n\nfunc init() { signal."+"NotifyContext(nil) }\n")
 			r.write("backend/cmd/app/main_test.go", "package main\n\nconst p = \"GET /"+"health\"\n")
 			r.write("backend/testdata/x.go", "package x\n\nconst p = \"GET /"+"health\"\n")
@@ -473,15 +476,10 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 			"FAIL handrolled: own health route: use kit's (backend/internal/api/ready.go)",
 			"FAIL handrolled: own shutdown signal handling: use kit's (run.Context, httpx.Serve) (backend/cmd/app/main.go)",
 			"FAIL handrolled: own OIDC: use github.com/trick77/ship/kit/auth (backend/internal/auth/oidc.go)"}},
-		// AGENTS.md's ship block carries the line: the rule is the backstop for an allowed scaffold diff.
-		{"agents", appShip + allowScaffold(scaffold.Agents), func(r *repo) { r.write("AGENTS.md", "# AGENTS.md\n") },
+		{"agents", appShip, func(r *repo) { r.write("AGENTS.md", "# AGENTS.md\n") },
 			[]string{"FAIL agents: no commit-subject line"}},
-		{"agents missing", appShip + allowScaffold(scaffold.Agents), func(r *repo) { r.remove("AGENTS.md") },
+		{"agents missing", appShip, func(r *repo) { r.remove("AGENTS.md") },
 			[]string{"FAIL agents: missing (AGENTS.md)"}},
-		{"agents block edited", appShip, func(r *repo) { r.edit("AGENTS.md", "## ship\n", "## gate\n") },
-			[]string{"FAIL scaffold: differs from ship's template (ship init -diff) (AGENTS.md)"}},
-		{"gitignore block missing", appShip, func(r *repo) { r.remove(scaffold.GitIgnore) },
-			[]string{"FAIL scaffold: missing (ship init) (.gitignore)"}},
 		{"unknown allow", appShip + "allow:\n  - { rule: scafold, why: typo }\n", func(*repo) {},
 			[]string{`FAIL allow: "scafold" names no conform rule (ship.yaml)`}},
 	} {
@@ -598,7 +596,7 @@ func TestRun_whenLibrary_thenAppRulesSkipped(t *testing.T) {
 		t.Fatal(err)
 	}
 	if r.out.String() != "ship: wrote .github/workflows/ci.yaml\nship: wrote .github/workflows/release.yaml\n"+
-		"ship: wrote .github/dependabot.yaml\nship: wrote .gitignore\nship: wrote AGENTS.md\n" {
+		"ship: wrote .github/dependabot.yaml\n" {
 		t.Errorf("init:\n%s", r.out.String())
 	}
 	out, err := r.run("")
@@ -847,60 +845,6 @@ func TestInit_whenDiff_thenNothingWritten(t *testing.T) {
 	}
 }
 
-// ship's own shape: a scaffold allow means the repo owns that file's difference, init and fix never write it.
-func TestInit_whenScaffoldAllowed_thenKept(t *testing.T) {
-	r := app(t)
-	r.edit(scaffold.CI, "cancel-in-progress: true", "cancel-in-progress: false")
-	r.write("AGENTS.md", agentsMD)
-	ship := appShip + "allow:\n" +
-		"  - { rule: scaffold, path: .github/workflows/ci.yaml, why: long CI }\n" +
-		"  - { rule: scaffold, path: AGENTS.md, why: own gate wording }\n"
-	read := func(p string) string {
-		b, err := os.ReadFile(filepath.Join(r.dir, p))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return string(b)
-	}
-	ci := read(scaffold.CI)
-	r.out.Reset()
-	// -diff shows a kept file's canon, labelled, and does not fail on it.
-	if err := Init(r.dir, r.config(ship), r.opts, true); err != nil ||
-		!strings.Contains(r.out.String(), ".github/workflows/ci.yaml: allowed, kept: long CI\n--- a/.github/workflows/ci.yaml\n") ||
-		!strings.Contains(r.out.String(), "AGENTS.md: allowed, kept: own gate wording\n--- a/AGENTS.md\n") {
-		t.Errorf("diff: %v\n%s", err, r.out.String())
-	}
-	for _, fix := range []bool{false, true} {
-		r.out.Reset()
-		var err error
-		if fix {
-			err = Fix(r.dir, r.config(ship), r.opts)
-		} else {
-			err = Init(r.dir, r.config(ship), r.opts, false)
-		}
-		out := r.out.String()
-		if err != nil || strings.Contains(out, "ship: wrote") ||
-			!strings.Contains(out, "ship: kept .github/workflows/ci.yaml (allowed: long CI)\n") ||
-			!strings.Contains(out, "ship: kept AGENTS.md (allowed: own gate wording)\n") {
-			t.Errorf("fix %v: %v\n%s", fix, err, out)
-		}
-		if read(scaffold.CI) != ci || read("AGENTS.md") != agentsMD {
-			t.Errorf("fix %v: allowed file written", fix)
-		}
-	}
-}
-
-// A path-less scaffold allow excuses conform's check, names no file: init, the explicit write command, writes.
-func TestInit_whenPathlessScaffoldAllow_thenWritten(t *testing.T) {
-	r := app(t)
-	r.edit(scaffold.CI, "cancel-in-progress: true", "cancel-in-progress: false")
-	r.out.Reset()
-	if err := Init(r.dir, r.config(appShip+"allow:\n  - { rule: scaffold, why: any drift }\n"), r.opts, false); err != nil ||
-		r.out.String() != "ship: wrote .github/workflows/ci.yaml\n" {
-		t.Errorf("%v\n%s", err, r.out.String())
-	}
-}
-
 func TestFix_whenManualLeft_thenListed(t *testing.T) {
 	r := app(t)
 	r.remove(scaffold.Dependabot)
@@ -910,9 +854,7 @@ func TestFix_whenManualLeft_thenListed(t *testing.T) {
 	err := Fix(r.dir, r.config(appShip), r.opts)
 	out := r.out.String()
 	if err == nil || !strings.Contains(out, "ship: wrote .github/dependabot.yaml\n") ||
-		!strings.Contains(out, "FAIL scaffold: Makefile has its own check") ||
-		// The block init appends carries the commit-subject line.
-		!strings.Contains(out, "ship: wrote AGENTS.md\n") || !strings.Contains(out, "ok agents\n") ||
+		!strings.Contains(out, "FAIL scaffold: Makefile has its own check") || !strings.Contains(out, "FAIL agents:") ||
 		strings.Contains(out, "FAIL dependabot") {
 		t.Errorf("%v\n%s", err, out)
 	}

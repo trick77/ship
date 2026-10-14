@@ -32,6 +32,4 @@ deliberately.
 - Commit subjects + PR titles: Go style `area: what` (`hook: …`, `release: …`), gated, and the release notes.
 - Conform (`ship conform`, check's first step) is the canon gate: a consumer's owned files are byte-equal to
   internal/scaffold's templates; change the canon there, never in a consumer. Exceptions: ship.yaml `allow` + why.
-  AGENTS.md and .gitignore ship blocks are canon too: a wording change there fails every consumer's push until
-  `ship init`.
 - Coverage: comment/blank lines never count (go/scanner, not a regex). Floors and patch share one line model.
