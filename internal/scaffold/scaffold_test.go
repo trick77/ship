@@ -166,7 +166,7 @@ func TestFiles_whenPublicLibrary_thenCallersOnly(t *testing.T) {
 }
 
 func TestFiles_whenGoModules_thenGomodEntryEach(t *testing.T) {
-	files, err := Files(t.TempDir(), parse(t, "go:\n  modules: [kit, ./kit/auth]\n"), Facts{Visibility: "public"})
+	files, err := Files(t.TempDir(), parse(t, "go:\n  modules: [kit, kit/auth]\n"), Facts{Visibility: "public"})
 	if err != nil {
 		t.Fatal(err)
 	}

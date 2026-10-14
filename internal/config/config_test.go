@@ -158,16 +158,49 @@ func TestParse_whenModules_thenListed(t *testing.T) {
 	}
 }
 
-// A Go dir reaches release -dir, the tag prefix and the rendered callers as listed: cleaned once here, ./kit/auth/
-// is kit/auth; backend and the default . stay as written.
-func TestParse_whenGoDirsUnclean_thenCleaned(t *testing.T) {
-	c, err := Parse([]byte("go:\n  dir: ./backend/\n  modules: [./kit/auth, kit//x/, a/../lib]\n"))
-	if err != nil || c.Go.Dir != "backend" || !slices.Equal(c.Go.Modules, []string{"kit/auth", "kit/x", "lib"}) {
+// go.dir reaches the rendered callers as listed: cleaned once here, ./backend/ is backend; backend and the default
+// . stay as written.
+func TestParse_whenGoDirUnclean_thenCleaned(t *testing.T) {
+	c, err := Parse([]byte("go:\n  dir: ./backend/\n  modules: [kit/auth, lib]\n"))
+	if err != nil || c.Go.Dir != "backend" || !slices.Equal(c.Go.Modules, []string{"kit/auth", "lib"}) {
 		t.Fatalf("%q %q %v", c.Go.Dir, c.Go.Modules, err)
 	}
 	for in, want := range map[string]string{"": ".", "go:\n  dir: backend\n": "backend", "go:\n  dir: .\n": "."} {
 		if c, err := Parse([]byte(in)); err != nil || c.Go.Dir != want {
 			t.Errorf("%q: %v %v", in, c, err)
+		}
+	}
+}
+
+// go.modules is taken as written, by release and by CI's jq guard alike: an unclean entry fails, naming the clean
+// spelling, never cleaned behind CI's back.
+func TestParse_whenModuleUnclean_thenError(t *testing.T) {
+	for in, want := range map[string]string{
+		"./kit":       "go.modules: write kit, not ./kit",
+		"kit/":        "go.modules: write kit, not kit/",
+		"/kit":        "go.modules: write kit, not /kit",
+		"kit//auth":   "go.modules: write kit/auth, not kit//auth",
+		"kit/./auth":  "go.modules: write kit/auth, not kit/./auth",
+		"kit/../lib":  "go.modules: write lib, not kit/../lib",
+		".":           `go.modules: ".", want a dir inside the repo`,
+		"..":          `go.modules: "..", want a dir inside the repo`,
+		"../x":        `go.modules: "../x", want a dir inside the repo`,
+		`""`:          `go.modules: "", want a dir inside the repo`,
+		"kit, kit":    `go.modules: "kit", want a dir inside the repo, not go.dir, listed once`,
+		"kit/auth, x": "",
+	} {
+		_, err := Parse([]byte("go:\n  modules: [" + in + "]\n"))
+		if want == "" && err != nil || want != "" && (err == nil || !strings.Contains(err.Error(), want)) {
+			t.Errorf("%s: %v, want %q", in, err, want)
+		}
+	}
+}
+
+func TestEscapes_whenOutside_thenTrue(t *testing.T) {
+	for p, want := range map[string]bool{"kit": false, "kit/auth": false, ".": false, "./kit/": false,
+		"kit/../lib": false, "..": true, "../x": true, "kit/../../x": true, "/kit": true} {
+		if got := Escapes(p); got != want {
+			t.Errorf("Escapes(%q) = %v, want %v", p, got, want)
 		}
 	}
 }

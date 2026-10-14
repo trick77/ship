@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"path"
 	"path/filepath"
-	"strings"
 
 	"github.com/trick77/ship/internal/config"
 	"github.com/trick77/ship/internal/gitx"
@@ -17,7 +16,7 @@ func nested(c *config.Config, dir string) (*config.Config, string, error) {
 	if dir == "" || d == "." {
 		return c, "", nil
 	}
-	if path.IsAbs(d) || d == ".." || strings.HasPrefix(d, "../") {
+	if config.Escapes(d) {
 		return nil, "", fmt.Errorf("-dir %s: want a dir inside the repo", dir)
 	}
 	// Go resolves a nested module's version only from <dir>/vX.Y.Z: any other prefix tags a version go get never sees.
@@ -37,7 +36,7 @@ func scope(root string, c *config.Config, dir string) ([]string, error) {
 	if dir == "" && len(c.Images) > 0 {
 		return nil, nil
 	}
-	mod := path.Clean(filepath.ToSlash(c.Go.Dir))
+	mod := c.Go.Dir
 	// No module at go.dir (a repo of no Go, or go.dir unset with backend/go.mod): nothing is nested in it.
 	if !fileExists(filepath.Join(root, mod, "go.mod")) {
 		return nil, nil

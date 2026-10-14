@@ -10,6 +10,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
@@ -72,7 +73,7 @@ type Go struct {
 	Exclude []string `yaml:"exclude"`
 	// Modules are repo-relative dirs of nested Go modules (each its own go.mod), gated like Dir: same commands,
 	// the same floor each on its own, their lines in the patch gate. Coverpkg is Dir's alone. A nested go.mod not
-	// listed fails check: no module is ever silently ungated.
+	// listed fails check: no module is ever silently ungated. Written clean (kit/auth, never ./kit/auth/).
 	Modules []string `yaml:"modules"`
 }
 
@@ -172,12 +173,10 @@ func Parse(b []byte) (*Config, error) {
 
 // defaults fills what depends on other values or lives in lists.
 func (c *Config) defaults() {
-	// Go dirs are kept clean (kit/auth, never ./kit/auth/): a release tag prefix, a dependabot directory and the
-	// rendered callers are spelled from them. validate checks the clean form.
+	// go.dir is kept clean (backend, never ./backend/): a dependabot directory and the rendered callers are spelled
+	// from it, every user takes it as is. go.modules is never cleaned, it must be written clean (validate): CI's
+	// release matrix reads ship.yaml raw.
 	c.Go.Dir = path.Clean(filepath.ToSlash(c.Go.Dir))
-	for i, m := range c.Go.Modules {
-		c.Go.Modules[i] = path.Clean(filepath.ToSlash(m))
-	}
 	if c.UI != nil && c.UI.Lcov == "" {
 		// conform's vite reportsDirectory "../coverage/ui", seen from the repo root.
 		c.UI.Lcov = filepath.Join(filepath.Dir(c.UI.Dir), "coverage", "ui", "lcov.info")
@@ -218,11 +217,14 @@ func (c *Config) validate() error {
 		return fmt.Errorf("%s: postgres: %q, want a version like \"17\", an image like "+
 			"\"timescale/timescaledb:2.29.1-pg17\" or a compose service like \"compose:db\"", File, c.Postgres)
 	}
-	if escapes(c.Go.Dir) {
+	if Escapes(c.Go.Dir) {
 		return fmt.Errorf("%s: go.dir: %q is not a directory inside the repo", File, c.Go.Dir)
 	}
 	seen := map[string]bool{c.Go.Dir: true}
 	for _, m := range c.Go.Modules {
+		if err := cleanModule(m); err != nil {
+			return err
+		}
 		if !inRepo(m) || seen[m] {
 			return fmt.Errorf("%s: go.modules: %q, want a dir inside the repo, not go.dir, listed once", File, m)
 		}
@@ -264,11 +266,25 @@ func (c *Config) PostgresImage() string {
 	return c.Postgres
 }
 
-// escapes reports whether p leaves the repo, lexically: an absolute path or one through "..".
-func escapes(p string) bool {
-	c := filepath.ToSlash(filepath.Clean(p))
-	return filepath.IsAbs(p) || c == ".." || strings.HasPrefix(c, "../")
+// cleanModule fails on a go.modules entry not written clean: release's -dir and tag prefix and CI's release matrix
+// take it as written, CI's jq guard by the same rules: no ./, no leading or trailing /, no //, no . or .. segment,
+// not empty. The error names the clean spelling where there is one inside the repo.
+func cleanModule(m string) error {
+	if !slices.ContainsFunc(strings.Split(m, "/"), func(s string) bool { return s == "" || s == "." || s == ".." }) {
+		return nil
+	}
+	if c := strings.TrimLeft(path.Clean(m), "/"); inRepo(c) {
+		return fmt.Errorf("%s: go.modules: write %s, not %s", File, c, m)
+	}
+	return fmt.Errorf("%s: go.modules: %q, want a dir inside the repo like kit/auth", File, m)
+}
+
+// Escapes reports whether p leaves the repo, lexically: an absolute path or one through "..". Slash semantics on
+// every OS (ship.yaml and git spell paths with /); filepath.IsAbs still catches a Windows drive path (C:\x).
+func Escapes(p string) bool {
+	c := path.Clean(filepath.ToSlash(p))
+	return filepath.IsAbs(p) || path.IsAbs(c) || c == ".." || strings.HasPrefix(c, "../")
 }
 
 // inRepo reports whether p is a repo-relative path below the root: it does not escape and is not the root itself.
-func inRepo(p string) bool { return !escapes(p) && filepath.Clean(p) != "." }
+func inRepo(p string) bool { return !Escapes(p) && path.Clean(filepath.ToSlash(p)) != "." }

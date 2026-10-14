@@ -420,7 +420,7 @@ func (e *env) handrolled() result {
 // inModule: f belongs to the go.dir module, not to a nested one (kit in ship's repo) or a dir the go tool skips.
 func (e *env) inModule(f string, listed map[string]bool) bool {
 	rel := f
-	if dir := path.Clean(filepath.ToSlash(e.c.Go.Dir)); dir != "." {
+	if dir := e.c.Go.Dir; dir != "." {
 		var ok bool
 		if rel, ok = strings.CutPrefix(f, dir+"/"); !ok {
 			return false

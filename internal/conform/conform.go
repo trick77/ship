@@ -202,22 +202,39 @@ func Fix(root string, c *config.Config, o Options) error {
 	return Run(root, c, o)
 }
 
-func (e *env) report() error {
+func (e *env) report() error { return e.reportOf(rules()) }
+
+// reportOf runs rs and prints their verdicts in order.
+func (e *env) reportOf(rs []rule) error {
 	known := map[string]bool{}
 	fails := 0
 	// stale are the owned files scaffold fails, not allowed: ship init rewrites them, so another rule's finding there
-	// only doubles scaffold's. scaffold runs first and fills it. An allowed diff keeps every rule's findings, its one
-	// guard; a Manual file too (ship writes none of it).
+	// only doubles scaffold's. Scaffold runs before every other rule whatever its place in rs. An allowed diff keeps
+	// every rule's findings, its one guard; a Manual file too (ship writes none of it).
+	done := map[string]result{}
 	stale := map[string]bool{}
-	for _, r := range rules() {
-		known[r.name] = true
-		res := r.fn(e)
-		if n := len(res.findings); r.name != Scaffold {
-			res.findings = slices.DeleteFunc(res.findings, func(f finding) bool { return stale[f.file] })
-			if d := n - len(res.findings); d > 0 {
-				res.note = strings.TrimSuffix(fmt.Sprintf("%d finding(s) on owned files scaffold re-renders; %s",
-					d, res.note), "; ")
+	if i := slices.IndexFunc(rs, func(r rule) bool { return r.name == Scaffold }); i >= 0 {
+		res := rs[i].fn(e)
+		done[Scaffold] = res
+		for _, f := range res.findings {
+			if _, ok := e.c.Allowed(Scaffold, f.image, f.file); f.rerender && !ok {
+				stale[cleanFile(f.file)] = true
 			}
+		}
+	}
+	for _, r := range rs {
+		known[r.name] = true
+		res, ok := done[r.name]
+		if !ok {
+			res = r.fn(e)
+		}
+		dropped := 0
+		if r.name != Scaffold {
+			res.findings, dropped = dropStale(res.findings, stale)
+		}
+		if dropped > 0 && len(res.findings) == 0 {
+			res.note = strings.TrimSuffix(fmt.Sprintf("%d finding(s) on owned files scaffold re-renders; %s",
+				dropped, res.note), "; ")
 		}
 		switch {
 		case res.skip != "":
@@ -239,11 +256,12 @@ func (e *env) report() error {
 				}
 				continue
 			}
-			if f.rerender {
-				stale[f.file] = true
-			}
 			fails++
 			_, _ = fmt.Fprintf(e.o.Out, "FAIL %s: %s (%s)\n", r.name, f.what, f.file)
+		}
+		// Dropped, not hidden: counted on the FAIL path too.
+		if dropped > 0 {
+			_, _ = fmt.Fprintf(e.o.Out, "also %s: %d finding(s) on owned files scaffold re-renders\n", r.name, dropped)
 		}
 	}
 	for _, a := range e.c.Allow {
@@ -258,6 +276,15 @@ func (e *env) report() error {
 	}
 	return nil
 }
+
+// dropStale removes the findings on a stale file, compared clean (./ui/x is ui/x), and counts them.
+func dropStale(fs []finding, stale map[string]bool) ([]finding, int) {
+	n := len(fs)
+	fs = slices.DeleteFunc(fs, func(f finding) bool { return stale[cleanFile(f.file)] })
+	return fs, n - len(fs)
+}
+
+func cleanFile(p string) string { return path.Clean(filepath.ToSlash(p)) }
 
 // origin is the GitHub owner and repo of the origin remote; empty when there is none or it is not GitHub.
 func origin(root string) (owner, repo string) {
@@ -295,7 +322,7 @@ func (e *env) exists(p string) bool {
 	return err == nil
 }
 
-func (e *env) goPath(p string) string { return path.Join(filepath.ToSlash(e.c.Go.Dir), p) }
+func (e *env) goPath(p string) string { return path.Join(e.c.Go.Dir, p) }
 
 func (e *env) uiPath(p string) string { return path.Join(filepath.ToSlash(e.c.UI.Dir), p) }
 

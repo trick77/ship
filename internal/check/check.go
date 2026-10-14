@@ -181,10 +181,8 @@ func (r runner) goIn(dir string, args ...string) error {
 // modules is go.dir, then go.modules: every Go module the gate runs on.
 func (r runner) modules() []string { return append([]string{r.c.Go.Dir}, r.c.Go.Modules...) }
 
-// nested reports whether dir is one of go.modules, not go.dir.
-func (r runner) nested(dir string) bool { return cleanSlash(dir) != cleanSlash(r.c.Go.Dir) }
-
-func cleanSlash(p string) string { return path.Clean(filepath.ToSlash(p)) }
+// nested reports whether dir, one of modules(), is one of go.modules, not go.dir. Parse leaves both clean.
+func (r runner) nested(dir string) bool { return dir != r.c.Go.Dir }
 
 // eachModule runs fn for every module, a nested one under its own heading and named in its error.
 func (r runner) eachModule(fn func(dir string) error) error {
@@ -211,7 +209,7 @@ func (r runner) goModules() error {
 		if !fileExists(filepath.Join(r.root, m, "go.mod")) {
 			return fmt.Errorf("go.modules: no go.mod in %s", m)
 		}
-		listed[cleanSlash(m)] = true
+		listed[m] = true
 	}
 	// A pathspec's * crosses /: */go.mod finds every go.mod below the root.
 	files, err := gitx.Files(r.root, "*/go.mod")
@@ -221,7 +219,7 @@ func (r runner) goModules() error {
 	var unlisted []string
 	for f := range files {
 		d := path.Dir(f)
-		if ignoredByGo(f) || d == cleanSlash(r.c.Go.Dir) || listed[d] || !fileExists(filepath.Join(r.root, f)) {
+		if ignoredByGo(f) || d == r.c.Go.Dir || listed[d] || !fileExists(filepath.Join(r.root, f)) {
 			continue
 		}
 		unlisted = append(unlisted, d)
@@ -540,8 +538,8 @@ func (r runner) goTest(env ...string) error {
 		if r.c.Go.RaceOn() {
 			args = append(args, "-race")
 		}
-		if r.c.Go.CoverpkgArg() != "" && !r.nested(dir) {
-			args = append(args, "-coverpkg="+r.c.Go.CoverpkgArg())
+		if p := r.c.Go.CoverpkgArg(); p != "" && !r.nested(dir) {
+			args = append(args, "-coverpkg="+p)
 		}
 		return r.run(filepath.Join(r.root, dir), env, "go", append(args, "./...")...)
 	})
@@ -551,7 +549,7 @@ func (r runner) goTest(env ...string) error {
 // tree, which the pre-push hook would refuse as uncommitted. A nested module's sits under ship/modules/<dir>/.
 func (r runner) profile(dir string) (string, error) {
 	if r.nested(dir) {
-		return r.gitPath("ship/modules/" + cleanSlash(dir) + "/go.out")
+		return r.gitPath("ship/modules/" + dir + "/go.out")
 	}
 	return r.gitPath("ship/go.out")
 }

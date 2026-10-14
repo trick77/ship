@@ -96,7 +96,7 @@ type data struct {
 func Files(root string, c *config.Config, f Facts) ([]File, error) {
 	d := data{
 		Private: f.Visibility == "private", Images: len(c.Images) > 0, UI: c.UI != nil,
-		Branches: "[" + c.Base + "]", GoDir: c.Go.Dir, GoDirSet: path.Clean(c.Go.Dir) != ".",
+		Branches: "[" + c.Base + "]", GoDir: c.Go.Dir, GoDirSet: c.Go.Dir != ".",
 		GoDirAbs: abs(c.Go.Dir), DependabotOnly: DependabotOnly, NodeVersion: f.NodeVersion, DockerDirs: f.DockerDirs,
 		Compose: f.Compose, Ignore: map[string][]config.Ignore{}, TypescriptCap: pins.TypescriptCap,
 	}

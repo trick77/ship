@@ -657,6 +657,48 @@ func TestRules_whenOwnedFileBroken_thenRuleFailsReportShowsScaffold(t *testing.T
 	}
 }
 
+// A rule still failing on a file of its own counts what it dropped on a stale owned file too.
+func TestReport_whenStaleAndForeignFinding_thenFailAndDroppedCount(t *testing.T) {
+	r := app(t)
+	r.edit(scaffold.CI, "check.yaml@master", "check.yaml@v1")
+	r.write(".github/workflows/prune.yaml",
+		"on: push\njobs:\n  x:\n    steps:\n      - uses: dataaxiom/ghcr-cleanup-action@v1\n")
+	out, err := r.run(appShip)
+	for _, s := range []string{
+		"FAIL scaffold: differs from ship's template (ship init -diff) (.github/workflows/ci.yaml)",
+		"FAIL workflows: image cleanup by dataaxiom/ghcr-cleanup-action: use the cleanup-images caller " +
+			"(.github/workflows/prune.yaml)",
+		"also workflows: 1 finding(s) on owned files scaffold re-renders",
+	} {
+		if err == nil || !strings.Contains(out, s+"\n") {
+			t.Errorf("no %q (%v):\n%s", s, err, out)
+		}
+	}
+	if strings.Contains(out, "check.yaml@v1") {
+		t.Errorf("stale ci.yaml's workflows finding shown:\n%s", out)
+	}
+}
+
+// Scaffold's stale set is known before any rule runs, whatever its place, and files compare clean.
+func TestReport_whenScaffoldLastAndUncleanPath_thenDropped(t *testing.T) {
+	r := app(t)
+	r.remove("ui/" + scaffold.ESLint)
+	e := newEnv(r.dir, r.config(appShip), r.opts)
+	r.out.Reset()
+	other := rule{"other", func(*env) result {
+		return result{findings: []finding{{what: "x", file: "./ui/" + scaffold.ESLint}}}
+	}}
+	scaff := rule{Scaffold, (*env).scaffold}
+	if err := e.reportOf([]rule{other, scaff}); err == nil {
+		t.Fatal("no error")
+	}
+	out := r.out.String()
+	if !strings.Contains(out, "ok other: 1 finding(s) on owned files scaffold re-renders\n") ||
+		!strings.Contains(out, "FAIL scaffold: ") {
+		t.Errorf("want other's finding dropped:\n%s", out)
+	}
+}
+
 // allowScaffold is a ship.yaml allow entry for a scaffold diff on p.
 func allowScaffold(p string) string {
 	return "allow:\n  - { rule: scaffold, path: " + p + ", why: own }\n"

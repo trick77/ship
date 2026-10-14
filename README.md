@@ -69,7 +69,8 @@ times slower, inside the release job's 30 minutes. Cross-compile Go on the build
 `vendor/`) is listed, or check fails: `go ./...` stops at a nested go.mod, so nothing else would build, lint or test
 it. Each listed module gets go.dir's gates (mod verify, tidy, build, govulncheck, golangci-lint, go test with
 `go.race`), its own floor at `go.floor` (a module is released and imported on its own: the root's lines never carry
-it), and its changed lines in the patch gate; `go.exclude` applies, `go.coverpkg` is go.dir's alone.
+it), and its changed lines in the patch gate; `go.exclude` applies, `go.coverpkg` is go.dir's alone. Entries are
+written clean (`kit/auth`, never `./kit/auth/`): release and CI take them as written, ship.yaml fails otherwise.
 
 The Go coverage report lives in the git dir (`.git/ship/`), never in the tree. Gitignore the UI test runner's
 coverage output.
