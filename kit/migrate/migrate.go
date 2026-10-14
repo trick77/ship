@@ -12,9 +12,9 @@
 // connection for the whole run, because a session lock belongs to one session and a pool hands out a different
 // connection per call.
 //
-// A pgx program needs no second runner: stdlib.OpenDBFromPool(pool) (github.com/jackc/pgx/v5/stdlib) is the *sql.DB
-// Up and Pending take, borrowing the pool's connections, so closing it leaves the pool open; pass it with
-// Postgres(lockKey).
+// A pgx program opens a dedicated *sql.DB for the run (github.com/jackc/pgx/v5/stdlib: OpenDB on a pgx.ConnConfig,
+// or OpenDBFromPool on a separate small pool), passes it with Postgres(lockKey) and closes it afterwards: session
+// state (the advisory lock, a SET in a no-transaction file) then never returns to the app's pool.
 package migrate
 
 import (

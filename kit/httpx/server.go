@@ -28,28 +28,15 @@ func NewServer(addr string, h http.Handler) *http.Server {
 
 // Serve runs srv until ctx ends or the process gets SIGINT/SIGTERM, then drains in-flight requests for up to
 // shutdownTimeout. A clean shutdown returns nil; a listener that cannot bind returns its error at once. A drain that
-// outlasts shutdownTimeout closes the server, cutting off the connections still open, and returns
-// context.DeadlineExceeded. A server that fails on its own (its accept loop errs) is closed before its error returns:
-// the connections it accepted must not go on serving. A Shutdown the program calls itself returns
-// http.ErrServerClosed and leaves the server to that drain.
+// outlasts shutdownTimeout returns context.DeadlineExceeded after Close cuts the remaining connections; handlers it
+// cut may still be running when Serve returns, so a caller's cleanup must tolerate that.
 func Serve(ctx context.Context, srv *http.Server, shutdownTimeout time.Duration) error {
 	ctx, stop := run.Context(ctx)
 	defer stop()
-	addr := srv.Addr
-	if addr == "" {
-		addr = ":http" // what ListenAndServe listens on
-	}
-	ln, err := listen("tcp", addr)
-	if err != nil {
-		return err
-	}
 	errc := make(chan error, 1)
-	go func() { errc <- srv.Serve(ln) }()
+	go func() { errc <- srv.ListenAndServe() }()
 	select {
 	case err := <-errc:
-		if !errors.Is(err, http.ErrServerClosed) {
-			_ = srv.Close()
-		}
 		return err
 	case <-ctx.Done():
 	}
@@ -68,9 +55,6 @@ func Serve(ctx context.Context, srv *http.Server, shutdownTimeout time.Duration)
 	}
 	return nil
 }
-
-// listen opens Serve's listener; a var only for the test of a failing one. srv.Serve closes it.
-var listen = net.Listen
 
 // LocalURL turns a listen address into a URL on this host: ":8080" and "0.0.0.0:8080" become
 // "http://127.0.0.1:8080"+path. A wildcard bind is not an address a client can dial.

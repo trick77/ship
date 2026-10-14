@@ -773,62 +773,6 @@ func TestServe_whenDrainOverruns_thenClosesAndDeadlineExceeded(t *testing.T) {
 	}
 }
 
-// faultyListener fails its accept loop once fail is closed.
-type faultyListener struct {
-	net.Listener
-	fail chan struct{}
-}
-
-func (l *faultyListener) Accept() (net.Conn, error) {
-	type accepted struct {
-		c   net.Conn
-		err error
-	}
-	r := make(chan accepted, 1)
-	go func() {
-		c, err := l.Listener.Accept()
-		r <- accepted{c, err}
-	}()
-	select {
-	case a := <-r:
-		return a.c, a.err
-	case <-l.fail:
-		return nil, errors.New("accept broke") // not a net.Error: the server gives up
-	}
-}
-
-func TestServe_whenServerFailsOnItsOwn_thenClosesConnections(t *testing.T) {
-	fail := make(chan struct{})
-	orig := listen
-	listen = func(network, addr string) (net.Listener, error) {
-		ln, err := orig(network, addr)
-		if err != nil {
-			return nil, err
-		}
-		return &faultyListener{Listener: ln, fail: fail}, nil
-	}
-	t.Cleanup(func() { listen = orig })
-	addr := freeAddr(t)
-	srv, returned, up := holdServer(t, addr)
-	done := make(chan error, 1)
-	go func() { done <- Serve(context.Background(), srv, time.Minute) }()
-	up()
-	close(fail)
-	select {
-	case err := <-done:
-		if err == nil || !strings.Contains(err.Error(), "accept broke") {
-			t.Errorf("Serve = %v, want the accept error", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Serve did not return when its accept loop failed")
-	}
-	select {
-	case <-returned:
-	case <-time.After(5 * time.Second):
-		t.Error("the connection in flight was not closed when the server failed")
-	}
-}
-
 func TestServeBindError(t *testing.T) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
