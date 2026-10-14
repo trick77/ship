@@ -36,7 +36,7 @@ func TestShipRelease_whenDispatched_thenEveryModuleOffered(t *testing.T) {
 	if err := yaml.Unmarshal(b, &w); err != nil {
 		t.Fatal(err)
 	}
-	// config rejects an unclean go.modules entry: options equal to it reach release -dir clean (kit/auth).
+	// config cleans go.modules: options equal to the cleaned list reach release -dir clean (kit/auth).
 	want := append([]string{"ship"}, c.Go.Modules...)
 	if got := w.On.WorkflowDispatch.Inputs.Dir.Options; !slices.Equal(got, want) {
 		t.Errorf("ship-release dir options %v, want %v (ship + ship.yaml go.modules)", got, want)

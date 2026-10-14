@@ -193,21 +193,37 @@ func TestParse_whenDirEscapes_thenRawQuoted(t *testing.T) {
 	}
 }
 
-// go.modules is taken as written, by release and CI's release matrix alike: an unclean entry fails, naming the clean
-// spelling, never cleaned behind CI's back.
-func TestParse_whenModuleUnclean_thenError(t *testing.T) {
+// go.modules is cleaned like go.dir, as before the clean dirs: ./lib and lib/ keep parsing, release and CI's release
+// matrix get the clean form.
+func TestParse_whenModuleUnclean_thenCleaned(t *testing.T) {
 	for in, want := range map[string]string{
-		"./kit":       "go.modules: write kit, not ./kit",
-		"kit/":        "go.modules: write kit, not kit/",
-		"/kit":        "go.modules: write kit, not /kit",
-		"kit//auth":   "go.modules: write kit/auth, not kit//auth",
-		"kit/./auth":  "go.modules: write kit/auth, not kit/./auth",
-		"kit/../lib":  "go.modules: write lib, not kit/../lib",
-		".":           `go.modules: ".", want a dir inside the repo`,
-		"..":          `go.modules: "..", want a dir inside the repo`,
-		"../x":        `go.modules: "../x", want a dir inside the repo`,
-		`""`:          `go.modules: "", want a dir inside the repo`,
+		"./kit":      "kit",
+		"kit/":       "kit",
+		"./kit/":     "kit",
+		"kit//auth":  "kit/auth",
+		"kit/./auth": "kit/auth",
+		"kit/../lib": "lib",
+		"kit/auth":   "kit/auth",
+	} {
+		c, err := Parse([]byte("go:\n  modules: [" + in + "]\n"))
+		if err != nil || !slices.Equal(c.Go.Modules, []string{want}) {
+			t.Errorf("%s: %v, want [%s]", in, err, want)
+		}
+	}
+}
+
+// Only what escapes the repo, the root (go.dir's default) and a duplicate after cleaning fail; an escaping entry gets
+// go.dir's message, quoted as written.
+func TestParse_whenModuleInvalid_thenError(t *testing.T) {
+	for in, want := range map[string]string{
+		"/kit":        `go.modules: "/kit" is not a directory inside the repo`,
+		"..":          `go.modules: ".." is not a directory inside the repo`,
+		"../x":        `go.modules: "../x" is not a directory inside the repo`,
+		"kit/../../x": `go.modules: "kit/../../x" is not a directory inside the repo`,
+		".":           `go.modules: ".", want a dir inside the repo, not go.dir, listed once`,
+		`""`:          `go.modules: "", want a dir inside the repo, not go.dir, listed once`,
 		"kit, kit":    `go.modules: "kit", want a dir inside the repo, not go.dir, listed once`,
+		"kit, ./kit/": `go.modules: "./kit/", want a dir inside the repo, not go.dir, listed once`,
 		"kit/auth, x": "",
 	} {
 		_, err := Parse([]byte("go:\n  modules: [" + in + "]\n"))

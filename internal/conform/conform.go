@@ -210,13 +210,12 @@ func (e *env) reportOf(rs []rule) error {
 	fails := 0
 	// stale are the owned files scaffold fails, not allowed: ship init rewrites them, so another rule's finding there
 	// only doubles scaffold's. Scaffold runs before every other rule whatever its place in rs. An allowed diff keeps
-	// every rule's findings, its one guard; a Manual file too (ship writes none of it).
-	done := map[string]result{}
+	// every rule's findings, its one guard; a Manual file too (ship writes none of it). scaffold is run once, here.
+	var scaffold result
 	stale := map[string]bool{}
 	if i := slices.IndexFunc(rs, func(r rule) bool { return r.name == Scaffold }); i >= 0 {
-		res := rs[i].fn(e)
-		done[Scaffold] = res
-		for _, f := range res.findings {
+		scaffold = rs[i].fn(e)
+		for _, f := range scaffold.findings {
 			if _, ok := e.c.Allowed(Scaffold, f.image, f.file); f.rerender && !ok {
 				stale[f.file] = true
 			}
@@ -224,12 +223,9 @@ func (e *env) reportOf(rs []rule) error {
 	}
 	for _, r := range rs {
 		known[r.name] = true
-		res, ok := done[r.name]
-		if !ok {
-			res = r.fn(e)
-		}
-		dropped := 0
+		res, dropped := scaffold, 0
 		if r.name != Scaffold {
+			res = r.fn(e)
 			res.findings, dropped = dropStale(res.findings, stale)
 		}
 		if dropped > 0 && len(res.findings) == 0 {
