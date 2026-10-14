@@ -187,7 +187,10 @@ func (c *Config) defaults() error {
 		if err != nil {
 			return err
 		}
-		if d == "." || seen[d] {
+		if d == "." {
+			return fmt.Errorf("%s: go.modules: %q is the repo root, want a dir inside the repo like kit/auth", File, m)
+		}
+		if seen[d] {
 			return fmt.Errorf("%s: go.modules: %q, want a dir inside the repo, not go.dir, listed once", File, m)
 		}
 		c.Go.Modules[i], seen[d] = d, true
@@ -218,7 +221,7 @@ func (c *Config) defaults() error {
 
 // cleanDir is dir in clean slash form; an error, quoting dir as written, when it leaves the repo.
 func cleanDir(key, dir string) (string, error) {
-	c, out := clean(dir)
+	c, out := CleanDir(dir)
 	if out {
 		return "", fmt.Errorf("%s: %s: %q is not a directory inside the repo", File, key, dir)
 	}
@@ -283,22 +286,16 @@ func (c *Config) PostgresImage() string {
 	return c.Postgres
 }
 
-// clean is p in clean slash form and whether it leaves the repo, lexically: an absolute path or one through "..".
+// CleanDir is p in clean slash form and whether it leaves the repo, lexically: an absolute path or one through "..".
 // Slash semantics on every OS (ship.yaml and Git spell paths with /); filepath.IsAbs still catches a Windows drive
 // path (C:\x).
-func clean(p string) (c string, escapes bool) {
+func CleanDir(p string) (c string, escapes bool) {
 	c = path.Clean(filepath.ToSlash(p))
 	return c, filepath.IsAbs(p) || path.IsAbs(c) || c == ".." || strings.HasPrefix(c, "../")
 }
 
-// Escapes reports whether p leaves the repo (see clean).
-func Escapes(p string) bool {
-	_, out := clean(p)
-	return out
-}
-
 // inRepo reports whether p is a repo-relative path below the root: it does not escape and is not the root itself.
 func inRepo(p string) bool {
-	c, out := clean(p)
+	c, out := CleanDir(p)
 	return !out && c != "."
 }

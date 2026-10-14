@@ -220,8 +220,9 @@ func TestParse_whenModuleInvalid_thenError(t *testing.T) {
 		"..":          `go.modules: ".." is not a directory inside the repo`,
 		"../x":        `go.modules: "../x" is not a directory inside the repo`,
 		"kit/../../x": `go.modules: "kit/../../x" is not a directory inside the repo`,
-		".":           `go.modules: ".", want a dir inside the repo, not go.dir, listed once`,
-		`""`:          `go.modules: "", want a dir inside the repo, not go.dir, listed once`,
+		".":           `go.modules: "." is the repo root, want a dir inside the repo like kit/auth`,
+		`""`:          `go.modules: "" is the repo root, want a dir inside the repo like kit/auth`,
+		"./":          `go.modules: "./" is the repo root, want a dir inside the repo like kit/auth`,
 		"kit, kit":    `go.modules: "kit", want a dir inside the repo, not go.dir, listed once`,
 		"kit, ./kit/": `go.modules: "./kit/", want a dir inside the repo, not go.dir, listed once`,
 		"kit/auth, x": "",
@@ -233,11 +234,11 @@ func TestParse_whenModuleInvalid_thenError(t *testing.T) {
 	}
 }
 
-func TestEscapes_whenOutside_thenTrue(t *testing.T) {
+func TestCleanDir_whenOutside_thenEscapes(t *testing.T) {
 	for p, want := range map[string]bool{"kit": false, "kit/auth": false, ".": false, "./kit/": false,
 		"kit/../lib": false, "..": true, "../x": true, "kit/../../x": true, "/kit": true} {
-		if got := Escapes(p); got != want {
-			t.Errorf("Escapes(%q) = %v, want %v", p, got, want)
+		if _, got := CleanDir(p); got != want {
+			t.Errorf("CleanDir(%q) escapes = %v, want %v", p, got, want)
 		}
 	}
 }

@@ -12,11 +12,11 @@ import (
 // nested is c narrowed to the Go module at dir (-dir): tags <dir>/<tag_prefix>X.Y.Z, go build in dir, no images and
 // no UI (those are the repo's). dir is repo-relative, cleaned; empty or "." is the repo itself, c unchanged.
 func nested(c *config.Config, dir string) (*config.Config, string, error) {
-	d := path.Clean(filepath.ToSlash(dir))
+	d, escapes := config.CleanDir(dir)
 	if dir == "" || d == "." {
 		return c, "", nil
 	}
-	if config.Escapes(d) {
+	if escapes {
 		return nil, "", fmt.Errorf("-dir %s: want a dir inside the repo", dir)
 	}
 	// Go resolves a nested module's version only from <dir>/vX.Y.Z: any other prefix tags a version go get never sees.

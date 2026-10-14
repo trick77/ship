@@ -211,22 +211,22 @@ func (e *env) reportOf(rs []rule) error {
 	// stale are the owned files scaffold fails, not allowed: ship init rewrites them, so another rule's finding there
 	// only doubles scaffold's. Scaffold runs before every other rule whatever its place in rs. An allowed diff keeps
 	// every rule's findings, its one guard; a Manual file too (ship writes none of it). scaffold is run once, here.
-	var scaffold result
+	var scaff result
 	stale := map[string]bool{}
 	if i := slices.IndexFunc(rs, func(r rule) bool { return r.name == Scaffold }); i >= 0 {
-		scaffold = rs[i].fn(e)
-		for _, f := range scaffold.findings {
+		scaff = rs[i].fn(e)
+		for _, f := range scaff.findings {
 			if _, ok := e.c.Allowed(Scaffold, f.image, f.file); f.rerender && !ok {
-				stale[f.file] = true
+				stale[slashClean(f.file)] = true
 			}
 		}
 	}
 	for _, r := range rs {
 		known[r.name] = true
-		res, dropped := scaffold, 0
+		res, dropped := scaff, 0
 		if r.name != Scaffold {
 			res = r.fn(e)
-			res.findings, dropped = dropStale(res.findings, stale)
+			res.findings, dropped = e.dropStale(r.name, res.findings, stale)
 		}
 		if dropped > 0 && len(res.findings) == 0 {
 			res.note = strings.TrimSuffix(fmt.Sprintf("%d finding(s) on owned files scaffold re-renders; %s",
@@ -273,13 +273,21 @@ func (e *env) reportOf(rs []rule) error {
 	return nil
 }
 
-// dropStale removes the findings on a stale file and counts them. Paths compare as they are: every finding on an
-// owned file is spelled from a constant or path.Join over config's clean go.dir and ui.dir, as scaffold's are.
-func dropStale(fs []finding, stale map[string]bool) ([]finding, int) {
+// dropStale removes rule's findings on a stale file and counts them. A finding the repo allows for rule stays: it
+// is reported allowed, as on a fresh file. Paths compare in clean slash form.
+func (e *env) dropStale(rule string, fs []finding, stale map[string]bool) ([]finding, int) {
 	n := len(fs)
-	fs = slices.DeleteFunc(fs, func(f finding) bool { return stale[f.file] })
+	fs = slices.DeleteFunc(fs, func(f finding) bool {
+		if _, ok := e.c.Allowed(rule, f.image, f.file); ok {
+			return false
+		}
+		return stale[slashClean(f.file)]
+	})
 	return fs, n - len(fs)
 }
+
+// slashClean is p in clean slash form, as stale's keys and a rule's findings compare.
+func slashClean(p string) string { return path.Clean(filepath.ToSlash(p)) }
 
 // origin is the GitHub owner and repo of the origin remote; empty when there is none or it is not GitHub.
 func origin(root string) (owner, repo string) {

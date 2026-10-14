@@ -679,6 +679,18 @@ func TestReport_whenStaleAndForeignFinding_thenFailAndDroppedCount(t *testing.T)
 	}
 }
 
+// A finding the repo allows for its rule stays allowed on a stale owned file: reported, never counted as dropped.
+func TestReport_whenStaleAndAllowedFinding_thenAllowedNotDropped(t *testing.T) {
+	r := app(t)
+	r.edit(scaffold.CI, "check.yaml@master", "check.yaml@v1")
+	out, err := r.run(appShip + "allow:\n  - { rule: workflows, why: x }\n")
+	if err == nil || !strings.Contains(out, "FAIL scaffold: differs from ship's template (ship init -diff) "+
+		"(.github/workflows/ci.yaml)\n") || !strings.Contains(out, "allowed workflows: x\n") ||
+		strings.Contains(out, "re-renders") {
+		t.Errorf("want workflows allowed, nothing dropped (%v):\n%s", err, out)
+	}
+}
+
 // Scaffold's stale set is known before any rule runs, whatever its place. Paths compare as they are: an unclean
 // ui.dir (./ui/) is cleaned by config, so scaffold's file and a rule's uiPath spell the same ui/eslint.config.js.
 func TestReport_whenScaffoldLastAndUncleanUIDir_thenDropped(t *testing.T) {
