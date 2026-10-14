@@ -164,3 +164,66 @@ func TestServeAndMain_whenSecondSIGTERMDuringDrain_thenKilled(t *testing.T) {
 		})
 	}
 }
+
+// failChild is the child process of the signal-after-failure test: its server fails on its own with a handler deaf
+// to its request's context in flight, which holds Main's handler wait.
+const failChild = "HTTPX_TEST_FAIL_CHILD"
+
+func TestMain_whenSIGTERMAfterTheServerFailed_thenKilledByTheFirst(t *testing.T) {
+	if os.Getenv(failChild) == "1" {
+		fail := useFaultyListener(t, nil)
+		addr := freeAddr(t)
+		srv := NewServer(addr, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/hold" {
+				return
+			}
+			fmt.Println("handling")
+			close(fail)
+			time.Sleep(30 * time.Second) // deaf to its request's context: the handler wait waits it out
+		}))
+		go func() {
+			waitUp(t, "http://"+addr+"/")
+			resp, err := http.Get("http://" + addr + "/hold") //nolint:noctx // ends with the server
+			if err == nil {
+				_ = resp.Body.Close()
+			}
+			fmt.Println("cut") // the server's Close, right before serve returns
+		}()
+		build := func(context.Context) (*http.Server, func(), error) { return srv, nil, nil }
+		os.Exit(Main(context.Background(), mainFlags(), nil, MainOptions{Addr: addr, Build: build, Drain: 30 * time.Second, Log: quietLog()}))
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestMain_whenSIGTERMAfterTheServerFailed_thenKilledByTheFirst$")
+	cmd.Env = append(os.Environ(), failChild+"=1")
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	lines := bufio.NewScanner(out)
+	for _, want := range []string{"handling", "cut"} {
+		if !lines.Scan() || lines.Text() != want {
+			_ = cmd.Process.Kill()
+			t.Fatalf("child said %q, want %q", lines.Text(), want)
+		}
+	}
+	// serve returns right after the Close: give Main the moment to release the handler, then one SIGTERM.
+	time.Sleep(50 * time.Millisecond)
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	select {
+	case <-exited:
+		ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus)
+		if !ok || !ws.Signaled() || ws.Signal() != syscall.SIGTERM {
+			t.Errorf("child ended %v, want killed by SIGTERM", cmd.ProcessState)
+		}
+	case <-time.After(5 * time.Second):
+		_ = cmd.Process.Kill()
+		<-exited
+		t.Fatal("the first SIGTERM after the server failed did not kill: the signal handler was still in place")
+	}
+}

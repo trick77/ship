@@ -69,7 +69,7 @@ func TestMain_whenHealthcheckFlagDefined_thenReusesIt(t *testing.T) {
 	if code := Main(context.Background(), fs, nil, o); code != 1 {
 		t.Errorf("Main with a string -healthcheck = %d, want 1", code)
 	}
-	if !strings.Contains(buf.String(), "not a bool") {
+	if !strings.Contains(buf.String(), "define -healthcheck with fs.Bool, or leave it to Main") {
 		t.Errorf("log = %q, want why", buf.String())
 	}
 }
@@ -255,7 +255,7 @@ func (f *getterFlag) Set(s string) error { f.on = s == "true"; return nil }
 func (f *getterFlag) IsBoolFlag() bool   { return true }
 func (f *getterFlag) Get() any           { return f.on }
 
-// plainBoolFlag is a bool flag.Value without Get: Main parses its String.
+// plainBoolFlag is a bool flag.Value without Get: its String need not say whether it is set, Main refuses it.
 type plainBoolFlag struct{ on bool }
 
 func (f *plainBoolFlag) String() string {
@@ -267,17 +267,53 @@ func (f *plainBoolFlag) String() string {
 func (f *plainBoolFlag) Set(s string) error { f.on = s == "true"; return nil }
 func (f *plainBoolFlag) IsBoolFlag() bool   { return true }
 
-func TestMain_whenHealthcheckFlagCustomBool_thenReadsIt(t *testing.T) {
+// getterNotBool is a flag.Getter whose Get is no bool.
+type getterNotBool struct{ getterFlag }
+
+func (f *getterNotBool) Get() any { return f.String() }
+
+func TestMain_whenHealthcheckFlagCustom_thenReadsOnlyABoolGetter(t *testing.T) {
+	build := func(context.Context) (*http.Server, func(), error) {
+		t.Fatal("Build ran")
+		return nil, nil, nil
+	}
+	fs := mainFlags()
+	fs.Var(&getterFlag{}, "healthcheck", "the program's own")
+	if code := Main(context.Background(), fs, []string{"-healthcheck"}, MainOptions{Addr: liveHealthz(t), Build: build}); code != 0 {
+		t.Errorf("Main -healthcheck with a bool flag.Getter = %d, want 0 (the probe ran)", code)
+	}
+	for name, define := range map[string]func(fs *flag.FlagSet){
+		"no Getter":       func(fs *flag.FlagSet) { fs.Var(&plainBoolFlag{}, "healthcheck", "") },
+		"BoolFunc":        func(fs *flag.FlagSet) { fs.BoolFunc("healthcheck", "", func(string) error { return nil }) },
+		"Getter, no bool": func(fs *flag.FlagSet) { fs.Var(&getterNotBool{}, "healthcheck", "") },
+	} {
+		fs := mainFlags()
+		define(fs)
+		var buf bytes.Buffer
+		o := MainOptions{Addr: liveHealthz(t), Build: build, Log: slog.New(slog.NewTextHandler(&buf, nil))}
+		if code := Main(context.Background(), fs, []string{"-healthcheck"}, o); code != 1 {
+			t.Errorf("%s: Main -healthcheck = %d, want 1", name, code)
+		}
+		if !strings.Contains(buf.String(), "define -healthcheck with fs.Bool, or leave it to Main") {
+			t.Errorf("%s: log = %q, want why", name, buf.String())
+		}
+	}
+}
+
+func TestMain_whenHealthcheckOnNamedPort_thenProbesItsNumber(t *testing.T) {
+	var probed string
+	orig := probe
+	probe = func(url string) int { probed = url; return 0 }
+	t.Cleanup(func() { probe = orig })
 	build := func(context.Context) (*http.Server, func(), error) {
 		t.Fatal("Build ran for -healthcheck")
 		return nil, nil, nil
 	}
-	for _, v := range []flag.Value{&getterFlag{}, &plainBoolFlag{}} {
-		fs := mainFlags()
-		fs.Var(v, "healthcheck", "the program's own")
-		if code := Main(context.Background(), fs, []string{"-healthcheck"}, MainOptions{Addr: liveHealthz(t), Build: build}); code != 0 {
-			t.Errorf("Main -healthcheck with a %T flag = %d, want 0 (the probe ran)", v, code)
-		}
+	if code := Main(context.Background(), mainFlags(), []string{"-healthcheck"}, MainOptions{Addr: ":http", Build: build}); code != 0 {
+		t.Errorf("Main -healthcheck = %d, want the probe's 0", code)
+	}
+	if want := "http://127.0.0.1:80/healthz"; probed != want {
+		t.Errorf("probed %q, want %q", probed, want)
 	}
 }
 
@@ -439,6 +475,130 @@ func TestMain_whenProgramShutsDownTheServer_thenZeroAfterHandlersAndCleanup(t *t
 	}
 	if log := buf.String(); strings.Contains(log, "Server failed") {
 		t.Errorf("log = %q, want no failure", log)
+	}
+}
+
+func TestMain_whenAdminHandlerShutsDown_thenCleanupAfterTheDrain(t *testing.T) {
+	addr := freeAddr(t)
+	var srv *http.Server
+	var cleaned atomic.Bool
+	var accepted sync.Map // remote addresses
+	build := func(context.Context) (*http.Server, func(), error) {
+		srv = NewServer(addr, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/stop" {
+				go func() { _ = srv.Shutdown(context.Background()) }()
+				time.Sleep(50 * time.Millisecond) // answers while the Shutdown is under way
+				_, _ = io.WriteString(w, "stopping")
+			}
+		}))
+		srv.ConnState = func(c net.Conn, s http.ConnState) {
+			if s == http.StateNew {
+				accepted.Store(c.RemoteAddr().String(), true)
+			}
+		}
+		return srv, func() { cleaned.Store(true) }, nil
+	}
+	done := make(chan int, 1)
+	go func() {
+		done <- Main(context.Background(), mainFlags(), nil, MainOptions{Addr: addr, Build: build, Drain: time.Minute, Log: quietLog()})
+	}()
+	waitUp(t, "http://"+addr+"/")
+	// A client mid-headers: no handler runs, the count holds nothing; only Shutdown's wait for the connection does.
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := io.WriteString(conn, "GET /x HTTP/1.1\r\nHost: a\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if _, ok := accepted.Load(conn.LocalAddr().String()); ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the server never accepted the connection")
+		}
+	}
+	resp, err := http.Get("http://" + addr + "/stop") //nolint:noctx // the test's own server
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil || string(body) != "stopping" {
+		t.Errorf("/stop answered %q, %v, want its full response", body, err)
+	}
+	select {
+	case code := <-done:
+		t.Fatalf("Main = %d with a connection mid-request: it ran ahead of the drain", code)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if cleaned.Load() {
+		t.Fatal("cleanup ran ahead of the drain")
+	}
+	// The headers complete: net/http drops a request read during a Shutdown and closes the connection, the drain's end.
+	if _, err := io.WriteString(conn, "\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, conn)
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Errorf("Main = %d, want 0", code)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Main hung after the drain")
+	}
+	if !cleaned.Load() {
+		t.Error("cleanup did not run")
+	}
+}
+
+func TestMain_whenStopped_thenBuildsCtxLivesThroughTheDrain(t *testing.T) {
+	addr := freeAddr(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var buildCtx context.Context
+	workerStopped := make(chan struct{})
+	aliveInDrain := make(chan bool, 1)
+	endedAtCleanup := make(chan bool, 1)
+	build := func(ctx context.Context) (*http.Server, func(), error) {
+		buildCtx = ctx
+		go func() { <-ctx.Done(); close(workerStopped) }() // background work, as on a scheduler
+		srv := NewServer(addr, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/hold" {
+				return
+			}
+			close(entered)
+			<-release
+			select {
+			case <-workerStopped:
+				aliveInDrain <- false
+			default:
+				aliveInDrain <- true
+			}
+		}))
+		return srv, func() { endedAtCleanup <- buildCtx.Err() != nil }, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan int, 1)
+	go func() {
+		done <- Main(ctx, mainFlags(), nil, MainOptions{Addr: addr, Build: build, Drain: time.Minute, Log: quietLog()})
+	}()
+	waitUp(t, "http://"+addr+"/")
+	getHold(addr)
+	<-entered
+	cancel()
+	time.Sleep(100 * time.Millisecond) // the stop is in, the drain waits for /hold
+	close(release)
+	if !<-aliveInDrain {
+		t.Error("Build's ctx ended with the stop: the worker was gone during the drain")
+	}
+	if code := <-done; code != 0 {
+		t.Errorf("Main = %d, want 0", code)
+	}
+	if !<-endedAtCleanup {
+		t.Error("Build's ctx still live at the cleanup")
 	}
 }
 
@@ -648,17 +808,24 @@ func TestMain_whenListenerCloseFails_thenWarnsAndZero(t *testing.T) {
 
 func TestProbeReaches(t *testing.T) {
 	// Server host (row) against MainOptions.Addr host (column): does the probe of LocalURL reach it?
-	hosts := []string{"", "0.0.0.0", "::", "localhost", "127.0.0.1", "::1", "10.0.0.5", "fd00::5"}
-	loopV4 := []string{"", "0.0.0.0", "::", "localhost", "127.0.0.1"}
-	reaches := map[string][]string{ // per server host, the want hosts it answers
-		"":          hosts,
-		"::":        hosts,
-		"0.0.0.0":   append(slices.Clone(loopV4), "10.0.0.5"),
-		"localhost": loopV4,
-		"127.0.0.1": loopV4,
-		"::1":       {"localhost", "::1"},
-		"10.0.0.5":  {"10.0.0.5"},
-		"fd00::5":   {"fd00::5"},
+	hosts := []string{"", "0.0.0.0", "::", "::0", "0:0:0:0:0:0:0:0", "localhost", "127.0.0.1", "::ffff:127.0.0.1",
+		"127.0.0.2", "::1", "10.0.0.5", "fd00::5", "app"}
+	wildcards := []string{"", "0.0.0.0", "::", "::0", "0:0:0:0:0:0:0:0"}                    // the probe dials 127.0.0.1
+	loopV4 := append(slices.Clone(wildcards), "localhost", "127.0.0.1", "::ffff:127.0.0.1") // what reaches 127.0.0.1
+	reaches := map[string][]string{                                                         // per server host, the want hosts it answers
+		"":                 hosts,
+		"::":               hosts,
+		"::0":              hosts,
+		"0:0:0:0:0:0:0:0":  hosts,
+		"0.0.0.0":          append(slices.Clone(loopV4), "127.0.0.2", "10.0.0.5", "app"), // IPv4 and hostnames
+		"localhost":        loopV4,
+		"127.0.0.1":        loopV4,
+		"::ffff:127.0.0.1": loopV4,
+		"127.0.0.2":        {"127.0.0.2"}, // the probe of 127.0.0.1 or localhost dials another address
+		"::1":              {"localhost", "::1"},
+		"10.0.0.5":         {"10.0.0.5"},
+		"fd00::5":          {"fd00::5"},
+		"app":              {"app"},
 	}
 	for _, h := range hosts {
 		for _, w := range hosts {
@@ -677,6 +844,9 @@ func TestProbeReaches(t *testing.T) {
 		{"127.0.0.1:8081", "127.0.0.1:8080", false, "port 8081, the probe dials 8080"},
 		{":8081", ":8080", false, "port 8081"},
 		{"example.com:8080", "127.0.0.1:8080", false, `host "example.com"`},
+		{"0.0.0.0:8080", "[fd00::5]:8080", false, `the probe's connection to "fd00::5"`},
+		{"0.0.0.0:8080", "app:8080", true, ""},
+		{"[::]:8080", "app:8080", true, ""},
 		{"8080", ":8080", false, "missing port"},
 		{":8080", "8080", false, "missing port"},
 		// Ports by number, not by spelling.
