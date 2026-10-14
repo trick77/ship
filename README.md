@@ -183,11 +183,12 @@ each is the repo's. Owned means byte-equal.
 |---|---|---|---|
 | `Makefile` | `# ship:begin` … `# ship:end` | last (the default goal stays the repo's) | `check`, `hooks`, `lint` on master's ship; apps, or one that exists. Its own `check:`/`hooks:`/`lint:`/`SHIP_CMD` outside the block: moved in by hand |
 | `.dockerignore` | `# ship:begin` … `# ship:end` | first (later lines win) | the build context; images |
-| `.gitignore` | `# ship:begin` … `# ship:end` | last | `/.playwright-mcp/`, the UI coverage dir; always |
-| `AGENTS.md` | `<!-- ship:begin -->` … `<!-- ship:end -->` | last | gate (`make check`, or `ship check` without a Makefile), hooks, CI, owned files, kit (images), release command, commit subjects; always |
+| `.gitignore` | `# ship:begin` … `# ship:end` | first (later lines win: a negation like `!/coverage/ui/badge.svg`) | `/.playwright-mcp/`, the UI coverage dir (`ui.lcov`'s, only in the repo with a `coverage` segment); always |
+| `AGENTS.md` | `<!-- ship:begin -->` … `<!-- ship:end -->` | last | gate (`make check` once the Makefile's block is ship's, else `ship check`), hooks, CI (by visibility: unknown = by hand), owned files, kit (images), release command, commit subjects; always |
 
 A missing file is created holding only its block; a file without one gets it appended (prepended), an existing
-block is replaced in place.
+block is replaced in place. Broken markers (a lone begin or end, an end before the begin, a second block) are by
+hand: ship neither splices nor appends. A file `allow`ed for `scaffold` is the repo's: `ship init` keeps it.
 The CI caller's `node-version` is the Containerfile's `node:N` builder major (26 without one): Dependabot moves the
 builder, `ship init` moves CI after it.
 `ship init -diff` prints the difference, writes nothing, exits 1 when anything differs.

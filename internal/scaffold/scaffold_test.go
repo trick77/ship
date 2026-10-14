@@ -259,6 +259,48 @@ func TestFiles_whenFactsMissing_thenManual(t *testing.T) {
 	if f := byPath(t, files, Cleanup); !strings.Contains(f.Manual, "origin") {
 		t.Errorf("cleanup: %+v", f)
 	}
+	// AGENTS.md's CI line is per visibility: never the public wording on a guess.
+	if f := byPath(t, files, Agents); !strings.Contains(f.Manual, "visibility unknown") || f.Want != nil {
+		t.Errorf("AGENTS.md: %+v", f)
+	}
+}
+
+// A half block's extent is unknown: the file is by hand, never spliced or given a second block.
+func TestFiles_whenMarkersBroken_thenManual(t *testing.T) {
+	for _, tc := range []struct {
+		file       string
+		begin, end string
+	}{{Makefile, Begin, End}, {Ignore, Begin, End}, {GitIgnore, Begin, End}, {Agents, MDBegin, MDEnd}} {
+		for name, have := range map[string]string{
+			"begin only":       "a\n" + tc.begin + "\nb\n",
+			"end only":         "a\n" + tc.end + "\n",
+			"two begins":       tc.begin + "\n" + tc.begin + "\nb\n" + tc.end + "\n",
+			"two ends":         tc.begin + "\nb\n" + tc.end + "\n" + tc.end + "\n",
+			"end before begin": tc.end + "\nb\n" + tc.begin + "\n",
+		} {
+			dir := t.TempDir()
+			write(t, dir, tc.file, have)
+			files, err := Files(dir, parse(t, "images:\n  - {}\n"), Facts{Repo: "r", Visibility: "public"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			f := byPath(t, files, tc.file)
+			if !strings.HasPrefix(f.Manual, "ship block markers broken: restore "+tc.end+" ") || f.Want != nil {
+				t.Errorf("%s %s: %+v", tc.file, name, f)
+			}
+			if _, err := Write(dir, files); err != nil {
+				t.Fatal(err)
+			}
+			if b, _ := os.ReadFile(filepath.Join(dir, tc.file)); string(b) != have {
+				t.Errorf("%s %s written:\n%s", tc.file, name, b)
+			}
+			// A Makefile by hand has no make check: AGENTS.md says ship's gate and lists no Makefile block.
+			if ag := string(byPath(t, files, Agents).Want); tc.file == Makefile &&
+				(!strings.Contains(ag, agentsShip) || strings.Contains(ag, "Makefile")) {
+				t.Errorf("AGENTS.md with a broken Makefile:\n%s", ag)
+			}
+		}
+	}
 }
 
 func TestFiles_whenBlocks_thenRepoLinesKept(t *testing.T) {
@@ -312,6 +354,23 @@ func TestFiles_whenOwnTargetsOutsideBlock_thenManual(t *testing.T) {
 	wrote, err := Write(dir, files)
 	if err != nil || strings.Join(wrote, " ") != strings.Join([]string{CI, Release, Dependabot, GitIgnore, Agents}, " ") {
 		t.Fatalf("wrote %v %v", wrote, err)
+	}
+	// The block did not merge: no make check yet, so AGENTS.md says ship's gate and lists no Makefile block.
+	if ag := string(byPath(t, files, Agents).Want); ag != agentsHead+agentsShip+agentsPublic+
+		fmt.Sprintf(agentsOwned, "", "")+agentsRelease+agentsTail {
+		t.Errorf("AGENTS.md:\n%s", ag)
+	}
+}
+
+func TestFiles_whenUIAtRoot_thenAgentsSaysRepoRoot(t *testing.T) {
+	files, err := Files(t.TempDir(), parse(t, "ui:\n  dir: .\n"), Facts{Visibility: "public"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ag := string(byPath(t, files, Agents).Want)
+	if !strings.Contains(ag, "\n  At the repo root: eslint.config.js, tsconfig.node.json and .npmrc.\n") ||
+		strings.Contains(ag, "In `") {
+		t.Errorf("AGENTS.md:\n%s", ag)
 	}
 }
 
@@ -379,11 +438,19 @@ func TestFiles_whenGitIgnore_thenPlaywrightAndUICoverage(t *testing.T) {
 		"# Playwright MCP's snapshots and screenshots.\n/.playwright-mcp/\n"
 	cover := "# The UI tests' coverage report (ui.lcov's dir); Go's lives in the git dir.\n"
 	for ship, want := range map[string]string{
-		"":                           head + "# ship:end\n",
-		"ui: {}\n":                   head + cover + "/coverage/ui/\n# ship:end\n",
-		"ui:\n  dir: backend/web\n":  head + cover + "/backend/coverage/ui/\n# ship:end\n",
-		"ui:\n  lcov: lcov.info\n":   head + "# ship:end\n",
-		"ui:\n  lcov: ui/cov/x.info": head + cover + "/ui/cov/\n# ship:end\n",
+		"":                          head + "# ship:end\n",
+		"ui: {}\n":                  head + cover + "/coverage/ui/\n# ship:end\n",
+		"ui:\n  dir: backend/web\n": head + cover + "/backend/coverage/ui/\n# ship:end\n",
+		"ui:\n  lcov: lcov.info\n":  head + "# ship:end\n",
+		// Cleaned first; a coverage segment anywhere in the dir.
+		"ui:\n  lcov: ./backend/coverage/ui/../ui/x.info\n": head + cover + "/backend/coverage/ui/\n# ship:end\n",
+		"ui:\n  lcov: coverage/x.info\n":                    head + cover + "/coverage/\n# ship:end\n",
+		// A source dir or one outside the repo is never ignored.
+		"ui:\n  lcov: ui/cov/x.info\n":        head + "# ship:end\n",
+		"ui:\n  lcov: ui/x.info\n":            head + "# ship:end\n",
+		"ui:\n  lcov: backend/lcov.info\n":    head + "# ship:end\n",
+		"ui:\n  lcov: ../coverage/x.info\n":   head + "# ship:end\n",
+		"ui:\n  lcov: /tmp/coverage/x.info\n": head + "# ship:end\n",
 	} {
 		files, err := Files(t.TempDir(), parse(t, ship), Facts{Visibility: "public"})
 		if err != nil {
@@ -395,11 +462,12 @@ func TestFiles_whenGitIgnore_thenPlaywrightAndUICoverage(t *testing.T) {
 	}
 }
 
-// AGENTS.md and .gitignore take the block last, no guard: a check: line in AGENTS.md is prose, not a target.
+// AGENTS.md takes the block last, no guard: a check: line in AGENTS.md is prose, not a target. .gitignore's goes
+// first: the repo's negations after it win.
 func TestFiles_whenAgentsAndGitIgnoreExist_thenAppendedAndReplaced(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, Agents, "# AGENTS.md\n\ncheck: run the tests")
-	write(t, dir, GitIgnore, "/bin/\n")
+	write(t, dir, GitIgnore, "/bin/\n!/coverage/ui/badge.svg\n")
 	files, err := Files(dir, parse(t, ""), Facts{Visibility: "public"})
 	if err != nil {
 		t.Fatal(err)
@@ -409,7 +477,8 @@ func TestFiles_whenAgentsAndGitIgnoreExist_thenAppendedAndReplaced(t *testing.T)
 		!strings.HasSuffix(string(ag.Want), MDEnd+"\n") {
 		t.Errorf("AGENTS.md: %q %s", ag.Manual, ag.Want)
 	}
-	if !strings.HasPrefix(string(gi.Want), "/bin/\n\n"+Begin) || !strings.HasSuffix(string(gi.Want), End+"\n") {
+	if !strings.HasPrefix(string(gi.Want), Begin) ||
+		!strings.HasSuffix(string(gi.Want), End+"\n\n/bin/\n!/coverage/ui/badge.svg\n") {
 		t.Errorf(".gitignore:\n%s", gi.Want)
 	}
 	if _, err := Write(dir, files); err != nil {

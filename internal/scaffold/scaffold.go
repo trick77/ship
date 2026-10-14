@@ -137,10 +137,7 @@ func Files(root string, c *config.Config, f Facts) ([]File, error) {
 	}
 	if c.UI != nil {
 		d.UIDir, d.UIDirAbs, d.UIDirSet = c.UI.Dir, abs(c.UI.Dir), c.UI.Dir != "ui"
-		// A report at the root (ui.lcov: lcov.info) has no dir of its own to ignore.
-		if dir := path.Dir(filepath.ToSlash(c.UI.Lcov)); dir != "." {
-			d.UICoverage = abs(dir) + "/"
-		}
+		d.UICoverage = uiCoverage(c.UI.Lcov)
 	}
 	var files []File
 	add := func(p, tmpl, manual string, block blockFunc) error {
@@ -193,7 +190,7 @@ func Files(root string, c *config.Config, f Facts) ([]File, error) {
 		return nil, err
 	}
 	if d.Images {
-		if err := add(Ignore, "dockerignore", "", prepend(hashMarks)); err != nil {
+		if err := add(Ignore, "dockerignore", "", prepend); err != nil {
 			return nil, err
 		}
 	}
@@ -207,21 +204,38 @@ func Files(root string, c *config.Config, f Facts) ([]File, error) {
 	}
 	// A library without a Makefile needs none; an app (images or a UI) gets the gate's targets.
 	if _, err := os.Stat(filepath.Join(root, Makefile)); err == nil || d.Images || d.UI {
-		d.MakefileOwned = true
 		if err := add(Makefile, "Makefile", "", appendBlock(hashMarks, makeTargets)); err != nil {
 			return nil, err
 		}
+		// Owned only once the block merges: a Makefile left by hand has no make check yet, AGENTS.md says ship's.
+		d.MakefileOwned = files[len(files)-1].Manual == ""
 	}
-	if err := add(GitIgnore, "gitignore", "", appendBlock(hashMarks, nil)); err != nil {
+	if err := add(GitIgnore, "gitignore", "", prepend); err != nil {
 		return nil, err
 	}
-	if err := add(Agents, "agents.md", "", appendBlock(mdMarks, nil)); err != nil {
+	agents := ""
+	if f.Visibility == "" {
+		agents = "repo visibility unknown (set ship.yaml visibility: or fix the lookup), AGENTS.md's CI line cannot " +
+			"be rendered"
+	}
+	if err := add(Agents, "agents.md", agents, appendBlock(mdMarks, nil)); err != nil {
 		return nil, err
 	}
 	return files, nil
 }
 
 func abs(dir string) string { return path.Join("/", filepath.ToSlash(dir)) }
+
+// uiCoverage is ui.lcov's dir, anchored, for .gitignore: only a report dir in the repo (a coverage segment in its
+// path), never a source dir (ui.lcov: ui/lcov.info would ignore /ui/) nor one outside the repo; else none.
+func uiCoverage(lcov string) string {
+	c, escapes := config.CleanDir(lcov)
+	dir := path.Dir(c)
+	if escapes || dir == "." || !slices.Contains(strings.Split(dir, "/"), "coverage") {
+		return ""
+	}
+	return abs(dir) + "/"
+}
 
 // packages is the cleanup caller's JSON list: ghcr.io/<owner>/<repo><suffix>, as ship release names the images.
 func packages(repo string, images []config.Image) string {
@@ -260,72 +274,79 @@ func render(name string, d data) (string, error) {
 	return b.String(), nil
 }
 
-// blockRange finds the owned block: the begin marker's line through the end marker's line, end included.
-func blockRange(have []byte, m markers) (start, end int, ok bool) {
+// blockRange finds the owned block: the begin marker's line through the end marker's line, end included. found is
+// false when the file has neither marker. A lone marker, an end before its begin or a second begin is broken: the
+// block's extent is unknown, so ship neither splices nor appends (a second block would follow the half one).
+func blockRange(have []byte, m markers) (start, end int, found bool, broken string) {
 	s := string(have)
-	i := lineStart(s, m.begin)
-	if i < 0 {
-		return 0, 0, false
+	begins, ends := lineStarts(s, m.begin), lineStarts(s, m.end)
+	switch {
+	case len(begins) == 0 && len(ends) == 0:
+		return 0, 0, false, ""
+	case len(begins) != 1 || len(ends) != 1 || ends[0] < begins[0]:
+		return 0, 0, true, fmt.Sprintf("ship block markers broken: restore %s closing the one %s block, or remove "+
+			"both markers, then ship init (found %d begin, %d end)", m.end, m.begin, len(begins), len(ends))
 	}
-	j := lineStart(s[i:], m.end)
-	if j < 0 {
-		return 0, 0, false
-	}
-	j += i
+	i, j := begins[0], ends[0]
 	k := strings.IndexByte(s[j:], '\n')
 	if k < 0 {
-		return i, len(s), true
+		return i, len(s), true, ""
 	}
-	return i, j + k + 1, true
+	return i, j + k + 1, true, ""
 }
 
-func lineStart(s, prefix string) int {
+// lineStarts are the offsets of the lines starting with prefix.
+func lineStarts(s, prefix string) []int {
+	var at []int
 	for i := 0; i < len(s); {
 		if strings.HasPrefix(s[i:], prefix) {
-			return i
+			at = append(at, i)
 		}
 		n := strings.IndexByte(s[i:], '\n')
 		if n < 0 {
-			return -1
+			break
 		}
 		i += n + 1
 	}
-	return -1
+	return at
 }
 
-func replaceBlock(have []byte, block string, m markers) ([]byte, bool) {
-	i, j, ok := blockRange(have, m)
-	if !ok {
-		return nil, false
+// replaceBlock swaps the file's block for block. found is false when the file has none; broken says why its
+// markers cannot be trusted.
+func replaceBlock(have []byte, block string, m markers) (b []byte, found bool, broken string) {
+	i, j, found, broken := blockRange(have, m)
+	if !found || broken != "" {
+		return nil, found, broken
 	}
-	return slices.Concat(have[:i], []byte(block), have[j:]), true
+	return slices.Concat(have[:i], []byte(block), have[j:]), true, ""
 }
 
 // blockFunc merges the rendered block into the file's bytes, or says why that is by hand.
 type blockFunc func(have []byte, block string) ([]byte, string)
 
-// prepend puts the block first: a .dockerignore allowlist (`*`) must come before the repo's own lines, later
-// lines win.
-func prepend(m markers) blockFunc {
-	return func(have []byte, block string) ([]byte, string) {
-		if b, ok := replaceBlock(have, block, m); ok {
-			return b, ""
-		}
-		if len(have) == 0 {
-			return []byte(block), ""
-		}
-		return slices.Concat([]byte(block+"\n"), have), ""
+// prepend puts the block first, so the repo's own lines after it win: a .dockerignore allowlist (`*`) narrowed by
+// the repo, a .gitignore negation (`!/coverage/ui/badge.svg`).
+func prepend(have []byte, block string) ([]byte, string) {
+	b, found, broken := replaceBlock(have, block, hashMarks)
+	switch {
+	case broken != "":
+		return nil, broken
+	case found:
+		return b, ""
+	case len(have) == 0:
+		return []byte(block), ""
 	}
+	return slices.Concat([]byte(block+"\n"), have), ""
 }
 
 // makeTargets: the Makefile's lines the block defines. Targets of the same name outside the block would override
 // each other: those are moved by hand.
-func makeTargets(have []byte, m markers) string {
+func makeTargets(have []byte) string {
 	for _, l := range strings.Split(string(have), "\n") {
 		for _, t := range []string{"SHIP_CMD", "check:", "hooks:", "lint:"} {
 			if strings.HasPrefix(l, t) {
 				return fmt.Sprintf("Makefile has its own %s outside the %s/%s block: move it in (ship init "+
-					"then owns the block)", strings.TrimSuffix(t, ":"), m.begin, m.end)
+					"then owns the block)", strings.TrimSuffix(t, ":"), Begin, End)
 			}
 		}
 	}
@@ -334,13 +355,17 @@ func makeTargets(have []byte, m markers) string {
 
 // appendBlock adds the block last, so the Makefile's default goal stays the repo's. guard, if set, finds what
 // keeps a first block from being appended (Makefile: its own targets).
-func appendBlock(m markers, guard func(have []byte, m markers) string) blockFunc {
+func appendBlock(m markers, guard func(have []byte) string) blockFunc {
 	return func(have []byte, block string) ([]byte, string) {
-		if b, ok := replaceBlock(have, block, m); ok {
+		b, found, broken := replaceBlock(have, block, m)
+		switch {
+		case broken != "":
+			return nil, broken
+		case found:
 			return b, ""
 		}
 		if guard != nil {
-			if manual := guard(have, m); manual != "" {
+			if manual := guard(have); manual != "" {
 				return nil, manual
 			}
 		}

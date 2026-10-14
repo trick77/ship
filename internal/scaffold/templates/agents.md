@@ -18,7 +18,9 @@
 [[ end -]]
 - Owned by ship, changed with `ship init`, never by hand: the `.github/workflows/` callers, `.github/dependabot.yaml`
   and the ship blocks in [[ if .MakefileOwned ]]Makefile, [[ end ]][[ if .Images ]].dockerignore, [[ end ]].gitignore and AGENTS.md.
-[[- if .UI ]]
+[[- if and .UI (eq .UIDir ".") ]]
+  At the repo root: eslint.config.js, tsconfig.node.json and .npmrc.
+[[- else if .UI ]]
   In `[[ .UIDir ]]/`: eslint.config.js, tsconfig.node.json and .npmrc.
 [[- end ]]
   No `.golangci.yaml`: ship's config is the family's.

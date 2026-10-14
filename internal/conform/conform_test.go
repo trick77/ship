@@ -847,6 +847,46 @@ func TestInit_whenDiff_thenNothingWritten(t *testing.T) {
 	}
 }
 
+// ship's own shape: a scaffold allow means the repo owns that file's difference, init and fix never write it.
+func TestInit_whenScaffoldAllowed_thenKept(t *testing.T) {
+	r := app(t)
+	r.edit(scaffold.CI, "cancel-in-progress: true", "cancel-in-progress: false")
+	r.write("AGENTS.md", agentsMD)
+	ship := appShip + "allow:\n" +
+		"  - { rule: scaffold, path: .github/workflows/ci.yaml, why: long CI }\n" +
+		"  - { rule: scaffold, path: AGENTS.md, why: own gate wording }\n"
+	read := func(p string) string {
+		b, err := os.ReadFile(filepath.Join(r.dir, p))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	ci := read(scaffold.CI)
+	r.out.Reset()
+	if err := Init(r.dir, r.config(ship), r.opts, true); err != nil || strings.Contains(r.out.String(), "@@") {
+		t.Errorf("diff: %v\n%s", err, r.out.String())
+	}
+	for _, fix := range []bool{false, true} {
+		r.out.Reset()
+		var err error
+		if fix {
+			err = Fix(r.dir, r.config(ship), r.opts)
+		} else {
+			err = Init(r.dir, r.config(ship), r.opts, false)
+		}
+		out := r.out.String()
+		if err != nil || strings.Contains(out, "ship: wrote") ||
+			!strings.Contains(out, "ship: kept .github/workflows/ci.yaml (allowed: long CI)\n") ||
+			!strings.Contains(out, "ship: kept AGENTS.md (allowed: own gate wording)\n") {
+			t.Errorf("fix %v: %v\n%s", fix, err, out)
+		}
+		if read(scaffold.CI) != ci || read("AGENTS.md") != agentsMD {
+			t.Errorf("fix %v: allowed file written", fix)
+		}
+	}
+}
+
 func TestFix_whenManualLeft_thenListed(t *testing.T) {
 	r := app(t)
 	r.remove(scaffold.Dependabot)
