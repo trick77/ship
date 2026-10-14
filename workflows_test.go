@@ -11,8 +11,8 @@ import (
 	"github.com/trick77/ship/internal/config"
 )
 
-// ship-release's dir choices cannot be computed (workflow_dispatch options are literals): they follow ship.yaml's
-// go.modules, as CI's release matrix does by reading it.
+// ship-release's dir choices and CI's release matrix cannot be computed (workflow_dispatch options and a matrix
+// without an extra job are literals): both follow ship.yaml's go.modules.
 func TestShipRelease_whenDispatched_thenEveryModuleOffered(t *testing.T) {
 	c, err := config.Load(".")
 	if err != nil {
@@ -36,10 +36,40 @@ func TestShipRelease_whenDispatched_thenEveryModuleOffered(t *testing.T) {
 	if err := yaml.Unmarshal(b, &w); err != nil {
 		t.Fatal(err)
 	}
-	// config cleans go.modules: an option spelled ./kit/auth would reach release -dir as such and fails here.
+	// config rejects an unclean go.modules entry: options equal to it reach release -dir clean (kit/auth).
 	want := append([]string{"ship"}, c.Go.Modules...)
 	if got := w.On.WorkflowDispatch.Inputs.Dir.Options; !slices.Equal(got, want) {
 		t.Errorf("ship-release dir options %v, want %v (ship + ship.yaml go.modules)", got, want)
+	}
+}
+
+// CI releases on master each module ship.yaml lists, ship itself as "": a module missing here is never tagged.
+func TestCIRelease_whenMaster_thenEveryModuleReleased(t *testing.T) {
+	c, err := config.Load(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(".github/workflows/ci.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var w struct {
+		Jobs struct {
+			Release struct {
+				Strategy struct {
+					Matrix struct {
+						Dir []string `yaml:"dir"`
+					} `yaml:"matrix"`
+				} `yaml:"strategy"`
+			} `yaml:"release"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(b, &w); err != nil {
+		t.Fatal(err)
+	}
+	want := append([]string{""}, c.Go.Modules...)
+	if got := w.Jobs.Release.Strategy.Matrix.Dir; !slices.Equal(got, want) {
+		t.Errorf("ci.yaml release matrix dir %q, want %q (\"\" + ship.yaml go.modules)", got, want)
 	}
 }
 

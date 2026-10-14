@@ -679,14 +679,15 @@ func TestReport_whenStaleAndForeignFinding_thenFailAndDroppedCount(t *testing.T)
 	}
 }
 
-// Scaffold's stale set is known before any rule runs, whatever its place, and files compare clean.
-func TestReport_whenScaffoldLastAndUncleanPath_thenDropped(t *testing.T) {
+// Scaffold's stale set is known before any rule runs, whatever its place. Paths compare as they are: an unclean
+// ui.dir (./ui/) is cleaned by config, so scaffold's file and a rule's uiPath spell the same ui/eslint.config.js.
+func TestReport_whenScaffoldLastAndUncleanUIDir_thenDropped(t *testing.T) {
 	r := app(t)
 	r.remove("ui/" + scaffold.ESLint)
-	e := newEnv(r.dir, r.config(appShip), r.opts)
+	e := newEnv(r.dir, r.config(strings.Replace(appShip, "ui:\n", "ui:\n  dir: ./ui/\n", 1)), r.opts)
 	r.out.Reset()
-	other := rule{"other", func(*env) result {
-		return result{findings: []finding{{what: "x", file: "./ui/" + scaffold.ESLint}}}
+	other := rule{"other", func(e *env) result {
+		return result{findings: []finding{{what: "x", file: e.uiPath(scaffold.ESLint)}}}
 	}}
 	scaff := rule{Scaffold, (*env).scaffold}
 	if err := e.reportOf([]rule{other, scaff}); err == nil {

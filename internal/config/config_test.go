@@ -172,7 +172,28 @@ func TestParse_whenGoDirUnclean_thenCleaned(t *testing.T) {
 	}
 }
 
-// go.modules is taken as written, by release and by CI's jq guard alike: an unclean entry fails, naming the clean
+// ui.dir is cleaned like go.dir, and the lcov default follows the clean form.
+func TestParse_whenUIDirUnclean_thenCleaned(t *testing.T) {
+	c, err := Parse([]byte("ui:\n  dir: ./backend/ui/\n"))
+	if err != nil || c.UI.Dir != "backend/ui" || c.UI.Lcov != filepath.Join("backend", "coverage", "ui", "lcov.info") {
+		t.Fatalf("%+v %v", c.UI, err)
+	}
+}
+
+// An escaping dir is quoted as written, not as cleaned: backend/../.. is what the user finds in ship.yaml.
+func TestParse_whenDirEscapes_thenRawQuoted(t *testing.T) {
+	for in, want := range map[string]string{
+		"go:\n  dir: backend/../..\n": `go.dir: "backend/../.." is not a directory inside the repo`,
+		"ui:\n  dir: ui/../../x\n":    `ui.dir: "ui/../../x" is not a directory inside the repo`,
+		"ui:\n  dir: /ui\n":           `ui.dir: "/ui" is not a directory inside the repo`,
+	} {
+		if _, err := Parse([]byte(in)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: %v, want %q", in, err, want)
+		}
+	}
+}
+
+// go.modules is taken as written, by release and CI's release matrix alike: an unclean entry fails, naming the clean
 // spelling, never cleaned behind CI's back.
 func TestParse_whenModuleUnclean_thenError(t *testing.T) {
 	for in, want := range map[string]string{

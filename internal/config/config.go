@@ -79,6 +79,7 @@ type Go struct {
 
 // UI configures the frontend side of the gate.
 type UI struct {
+	// Dir is the UI's directory relative to the repo root, cleaned (./ui/ is ui).
 	Dir   string  `yaml:"dir"`
 	Floor float64 `yaml:"floor"`
 	// Build runs first in check, so the Go packages embed a fresh dist, never a stale one. The family's
@@ -167,19 +168,29 @@ func Parse(b []byte) (*Config, error) {
 	if hasUI && c.UI == nil {
 		c.UI = uiDefaults()
 	}
-	c.defaults()
+	if err := c.defaults(); err != nil {
+		return nil, err
+	}
 	return &c, c.validate()
 }
 
-// defaults fills what depends on other values or lives in lists.
-func (c *Config) defaults() {
-	// go.dir is kept clean (backend, never ./backend/): a dependabot directory and the rendered callers are spelled
-	// from it, every user takes it as is. go.modules is never cleaned, it must be written clean (validate): CI's
-	// release matrix reads ship.yaml raw.
-	c.Go.Dir = path.Clean(filepath.ToSlash(c.Go.Dir))
-	if c.UI != nil && c.UI.Lcov == "" {
-		// conform's vite reportsDirectory "../coverage/ui", seen from the repo root.
-		c.UI.Lcov = filepath.Join(filepath.Dir(c.UI.Dir), "coverage", "ui", "lcov.info")
+// defaults fills what depends on other values or lives in lists. go.dir and ui.dir are cleaned here, once (backend,
+// never ./backend/): dependabot directories, the rendered callers and conform's paths are spelled from them, every
+// user takes them as is. An escaping dir fails here, quoted as written. go.modules is never cleaned, it must be
+// written clean (validate): CI's release matrix and ship-release's options list it as written.
+func (c *Config) defaults() error {
+	var err error
+	if c.Go.Dir, err = cleanDir("go.dir", c.Go.Dir); err != nil {
+		return err
+	}
+	if c.UI != nil {
+		if c.UI.Dir, err = cleanDir("ui.dir", c.UI.Dir); err != nil {
+			return err
+		}
+		if c.UI.Lcov == "" {
+			// conform's vite reportsDirectory "../coverage/ui", seen from the repo root.
+			c.UI.Lcov = filepath.Join(filepath.Dir(c.UI.Dir), "coverage", "ui", "lcov.info")
+		}
 	}
 	for i := range c.Images {
 		im := &c.Images[i]
@@ -193,6 +204,15 @@ func (c *Config) defaults() {
 			im.Platforms = []string{"linux/amd64"}
 		}
 	}
+	return nil
+}
+
+// cleanDir is dir in clean slash form; an error, quoting dir as written, when it leaves the repo.
+func cleanDir(key, dir string) (string, error) {
+	if Escapes(dir) {
+		return "", fmt.Errorf("%s: %s: %q is not a directory inside the repo", File, key, dir)
+	}
+	return path.Clean(filepath.ToSlash(dir)), nil
 }
 
 func (c *Config) validate() error {
@@ -216,9 +236,6 @@ func (c *Config) validate() error {
 		!pgCompose.MatchString(c.Postgres) {
 		return fmt.Errorf("%s: postgres: %q, want a version like \"17\", an image like "+
 			"\"timescale/timescaledb:2.29.1-pg17\" or a compose service like \"compose:db\"", File, c.Postgres)
-	}
-	if Escapes(c.Go.Dir) {
-		return fmt.Errorf("%s: go.dir: %q is not a directory inside the repo", File, c.Go.Dir)
 	}
 	seen := map[string]bool{c.Go.Dir: true}
 	for _, m := range c.Go.Modules {
@@ -266,9 +283,9 @@ func (c *Config) PostgresImage() string {
 	return c.Postgres
 }
 
-// cleanModule fails on a go.modules entry not written clean: release's -dir and tag prefix and CI's release matrix
-// take it as written, CI's jq guard by the same rules: no ./, no leading or trailing /, no //, no . or .. segment,
-// not empty. The error names the clean spelling where there is one inside the repo.
+// cleanModule fails on a go.modules entry not written clean: release's -dir and tag prefix, CI's release matrix and
+// ship-release's options take it as written: no ./, no leading or trailing /, no //, no . or .. segment, not empty.
+// The error names the clean spelling where there is one inside the repo.
 func cleanModule(m string) error {
 	if !slices.ContainsFunc(strings.Split(m, "/"), func(s string) bool { return s == "" || s == "." || s == ".." }) {
 		return nil

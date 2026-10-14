@@ -117,7 +117,7 @@ func Files(root string, c *config.Config, f Facts) ([]File, error) {
 		d.NodeVersion = pins.NodeMin
 	}
 	if c.UI != nil {
-		d.UIDir, d.UIDirAbs, d.UIDirSet = path.Clean(c.UI.Dir), abs(c.UI.Dir), path.Clean(c.UI.Dir) != "ui"
+		d.UIDir, d.UIDirAbs, d.UIDirSet = c.UI.Dir, abs(c.UI.Dir), c.UI.Dir != "ui"
 	}
 	var files []File
 	add := func(p, tmpl, manual string, block func(have []byte, block string) ([]byte, string)) error {

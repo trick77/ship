@@ -218,7 +218,7 @@ func (e *env) reportOf(rs []rule) error {
 		done[Scaffold] = res
 		for _, f := range res.findings {
 			if _, ok := e.c.Allowed(Scaffold, f.image, f.file); f.rerender && !ok {
-				stale[cleanFile(f.file)] = true
+				stale[f.file] = true
 			}
 		}
 	}
@@ -277,14 +277,13 @@ func (e *env) reportOf(rs []rule) error {
 	return nil
 }
 
-// dropStale removes the findings on a stale file, compared clean (./ui/x is ui/x), and counts them.
+// dropStale removes the findings on a stale file and counts them. Paths compare as they are: every finding on an
+// owned file is spelled from a constant or path.Join over config's clean go.dir and ui.dir, as scaffold's are.
 func dropStale(fs []finding, stale map[string]bool) ([]finding, int) {
 	n := len(fs)
-	fs = slices.DeleteFunc(fs, func(f finding) bool { return stale[cleanFile(f.file)] })
+	fs = slices.DeleteFunc(fs, func(f finding) bool { return stale[f.file] })
 	return fs, n - len(fs)
 }
-
-func cleanFile(p string) string { return path.Clean(filepath.ToSlash(p)) }
 
 // origin is the GitHub owner and repo of the origin remote; empty when there is none or it is not GitHub.
 func origin(root string) (owner, repo string) {
@@ -324,7 +323,7 @@ func (e *env) exists(p string) bool {
 
 func (e *env) goPath(p string) string { return path.Join(e.c.Go.Dir, p) }
 
-func (e *env) uiPath(p string) string { return path.Join(filepath.ToSlash(e.c.UI.Dir), p) }
+func (e *env) uiPath(p string) string { return path.Join(e.c.UI.Dir, p) }
 
 // packageJSON is the UI's package.json, the parts conform reads.
 type packageJSON struct {

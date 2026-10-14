@@ -83,6 +83,7 @@ jobs:
         env:
           PG: ${{ inputs.postgres }}
         run: |
+          echo "::warning::postgres input is deprecated: set ship.yaml postgres:"
           if [[ "$PG" == compose:* ]]; then
             echo "::error::postgres input '$PG': compose:<service> is ship.yaml's postgres key, not this input; drop the input, ship check resolves it"; exit 1
           elif [[ "$PG" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then

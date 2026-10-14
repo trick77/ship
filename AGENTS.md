@@ -11,8 +11,8 @@ deliberately.
   PR (minor without note fails the run). Fallback by hand: `go run . release <bump>` or the Ship release workflow.
 - Nested modules `kit/`, `kit/auth/`: own tags `kit/vX.Y.Z`, `kit/auth/vX.Y.Z`, CI `release auto -dir <m>` per
   module, only that module's commits (and their `Release:` lines) count; first auto run cuts v0.1.0. Module list =
-  ship.yaml `go.modules`, spelled clean (`kit/auth`, Parse and CI fail `./kit/auth`): CI's release matrix reads it raw,
-  ship-release's dispatch options a test keeps equal.
+  ship.yaml `go.modules`, spelled clean (`kit/auth`, Parse fails `./kit/auth`): CI's release matrix and
+  ship-release's dispatch options are literals, a test keeps both equal to it.
 - Master-sha resolver (`git ls-remote … refs/heads/master | awk …`) runs before ship, so it is copied (check.yaml,
   release.yaml, hook.go, Makefile template, README); a test keeps the copies one. Hook script bytes changed = every
   clone's hook rewritten on its next push.
