@@ -377,8 +377,11 @@ var (
 	// httpx.Healthcheck(httpx.LocalURL(addr, "/healthz")), names one.
 	healthRoute = regexp.MustCompile(`(?:["` + "`" + `][A-Z]+(?:[ \t]|\\t)+[^"` + "`" + `/ \t\\]*|Handle(?:Func)?\(\s*["` +
 		"`" + `])/(?:api/(?:v1/)?)?` + `(?:healthz?|readyz)["` + "`]")
-	signalWait = regexp.MustCompile(`signal\.` + `Notify(?:Context)?\(`)
-	oidcImport = regexp.MustCompile(`"github\.com/coreos/` + `go-oidc[/"]`)
+	// kit's probes registered in the file: a probe route there mounts them (a sub-mux under a prefix). One written
+	// by hand beside them on the same mux would panic at startup as a duplicate pattern.
+	healthMount = regexp.MustCompile(`\bhttpx\.` + `Health\(`)
+	signalWait  = regexp.MustCompile(`signal\.` + `Notify(?:Context)?\(`)
+	oidcImport  = regexp.MustCompile(`"github\.com/coreos/` + `go-oidc[/"]`)
 )
 
 // handrolled: version stamping, health routes, shutdown signals and OIDC sign-in come from kit, never a copy.
@@ -404,7 +407,7 @@ func (e *env) handrolled() result {
 			fs = append(fs, finding{what: err.Error(), file: f})
 			continue
 		}
-		if healthRoute.Match(b) {
+		if healthRoute.Match(b) && !healthMount.Match(b) {
 			fs = append(fs, finding{what: "own health route: use kit's", file: f})
 		}
 		if signalWait.Match(b) {

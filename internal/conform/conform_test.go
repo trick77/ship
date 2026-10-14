@@ -458,6 +458,9 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 			// A path named as a URL, not a route: kit's own probe call, a client of someone's /health. Never a finding.
 			r.write("backend/cmd/app/probe.go", "package main\n\nfunc g() {\n\thttpx.Healthcheck(httpx.LocalURL(addr, \"/"+
 				"healthz\"))\n\t_, _ = http.Get(base + \"/"+"health\")\n}\n")
+			// kit's probes on a sub-mux, mounted under a prefix (transmission-ui): a route to kit's, never a finding.
+			r.write("backend/internal/api/mount.go", "package api\n\nfunc f() {\n\thttpx."+"Health(probes, log)\n"+
+				"\tmux.Handle(p(\"GET /"+"healthz\"), http.StripPrefix(base, probes))\n}\n")
 			r.write("backend/cmd/app/main.go", "package main\n\nfunc init() { signal."+"NotifyContext(nil) }\n")
 			r.write("backend/cmd/app/main_test.go", "package main\n\nconst p = \"GET /"+"health\"\n")
 			r.write("backend/testdata/x.go", "package x\n\nconst p = \"GET /"+"health\"\n")
