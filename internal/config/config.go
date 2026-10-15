@@ -290,9 +290,12 @@ func (c *Config) PostgresImage() string {
 // Slash semantics on every OS (ship.yaml and Git spell paths with /); filepath.IsAbs still catches a Windows drive
 // path (C:\x).
 func CleanDir(p string) (c string, escapes bool) {
-	c = path.Clean(filepath.ToSlash(p))
+	c = CleanPath(p)
 	return c, filepath.IsAbs(p) || path.IsAbs(c) || c == ".." || strings.HasPrefix(c, "../")
 }
+
+// CleanPath is p in clean slash form, the key repo paths compare by: ./ui//x is ui/x.
+func CleanPath(p string) string { return path.Clean(filepath.ToSlash(p)) }
 
 // inRepo reports whether p is a repo-relative path below the root: it does not escape and is not the root itself.
 func inRepo(p string) bool {

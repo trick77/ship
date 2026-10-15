@@ -161,32 +161,45 @@ func Run(root string, c *config.Config, o Options) error {
 	return e.report()
 }
 
-// Init writes the owned files that differ from ship's templates, but keeps those whose scaffold diff ship.yaml allows
-// by path. diff: print what would change, write nothing, error when anything not kept differs.
+// Init writes the owned files that differ from ship's templates, but keeps an existing one whose scaffold diff
+// ship.yaml allows by path (a missing one it writes). diff: print what init would write, write nothing, error when
+// anything would be written; kept files' diffs follow under their own header and do not count.
 func Init(root string, c *config.Config, o Options, diff bool) error {
 	e := newEnv(root, c, o)
 	if e.renderErr != nil {
 		return e.renderErr
 	}
 	var files []scaffold.File
+	type keptFile struct {
+		f   scaffold.File
+		why string
+	}
+	var kept []keptFile
 	for _, f := range e.files {
-		a, ok := e.kept(f.Path)
-		if !ok {
+		a, ok := c.AllowedByPath(Scaffold, f.Path)
+		switch {
+		case !ok || !f.Exists:
 			files = append(files, f)
-			continue
-		}
-		if f.Differs() {
-			_, _ = fmt.Fprintf(e.o.Out, "ship: kept %s (allowed: %s)\n", f.Path, a.Why)
-			if diff {
-				scaffold.PrintDiff(e.o.Out, []scaffold.File{f})
-			}
+		case f.Differs():
+			kept = append(kept, keptFile{f, a.Why})
 		}
 	}
 	if diff {
-		if scaffold.PrintDiff(e.o.Out, files) {
+		differs := scaffold.PrintDiff(e.o.Out, files)
+		if len(kept) > 0 {
+			_, _ = fmt.Fprintln(e.o.Out, "ship: kept (allowed, not written):")
+			for _, k := range kept {
+				_, _ = fmt.Fprintf(e.o.Out, "%s (allowed: %s)\n", k.f.Path, k.why)
+				scaffold.PrintDiff(e.o.Out, []scaffold.File{k.f})
+			}
+		}
+		if differs {
 			return errors.New("init -diff: owned files differ from ship's templates (ship init writes them)")
 		}
 		return nil
+	}
+	for _, k := range kept {
+		_, _ = fmt.Fprintf(e.o.Out, "ship: kept %s (allowed: %s)\n", k.f.Path, k.why)
 	}
 	wrote, err := scaffold.Write(root, files)
 	for _, p := range wrote {
@@ -205,18 +218,6 @@ func Init(root string, c *config.Config, o Options, diff bool) error {
 		return fmt.Errorf("init: by hand:\n%s", strings.Join(manual, "\n"))
 	}
 	return nil
-}
-
-// kept returns the scaffold allow naming owned file p by path, as conform matches it; a path-less entry excuses the
-// diff but does not stop init, the explicit write.
-func (e *env) kept(p string) (config.Allow, bool) {
-	var byPath config.Config
-	for _, a := range e.c.Allow {
-		if a.Path != "" {
-			byPath.Allow = append(byPath.Allow, a)
-		}
-	}
-	return byPath.Allowed(Scaffold, nil, p)
 }
 
 // Fix runs init, then conform: what is left is the manual part.
@@ -243,8 +244,7 @@ func (e *env) reportOf(rs []rule) error {
 		scaff = rs[i].fn(e)
 		for _, f := range scaff.findings {
 			if _, ok := e.c.Allowed(Scaffold, f.image, f.file); f.rerender && !ok {
-				c, _ := config.CleanDir(f.file)
-				stale[c] = true
+				stale[config.CleanPath(f.file)] = true
 			}
 		}
 	}
@@ -308,8 +308,7 @@ func (e *env) dropStale(rule string, fs []finding, stale map[string]bool) ([]fin
 		if _, ok := e.c.Allowed(rule, f.image, f.file); ok {
 			return false
 		}
-		c, _ := config.CleanDir(f.file)
-		return stale[c]
+		return stale[config.CleanPath(f.file)]
 	})
 	return fs, n - len(fs)
 }

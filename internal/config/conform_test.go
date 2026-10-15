@@ -40,6 +40,32 @@ func TestParse_whenAllowAndVisibility_thenMatched(t *testing.T) {
 	if _, ok := c.Allowed("golangci", nil, "x/.golangci.yaml"); !ok {
 		t.Error("rule-wide entry")
 	}
+	if _, ok := c.AllowedByPath("golangci", "x/.golangci.yaml"); ok {
+		t.Error("by path: rule-wide entry matched")
+	}
+	if a, ok := c.AllowedByPath("scaffold", "ui/eslint.config.js"); !ok || a.Why != "own rule" {
+		t.Errorf("by path: %+v %v", a, ok)
+	}
+	if _, ok := c.AllowedByPath("scaffold", ""); ok {
+		t.Error("by path: empty path matched")
+	}
+}
+
+// A path entry wins over a path-less one listed first: conform and init quote the same why.
+func TestAllowed_whenPathAndPathlessMatch_thenPathWins(t *testing.T) {
+	c, err := Parse([]byte("allow:\n  - { rule: scaffold, why: wide }\n  - { rule: scaffold, path: ./Makefile, why: own }\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a, ok := c.Allowed("scaffold", nil, "Makefile"); !ok || a.Why != "own" {
+		t.Errorf("path entry: %+v %v", a, ok)
+	}
+	if a, ok := c.AllowedByPath("scaffold", "Makefile"); !ok || a.Why != "own" {
+		t.Errorf("by path: %+v %v", a, ok)
+	}
+	if a, ok := c.Allowed("scaffold", nil, "ci.yaml"); !ok || a.Why != "wide" {
+		t.Errorf("other file: %+v %v", a, ok)
+	}
 }
 
 func TestParse_whenAllowWithoutWhyOrBadVisibility_thenError(t *testing.T) {

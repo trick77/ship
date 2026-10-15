@@ -874,8 +874,8 @@ func TestInit_whenScaffoldAllowedByPath_thenKept(t *testing.T) {
 			t.Fatalf("%s: -diff counted a kept file: %v\n%s", p, err, r.out.String())
 		}
 		out := r.out.String()
-		for _, s := range []string{"ship: kept " + tsc + " (allowed: own)\n", "-{ \"own\": true }\n",
-			"ship: kept Makefile (allowed: own target)\n", "-own:\n"} {
+		for _, s := range []string{"ship: kept (allowed, not written):\n", tsc + " (allowed: own)\n",
+			"-{ \"own\": true }\n", "Makefile (allowed: own target)\n", "-own:\n"} {
 			if !strings.Contains(out, s) {
 				t.Errorf("%s: -diff lacks %q:\n%s", p, s, out)
 			}
@@ -897,6 +897,54 @@ func TestInit_whenScaffoldAllowedByPath_thenKept(t *testing.T) {
 		if b, _ := os.ReadFile(filepath.Join(r.dir, "Makefile")); !strings.Contains(string(b), "own:\n") {
 			t.Errorf("%s: Makefile block overwritten:\n%s", p, b)
 		}
+	}
+}
+
+// -diff prints the counted diffs first, then the kept ones under their header.
+func TestInit_whenDiffWithKept_thenCountedFirst(t *testing.T) {
+	tsc := "ui/" + scaffold.TSConfigNode
+	r := app(t)
+	r.write(tsc, "{ \"own\": true }\n")
+	r.edit(scaffold.Release, "default: patch", "default: minor")
+	r.out.Reset()
+	err := Init(r.dir, r.config(appShip+allowScaffold(tsc)), r.opts, true)
+	out := r.out.String()
+	counted := strings.Index(out, "-        default: minor\n")
+	header := strings.Index(out, "ship: kept (allowed, not written):\n")
+	label := strings.Index(out, tsc+" (allowed: own)\n")
+	own := strings.Index(out, "-{ \"own\": true }\n")
+	if err == nil || counted < 0 || header < counted || label < header || own < label {
+		t.Errorf("order %d %d %d %d: %v\n%s", counted, header, label, own, err, out)
+	}
+}
+
+// A kept file that is missing is restored: the allow keeps the repo's file, not its absence.
+func TestInit_whenAllowedFileMissing_thenWritten(t *testing.T) {
+	tsc := "ui/" + scaffold.TSConfigNode
+	r := app(t)
+	r.remove(tsc)
+	ship := appShip + allowScaffold(tsc)
+	r.out.Reset()
+	if err := Init(r.dir, r.config(ship), r.opts, true); err == nil || strings.Contains(r.out.String(), "kept") {
+		t.Errorf("-diff: %v\n%s", err, r.out.String())
+	}
+	r.out.Reset()
+	if err := Init(r.dir, r.config(ship), r.opts, false); err != nil || r.out.String() != "ship: wrote "+tsc+"\n" {
+		t.Errorf("init: %v\n%s", err, r.out.String())
+	}
+	if _, err := os.Stat(filepath.Join(r.dir, tsc)); err != nil {
+		t.Error(err)
+	}
+}
+
+// A path-allowed file ship cannot write (Makefile with its own check) is kept, not reported by hand.
+func TestInit_whenAllowedFileManual_thenKeptNotByHand(t *testing.T) {
+	r := app(t)
+	r.write("Makefile", "check:\n\tgo test ./...\n")
+	r.out.Reset()
+	err := Init(r.dir, r.config(appShip+allowScaffold("Makefile")), r.opts, false)
+	if out := r.out.String(); err != nil || !strings.Contains(out, "ship: kept Makefile (allowed: own)\n") {
+		t.Errorf("%v\n%s", err, out)
 	}
 }
 

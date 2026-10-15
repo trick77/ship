@@ -180,9 +180,10 @@ what is left is by hand.
 (apps, or one that exists) only the block between `# ship:begin` and `# ship:end`; the rest of those two is the repo's. Owned means byte-equal.
 The CI caller's `node-version` is the Containerfile's `node:N` builder major (26 without one): Dependabot moves the
 builder, `ship init` moves CI after it. Dependabot updates kit in its own group (v0.x: a minor may break).
-`ship init -diff` prints the difference, writes nothing, exits 1 when anything differs.
-An owned file a `scaffold` allow names by `path` is kept: init and `-fix` never write it, `-diff` shows it as kept
-and does not count it (a path-less allow does not stop init).
+`ship init -diff` prints what init would write, writes nothing, exits 1 when anything would be written; kept files'
+diffs follow under `ship: kept (allowed, not written):`, each labelled with its why, and do not count.
+An existing owned file a `scaffold` allow names by `path` is kept: init and `-fix` never write it (a missing one
+they restore; a path-less allow does not stop init).
 
 | rule | what | allowable |
 |---|---|---|
@@ -209,6 +210,9 @@ allow:
   - { rule: distroless, image: -agent, why: smartctl's passthrough ioctls need root and busybox }
   - { rule: scaffold, path: ui/eslint.config.js, why: the thin-space number rule }
 ```
+
+A `scaffold` allow with a `path` keeps that file out of `ship init` for good: canon updates no longer reach it; drop
+the allow to take them again. When a path entry and a path-less one both match, the path entry's why is quoted.
 
 ## Adopting ship
 
