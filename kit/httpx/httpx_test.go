@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -818,8 +819,11 @@ func TestThrottle(t *testing.T) {
 	now := time.Unix(1000, 0)
 	th.now = func() time.Time { return now }
 	waits := []time.Duration{}
+	if got := th.RetryAfter("a"); got != 0 {
+		t.Errorf("RetryAfter of an unknown key = %s, want 0", got)
+	}
 	for range 3 {
-		d, ok := th.turn("a")
+		_, d, ok := th.turn("a")
 		if !ok {
 			t.Fatal("refused too early")
 		}
@@ -828,10 +832,21 @@ func TestThrottle(t *testing.T) {
 	if waits[0] != 0 || waits[1] != 500*time.Millisecond || waits[2] != time.Second {
 		t.Errorf("waits = %v", waits)
 	}
-	if _, ok := th.turn("a"); ok {
+	if _, _, ok := th.turn("a"); ok {
 		t.Error("queue past maxWait accepted")
 	}
-	if d, ok := th.turn("b"); !ok || d != 0 {
+	// Next free slot at +1.5s, maxWait 1s: let in again in 500ms.
+	if got := th.RetryAfter("a"); got != 500*time.Millisecond {
+		t.Errorf("RetryAfter of a refused key = %s, want 500ms", got)
+	}
+	now = now.Add(500 * time.Millisecond)
+	if got := th.RetryAfter("a"); got != 0 {
+		t.Errorf("RetryAfter once due = %s, want 0", got)
+	}
+	if _, _, ok := th.turn("a"); !ok {
+		t.Error("refused once RetryAfter said 0")
+	}
+	if _, d, ok := th.turn("b"); !ok || d != 0 {
 		t.Error("one key's flood throttled another")
 	}
 	// Stale entries are swept once the map is large.
@@ -845,6 +860,52 @@ func TestThrottle(t *testing.T) {
 	}
 }
 
+// Only the latest booking is given back: with another queued behind it, moving next would hand that slot out twice.
+func TestThrottle_whenLaterBookingQueued_thenReleaseKeepsIt(t *testing.T) {
+	th := NewThrottle(time.Second, time.Hour)
+	now := time.Unix(1000, 0)
+	th.now = func() time.Time { return now }
+	th.turn("k")
+	a, _, _ := th.turn("k")
+	b, _, _ := th.turn("k")
+	th.release("k", a)
+	if got := th.next["k"]; !got.Equal(b.Add(time.Second)) {
+		t.Errorf("next = %v after releasing an earlier booking, want %v", got, b.Add(time.Second))
+	}
+	th.release("k", b)
+	if got := th.next["k"]; !got.Equal(b) {
+		t.Errorf("next = %v after releasing the latest booking, want its slot %v", got, b)
+	}
+	th.release("gone", a) // a key swept meanwhile is not recreated
+	if _, ok := th.next["gone"]; ok {
+		t.Error("release booked a key it never had")
+	}
+}
+
+// Live entries are not rescanned on every call: the next sweep waits until the map has doubled, and the map stays
+// bounded by twice the live set.
+func TestThrottle_whenEntriesLive_thenSweepAmortized(t *testing.T) {
+	th := NewThrottle(time.Hour, time.Hour)
+	now := time.Unix(1000, 0)
+	th.now = func() time.Time { return now }
+	for i := range 2000 {
+		th.turn(strconv.Itoa(i))
+	}
+	if th.pruneAt != 2*1025 {
+		t.Fatalf("pruneAt = %d after a sweep that found 1025 live entries, want 2050", th.pruneAt)
+	}
+	now = now.Add(2 * time.Hour) // every entry stale
+	for i := range 2000 {
+		th.turn("new" + strconv.Itoa(i))
+	}
+	if n := len(th.next); n > 2*th.pruneAt {
+		t.Errorf("len = %d past twice the sweep threshold %d", n, th.pruneAt)
+	}
+	if _, ok := th.next["0"]; ok {
+		t.Error("stale entries survived the sweep")
+	}
+}
+
 func TestThrottleWait(t *testing.T) {
 	th := NewThrottle(time.Hour, time.Hour)
 	if err := th.Wait(context.Background(), "k"); err != nil {
@@ -855,8 +916,19 @@ func TestThrottleWait(t *testing.T) {
 	if err := th.Wait(ctx, "k"); !errors.Is(err, context.Canceled) {
 		t.Errorf("cancelled Wait = %v", err)
 	}
+	// The cancelled attempt gave its turn back: k's next one is queued at +1h again, not refused at +2h.
+	queued, cancelQueued := context.WithCancel(context.Background())
+	done := make(chan error)
+	go func() { done <- th.Wait(queued, "k") }()
+	for th.RetryAfter("k") == 0 {
+		time.Sleep(time.Millisecond)
+	}
 	if err := th.Wait(context.Background(), "k"); !errors.Is(err, ErrThrottled) {
 		t.Errorf("over-queued Wait = %v", err)
+	}
+	cancelQueued()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Errorf("queued Wait after cancel = %v", err)
 	}
 	quick := NewThrottle(time.Millisecond, time.Second)
 	_ = quick.Wait(context.Background(), "k")
