@@ -163,14 +163,11 @@ func (r *repo) remove(p string) {
 
 func (r *repo) edit(p, old, new string) {
 	r.t.Helper()
-	b, err := os.ReadFile(filepath.Join(r.dir, p))
-	if err != nil {
-		r.t.Fatal(err)
-	}
-	if !strings.Contains(string(b), old) {
+	s := r.read(p)
+	if !strings.Contains(s, old) {
 		r.t.Fatalf("%s lacks %q", p, old)
 	}
-	r.write(p, strings.Replace(string(b), old, new, 1))
+	r.write(p, strings.Replace(s, old, new, 1))
 }
 
 func (r *repo) config(s string) *config.Config {
@@ -857,6 +854,112 @@ func TestFix_whenManualLeft_thenListed(t *testing.T) {
 		!strings.Contains(out, "FAIL scaffold: Makefile has its own check") || !strings.Contains(out, "FAIL agents:") ||
 		strings.Contains(out, "FAIL dependabot") {
 		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// read returns p's content in the fixture.
+func (r *repo) read(p string) string {
+	r.t.Helper()
+	b, err := os.ReadFile(filepath.Join(r.dir, p))
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	return string(b)
+}
+
+const ownTSNode = "{ \"own\": true }\n"
+
+// A repo allowing its own ui/tsconfig.node.json by path: init writes the rest, keeps that one.
+func TestInit_whenPathAllowedFileDiffers_thenKept(t *testing.T) {
+	r := app(t)
+	r.write("ui/"+scaffold.TSConfigNode, ownTSNode)
+	r.edit(scaffold.Release, "default: patch", "default: minor")
+	r.out.Reset()
+	if err := Init(r.dir, r.config(appShip+allowScaffold("ui/"+scaffold.TSConfigNode)), r.opts, false); err != nil {
+		t.Fatalf("%v\n%s", err, r.out.String())
+	}
+	if want := "ship: kept ui/tsconfig.node.json (allowed: own)\nship: wrote .github/workflows/release.yaml\n"; r.out.String() != want {
+		t.Errorf("init:\n%s", r.out.String())
+	}
+	if r.read("ui/"+scaffold.TSConfigNode) != ownTSNode {
+		t.Error("kept file overwritten")
+	}
+}
+
+func TestInit_whenPathAllowedFileMissing_thenRestored(t *testing.T) {
+	r := app(t)
+	r.remove("ui/" + scaffold.TSConfigNode)
+	r.out.Reset()
+	if err := Init(r.dir, r.config(appShip+allowScaffold("ui/"+scaffold.TSConfigNode)), r.opts, false); err != nil ||
+		r.out.String() != "ship: wrote ui/tsconfig.node.json\n" {
+		t.Errorf("%v\n%s", err, r.out.String())
+	}
+}
+
+func TestInit_whenPathlessAllow_thenWritten(t *testing.T) {
+	r := app(t)
+	r.write("ui/"+scaffold.TSConfigNode, ownTSNode)
+	r.out.Reset()
+	if err := Init(r.dir, r.config(appShip+"allow:\n  - { rule: scaffold, why: x }\n"), r.opts, false); err != nil ||
+		r.out.String() != "ship: wrote ui/tsconfig.node.json\n" {
+		t.Errorf("%v\n%s", err, r.out.String())
+	}
+}
+
+// A kept file ship cannot write anyway: never counted, its kept line names the by-hand part.
+func TestInit_whenKeptAndManual_thenNotCounted(t *testing.T) {
+	r := app(t)
+	r.write("Makefile", "check:\n\tgo test ./...\n")
+	c := r.config(appShip + allowScaffold("Makefile"))
+	r.out.Reset()
+	err := Init(r.dir, c, r.opts, false)
+	out := r.out.String()
+	if err != nil || !strings.HasPrefix(out, "ship: kept Makefile (allowed: own); ") || strings.Count(out, "\n") != 1 {
+		t.Errorf("init: %v\n%s", err, out)
+	}
+	line := out
+	r.out.Reset()
+	err = Init(r.dir, c, r.opts, true)
+	if err != nil || r.out.String() != "ship: kept (allowed, not written):\n"+line {
+		t.Errorf("-diff: %v\n%s", err, r.out.String())
+	}
+}
+
+// -diff: what init writes first and counted, kept files by name after their header, not counted.
+func TestInit_whenDiffAndKept_thenListedApart(t *testing.T) {
+	r := app(t)
+	r.write("ui/"+scaffold.TSConfigNode, ownTSNode)
+	c := r.config(appShip + allowScaffold("ui/"+scaffold.TSConfigNode))
+	r.out.Reset()
+	if err := Init(r.dir, c, r.opts, true); err != nil {
+		t.Fatalf("kept only: %v\n%s", err, r.out.String())
+	}
+	if out := r.out.String(); out != "ship: kept (allowed, not written):\n"+
+		"ship: kept ui/tsconfig.node.json (allowed: own)\n" {
+		t.Errorf("kept only:\n%s", out)
+	}
+	r.edit(scaffold.Release, "default: patch", "default: minor")
+	r.out.Reset()
+	err := Init(r.dir, c, r.opts, true)
+	out := r.out.String()
+	diff, header := strings.Index(out, "+        default: patch\n"), strings.Index(out, "ship: kept (allowed, not written):\n")
+	if err == nil || diff < 0 || header < diff {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+// Conform is init's keeping's no concern: a path-allowed drift and a path-less allow report as before.
+func TestRun_whenScaffoldAllowed_thenUnchanged(t *testing.T) {
+	r := app(t)
+	r.write("ui/"+scaffold.TSConfigNode, ownTSNode)
+	for ship, want := range map[string]string{
+		appShip + allowScaffold("ui/"+scaffold.TSConfigNode): "allowed scaffold: own\n",
+		appShip + "allow:\n  - { rule: scaffold, why: x }\n": "allowed scaffold: x\n",
+	} {
+		out, err := r.run(ship)
+		if err != nil || !strings.Contains(out, want) || strings.Contains(out, "FAIL") || strings.Contains(out, "kept") {
+			t.Errorf("%v\n%s", err, out)
+		}
 	}
 }
 

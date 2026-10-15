@@ -161,20 +161,59 @@ func Run(root string, c *config.Config, o Options) error {
 	return e.report()
 }
 
-// Init writes the owned files that differ from ship's templates. diff: print what would change, write nothing,
-// error when anything differs.
+// keptBy returns the why of the scaffold allow naming f's path, when f exists: init keeps it. A missing file is
+// never kept, a path-less allow keeps nothing.
+func keptBy(c *config.Config, f scaffold.File) (string, bool) {
+	if !f.Exists {
+		return "", false
+	}
+	for _, a := range c.Allow {
+		if a.Rule == Scaffold && a.Image == nil && a.Path != "" && a.Path == f.Path {
+			return a.Why, true
+		}
+	}
+	return "", false
+}
+
+// Init writes the owned files that differ from ship's templates, but keeps an existing one a scaffold allow names
+// by path. diff: print what would change, write nothing, error when anything differs; kept files are listed by
+// name under their own header. A kept file never counts, a Manual one neither: its line names the by-hand part.
 func Init(root string, c *config.Config, o Options, diff bool) error {
 	e := newEnv(root, c, o)
 	if e.renderErr != nil {
 		return e.renderErr
 	}
+	var files, kept []scaffold.File
+	for _, f := range e.files {
+		if _, ok := keptBy(c, f); ok && f.Differs() {
+			kept = append(kept, f)
+			continue
+		}
+		files = append(files, f)
+	}
+	printKept := func() {
+		for _, f := range kept {
+			why, _ := keptBy(c, f)
+			l := fmt.Sprintf("ship: kept %s (allowed: %s)", f.Path, why)
+			if f.Manual != "" {
+				l += "; " + f.Manual
+			}
+			_, _ = fmt.Fprintln(e.o.Out, l)
+		}
+	}
 	if diff {
-		if scaffold.PrintDiff(e.o.Out, e.files) {
+		differs := scaffold.PrintDiff(e.o.Out, files)
+		if len(kept) > 0 {
+			_, _ = fmt.Fprintln(e.o.Out, "ship: kept (allowed, not written):")
+		}
+		printKept()
+		if differs {
 			return errors.New("init -diff: owned files differ from ship's templates (ship init writes them)")
 		}
 		return nil
 	}
-	wrote, err := scaffold.Write(root, e.files)
+	printKept()
+	wrote, err := scaffold.Write(root, files)
 	for _, p := range wrote {
 		_, _ = fmt.Fprintln(e.o.Out, "ship: wrote", p)
 	}
@@ -182,7 +221,7 @@ func Init(root string, c *config.Config, o Options, diff bool) error {
 		return err
 	}
 	var manual []string
-	for _, f := range e.files {
+	for _, f := range files {
 		if f.Manual != "" {
 			manual = append(manual, fmt.Sprintf("  %s: %s", f.Path, f.Manual))
 		}

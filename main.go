@@ -30,6 +30,7 @@ const usage = `usage: ship <command>
   lint                                        golangci-lint alone, at the version check runs
   conform [-fix]                              the repo against ship's canon (check's first step); -fix: init first
   init [-diff]                                write the files ship owns; -diff: print, write nothing, exit 1 if any
+                                              (kept files listed by name, never counted)
   hooks                                      install the pre-push hook running the gate
   pre-push                                    the hook's gate (git runs it)
   release [patch|minor|major|auto] [flags]    tag, build and push images, GitHub release; auto: patch, or what
@@ -130,7 +131,8 @@ func run(args []string) error {
 func conformCmd(root, name string, args []string) error {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fix := fs.Bool("fix", false, "write the files ship owns, then conform: what is left is by hand")
-	diff := fs.Bool("diff", false, "print what init would write, write nothing; exit 1 when anything differs")
+	diff := fs.Bool("diff", false, "print what init would write, write nothing; exit 1 when anything differs; "+
+		"kept files are listed by name and never count")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
