@@ -14,15 +14,20 @@ import (
 // Signals are the shutdown signals: the ones a terminal and a container runtime send.
 var Signals = []os.Signal{os.Interrupt, syscall.SIGTERM}
 
-// Context returns a context that ends when parent does or a shutdown signal arrives. The signal handler is released
-// shortly after the first stop (an AfterFunc), not at stop: a second Ctrl-C or SIGTERM during a slow stop (a drain, a
-// cleanup) kills the process at once, as Go's NotifyContext docs intend for a second Ctrl-C. Tradeoff: a signal
-// delivered twice (a process-group Ctrl-C plus a wrapper forwarding it) kills at once too. stop releases the handler
-// and the context early; call it when done.
+// Context returns a context that ends when parent does or a shutdown signal arrives. When a signal ended it, the
+// signal handler is released shortly after (an AfterFunc), not at stop: a second Ctrl-C or SIGTERM during a slow stop
+// (a drain, a cleanup) kills the process at once, as Go's NotifyContext docs intend for a second Ctrl-C. Tradeoff: a
+// signal delivered twice (a process-group Ctrl-C plus a wrapper forwarding it) kills at once too. When parent ended
+// it, the handler stays until stop: the orchestrator's one SIGTERM then is swallowed, never a kill mid-drain. stop
+// releases the handler and the context early; call it when done.
 func Context(parent context.Context) (ctx context.Context, stop context.CancelFunc) {
 	ctx, stop = signal.NotifyContext(parent, Signals...)
 	// NotifyContext alone keeps the handler registered, swallowing every further signal, until stop.
-	context.AfterFunc(ctx, stop)
+	context.AfterFunc(ctx, func() {
+		if parent.Err() == nil {
+			stop()
+		}
+	})
 	return ctx, stop
 }
 
