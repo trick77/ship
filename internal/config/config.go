@@ -294,10 +294,6 @@ func CleanDir(p string) (c string, escapes bool) {
 	return c, filepath.IsAbs(p) || path.IsAbs(c) || c == ".." || strings.HasPrefix(c, "../")
 }
 
-// CleanPath is p, slash form as written, cleaned: the key repo paths compare by, ./ui//x is ui/x. A backslash is
-// part of a name on every OS (ship.yaml spells paths with /), so matching never depends on the OS.
-func CleanPath(p string) string { return path.Clean(p) }
-
 // inRepo reports whether p is a repo-relative path below the root: it does not escape and is not the root itself.
 func inRepo(p string) bool {
 	c, out := CleanDir(p)

@@ -241,8 +241,10 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 			"FAIL scaffold: missing (ship init) (.github/workflows/cleanup-images.yaml)"}},
 		{"caller pinned", appShip, func(r *repo) { r.edit(scaffold.CI, "check.yaml@master", "check.yaml@v1") },
 			[]string{"FAIL scaffold: differs from ship's template (ship init -diff) (.github/workflows/ci.yaml)"}},
-		// A kept file (existing, its scaffold diff allowed by path) keeps every rule's findings there: its one guard.
-		// A missing one is not kept (TestRun_whenPathAllowedFileMissing_thenStaleAndRestored).
+		// An allowed scaffold diff keeps every rule's findings there: its one guard.
+		{"scaffold missing allowed", appShip + allowScaffold(scaffold.Cleanup), func(r *repo) { r.remove(scaffold.Cleanup) }, []string{
+			"FAIL workflows: missing (ship init) (.github/workflows/cleanup-images.yaml)",
+			"FAIL visibility: private repo with images: the cleanup-images caller is missing"}},
 		{"caller pinned allowed", appShip + allowScaffold(scaffold.CI), func(r *repo) { r.edit(scaffold.CI, "check.yaml@master", "check.yaml@v1") },
 			[]string{"FAIL workflows: trick77/ship/.github/workflows/check.yaml@v1: call it @master"}},
 		{"caller gone", appShip + allowScaffold(scaffold.Release), func(r *repo) {
@@ -312,6 +314,8 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 			[]string{"FAIL dependabot: rename to dependabot.yaml"}},
 		{"dependabot missing", appShip, func(r *repo) { r.remove(scaffold.Dependabot) },
 			[]string{"FAIL scaffold: missing (ship init) (.github/dependabot.yaml)"}},
+		{"dependabot missing allowed", appShip + allowScaffold(scaffold.Dependabot), func(r *repo) { r.remove(scaffold.Dependabot) },
+			[]string{"FAIL dependabot: missing (ship init)"}},
 		{"containerfile", appShip, func(r *repo) {
 			r.edit("Containerfile", "-trimpath", "")
 			r.edit("Containerfile", "ARG VERSION=dev\n", "")
@@ -358,6 +362,8 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 			[]string{"FAIL dockerignore: does not exclude ui/node_modules", "FAIL dockerignore: does not exclude ui/dist"}},
 		{"dockerignore missing", appShip, func(r *repo) { r.remove(scaffold.Ignore) },
 			[]string{"FAIL scaffold: missing (ship init) (.dockerignore)"}},
+		{"dockerignore missing allowed", appShip + allowScaffold(scaffold.Ignore), func(r *repo) { r.remove(scaffold.Ignore) },
+			[]string{"FAIL dockerignore: missing (ship init) (.dockerignore)"}},
 		{"ui", strings.Replace(appShip, "npm run lint", "npm run format:check", 1), func(r *repo) {
 			r.write("ui/package.json", `{"scripts": {"build": "tsc --noEmit && vite build", "lint": "eslint ."},
 				"devDependencies": {"prettier": "^3.9.9"}}`)
@@ -371,6 +377,8 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 			"FAIL ui: devDependency typescript-eslint missing", "FAIL ui: devDependency eslint-config-prettier missing",
 			"FAIL ui: devDependency @eslint/js missing", "FAIL ui: devDependency eslint-plugin-react-hooks missing",
 			"FAIL scaffold: missing (ship init) (ui/eslint.config.js)"}},
+		{"ui eslint config missing allowed", appShip + allowScaffold("ui/"+scaffold.ESLint), func(r *repo) { r.remove("ui/" + scaffold.ESLint) },
+			[]string{"FAIL ui: missing (ship init) (ui/eslint.config.js)"}},
 		// Dependabot moves a version per repo: any exact one passes, a range or TypeScript 6.1+ does not.
 		{"ui devDependency versions", appShip, func(r *repo) {
 			r.edit("ui/package.json", `"eslint": "10.12.0"`, `"eslint": "~10.13.0"`)
@@ -852,168 +860,109 @@ func TestFix_whenManualLeft_thenListed(t *testing.T) {
 	}
 }
 
-// ismimodown: ship.yaml allows its own ui/tsconfig.node.json; init and conform -fix keep it, -diff shows it uncounted.
-func TestInit_whenScaffoldAllowedByPath_thenKept(t *testing.T) {
-	const own = "{ \"own\": true }\n"
-	tsc := "ui/" + scaffold.TSConfigNode
-	for _, p := range []string{tsc, "./" + tsc} {
-		r := app(t)
-		r.write(tsc, own)
-		r.edit("Makefile", "# ship:end", "own:\n\ttrue\n# ship:end")
-		ship := appShip + allowScaffold(p) + "  - { rule: scaffold, path: Makefile, why: own target }\n"
-		r.out.Reset()
-		if err := Init(r.dir, r.config(ship), r.opts, true); err != nil {
-			t.Fatalf("%s: -diff counted a kept file: %v\n%s", p, err, r.out.String())
-		}
-		out := r.out.String()
-		for _, s := range []string{"ship: kept (allowed, not written):\n", tsc + " (allowed: own)\n",
-			"-{ \"own\": true }\n", "Makefile (allowed: own target)\n", "-own:\n"} {
-			if !strings.Contains(out, s) {
-				t.Errorf("%s: -diff lacks %q:\n%s", p, s, out)
-			}
-		}
-		r.remove(scaffold.Release)
-		r.out.Reset()
-		if err := Fix(r.dir, r.config(ship), r.opts); err != nil {
-			t.Fatalf("%s: fix: %v\n%s", p, err, r.out.String())
-		}
-		out = r.out.String()
-		if !strings.Contains(out, "ship: kept "+tsc+" (allowed: own)\n") ||
-			!strings.Contains(out, "ship: wrote "+scaffold.Release+"\n") || strings.Contains(out, "wrote "+tsc) ||
-			strings.Contains(out, "wrote Makefile") || !strings.Contains(out, "allowed scaffold: own\n") {
-			t.Errorf("%s: fix:\n%s", p, out)
-		}
-		if b, _ := os.ReadFile(filepath.Join(r.dir, tsc)); string(b) != own {
-			t.Errorf("%s: overwritten: %s", p, b)
-		}
-		if b, _ := os.ReadFile(filepath.Join(r.dir, "Makefile")); !strings.Contains(string(b), "own:\n") {
-			t.Errorf("%s: Makefile block overwritten:\n%s", p, b)
-		}
+// read returns p's content in the fixture.
+func (r *repo) read(p string) string {
+	r.t.Helper()
+	b, err := os.ReadFile(filepath.Join(r.dir, p))
+	if err != nil {
+		r.t.Fatal(err)
 	}
+	return string(b)
 }
 
-// -diff prints the counted diffs first, then the kept ones under their header.
-func TestInit_whenDiffWithKept_thenCountedFirst(t *testing.T) {
-	tsc := "ui/" + scaffold.TSConfigNode
+const ownTSNode = "{ \"own\": true }\n"
+
+// A repo allowing its own ui/tsconfig.node.json by path: init writes the rest, keeps that one.
+func TestInit_whenPathAllowedFileDiffers_thenKept(t *testing.T) {
 	r := app(t)
-	r.write(tsc, "{ \"own\": true }\n")
+	r.write("ui/"+scaffold.TSConfigNode, ownTSNode)
 	r.edit(scaffold.Release, "default: patch", "default: minor")
 	r.out.Reset()
-	err := Init(r.dir, r.config(appShip+allowScaffold(tsc)), r.opts, true)
-	out := r.out.String()
-	counted := strings.Index(out, "-        default: minor\n")
-	header := strings.Index(out, "ship: kept (allowed, not written):\n")
-	label := strings.Index(out, tsc+" (allowed: own)\n")
-	own := strings.Index(out, "-{ \"own\": true }\n")
-	if err == nil || counted < 0 || header < counted || label < header || own < label {
-		t.Errorf("order %d %d %d %d: %v\n%s", counted, header, label, own, err, out)
+	if err := Init(r.dir, r.config(appShip+allowScaffold("ui/"+scaffold.TSConfigNode)), r.opts, false); err != nil {
+		t.Fatalf("%v\n%s", err, r.out.String())
+	}
+	if want := "ship: kept ui/tsconfig.node.json (allowed: own)\nship: wrote .github/workflows/release.yaml\n"; r.out.String() != want {
+		t.Errorf("init:\n%s", r.out.String())
+	}
+	if r.read("ui/"+scaffold.TSConfigNode) != ownTSNode {
+		t.Error("kept file overwritten")
 	}
 }
 
-// A kept file that is missing is restored: the allow keeps the repo's file, not its absence.
-func TestInit_whenAllowedFileMissing_thenWritten(t *testing.T) {
-	tsc := "ui/" + scaffold.TSConfigNode
+func TestInit_whenPathAllowedFileMissing_thenRestored(t *testing.T) {
 	r := app(t)
-	r.remove(tsc)
-	ship := appShip + allowScaffold(tsc)
+	r.remove("ui/" + scaffold.TSConfigNode)
 	r.out.Reset()
-	if err := Init(r.dir, r.config(ship), r.opts, true); err == nil || strings.Contains(r.out.String(), "kept") {
-		t.Errorf("-diff: %v\n%s", err, r.out.String())
-	}
-	r.out.Reset()
-	if err := Init(r.dir, r.config(ship), r.opts, false); err != nil || r.out.String() != "ship: wrote "+tsc+"\n" {
-		t.Errorf("init: %v\n%s", err, r.out.String())
-	}
-	if _, err := os.Stat(filepath.Join(r.dir, tsc)); err != nil {
-		t.Error(err)
+	if err := Init(r.dir, r.config(appShip+allowScaffold("ui/"+scaffold.TSConfigNode)), r.opts, false); err != nil ||
+		r.out.String() != "ship: wrote ui/tsconfig.node.json\n" {
+		t.Errorf("%v\n%s", err, r.out.String())
 	}
 }
 
-// A path-allowed file ship cannot write (Makefile with its own check) is kept, not reported by hand.
-func TestInit_whenAllowedFileManual_thenKeptNotByHand(t *testing.T) {
+func TestInit_whenPathlessAllow_thenWritten(t *testing.T) {
+	r := app(t)
+	r.write("ui/"+scaffold.TSConfigNode, ownTSNode)
+	r.out.Reset()
+	if err := Init(r.dir, r.config(appShip+"allow:\n  - { rule: scaffold, why: x }\n"), r.opts, false); err != nil ||
+		r.out.String() != "ship: wrote ui/tsconfig.node.json\n" {
+		t.Errorf("%v\n%s", err, r.out.String())
+	}
+}
+
+// A kept file ship cannot write anyway stays by-hand work: init and -diff still count it.
+func TestInit_whenKeptAndManual_thenStillCounts(t *testing.T) {
 	r := app(t)
 	r.write("Makefile", "check:\n\tgo test ./...\n")
-	ship := appShip + allowScaffold("Makefile")
-	e := newEnv(r.dir, r.config(ship), r.opts)
-	i := slices.IndexFunc(e.files, func(f scaffold.File) bool { return f.Path == "Makefile" })
-	if i < 0 || e.files[i].Manual == "" || !e.files[i].Kept {
-		t.Fatalf("Makefile not kept and manual: %+v", e.files)
-	}
-	// The Manual reason follows the kept line, not hidden by it, in write and -diff mode alike.
-	line := "ship: kept Makefile (allowed: own); " + e.files[i].Manual + "\n"
+	c := r.config(appShip + allowScaffold("Makefile"))
 	r.out.Reset()
-	err := Init(r.dir, r.config(ship), r.opts, false)
-	if out := r.out.String(); err != nil || !strings.Contains(out, line) {
-		t.Errorf("want %q: %v\n%s", line, err, out)
+	err := Init(r.dir, c, r.opts, false)
+	if err == nil || !strings.Contains(err.Error(), "by hand:\n  Makefile: ") ||
+		!strings.HasPrefix(r.out.String(), "ship: kept Makefile (allowed: own)\n") {
+		t.Errorf("init: %v\n%s", err, r.out.String())
 	}
 	r.out.Reset()
-	err = Init(r.dir, r.config(ship), r.opts, true)
-	if out := r.out.String(); err != nil || !strings.Contains(out, "ship: kept (allowed, not written):\n"+line) {
-		t.Errorf("-diff: want %q: %v\n%s", line, err, out)
+	err = Init(r.dir, c, r.opts, true)
+	if err == nil || !strings.HasPrefix(r.out.String(), "ship: kept (allowed, not written):\nship: kept Makefile (allowed: own)\n"+
+		"Makefile: ") {
+		t.Errorf("-diff: %v\n%s", err, r.out.String())
 	}
 }
 
-// A path-less scaffold allow does not stop init, so it does not keep the file's other findings either: init
-// rewrites .dockerignore, its dockerignore finding is stale, scaffold's (allowed) stands alone.
-func TestRun_whenPathlessScaffoldAllow_thenOtherFindingsStale(t *testing.T) {
+// -diff: what init writes first and counted, kept files after their header, not counted.
+func TestInit_whenDiffAndKept_thenListedApart(t *testing.T) {
 	r := app(t)
-	r.write(scaffold.Ignore, "*\n")
-	out, err := r.run(appShip + "allow:\n  - { rule: scaffold, why: wide }\n")
-	if err != nil || !strings.Contains(out, "allowed scaffold: wide\n") ||
-		!strings.Contains(out, "ok dockerignore: 2 finding(s) on owned files scaffold re-renders\n") {
-		t.Errorf("want dockerignore's findings dropped as stale (%v):\n%s", err, out)
+	r.write("ui/"+scaffold.TSConfigNode, ownTSNode)
+	c := r.config(appShip + allowScaffold("ui/"+scaffold.TSConfigNode))
+	r.out.Reset()
+	if err := Init(r.dir, c, r.opts, true); err != nil {
+		t.Fatalf("kept only: %v\n%s", err, r.out.String())
+	}
+	if out := r.out.String(); !strings.HasPrefix(out, "ship: kept (allowed, not written):\n"+
+		"ship: kept ui/tsconfig.node.json (allowed: own)\n") || !strings.Contains(out, `"own": true`) {
+		t.Errorf("kept only:\n%s", out)
+	}
+	r.edit(scaffold.Release, "default: patch", "default: minor")
+	r.out.Reset()
+	err := Init(r.dir, c, r.opts, true)
+	out := r.out.String()
+	diff, header := strings.Index(out, "+        default: patch\n"), strings.Index(out, "ship: kept (allowed, not written):\n")
+	if err == nil || diff < 0 || header < diff {
+		t.Errorf("%v\n%s", err, out)
 	}
 }
 
-// A path-allowed owned file that is missing is no kept file: init restores it, so conform treats it as stale.
-func TestRun_whenPathAllowedFileMissing_thenStaleAndRestored(t *testing.T) {
-	for p, dropped := range map[string]string{
-		scaffold.Ignore:         "ok dockerignore: 1 finding(s) on owned files scaffold re-renders\n",
-		scaffold.Dependabot:     "ok dependabot: 1 finding(s) on owned files scaffold re-renders\n",
-		"ui/" + scaffold.ESLint: "ok ui: 1 finding(s) on owned files scaffold re-renders\n",
-		scaffold.Cleanup:        "ok visibility: 1 finding(s) on owned files scaffold re-renders\n",
+// Conform is init's keeping's no concern: a path-allowed drift and a path-less allow report as before.
+func TestRun_whenScaffoldAllowed_thenUnchanged(t *testing.T) {
+	r := app(t)
+	r.write("ui/"+scaffold.TSConfigNode, ownTSNode)
+	for ship, want := range map[string]string{
+		appShip + allowScaffold("ui/"+scaffold.TSConfigNode): "allowed scaffold: own\n",
+		appShip + "allow:\n  - { rule: scaffold, why: x }\n": "allowed scaffold: x\n",
 	} {
-		r := app(t)
-		r.remove(p)
-		ship := appShip + allowScaffold(p)
 		out, err := r.run(ship)
-		if err != nil || !strings.Contains(out, "allowed scaffold: own\n") || !strings.Contains(out, dropped) {
-			t.Errorf("%s: want %q (%v):\n%s", p, dropped, err, out)
+		if err != nil || !strings.Contains(out, want) || strings.Contains(out, "FAIL") || strings.Contains(out, "kept") {
+			t.Errorf("%v\n%s", err, out)
 		}
-		r.out.Reset()
-		if err := Init(r.dir, r.config(ship), r.opts, false); err != nil || r.out.String() != "ship: wrote "+p+"\n" {
-			t.Errorf("%s: init: %v\n%s", p, err, r.out.String())
-		}
-		if out, err := r.run(ship); err != nil || !strings.Contains(out, "ok scaffold\n") {
-			t.Errorf("%s: after init (%v):\n%s", p, err, out)
-		}
-	}
-}
-
-// A path-less scaffold allow excuses conform but does not stop init; an image-scoped one never names an owned file,
-// in conform neither.
-func TestInit_whenScaffoldAllowWithoutPathOrWithImage_thenWritten(t *testing.T) {
-	tsc := "ui/" + scaffold.TSConfigNode
-	for _, allow := range []string{"  - { rule: scaffold, why: own }\n",
-		"  - { rule: scaffold, image: \"\", path: " + tsc + ", why: own }\n"} {
-		r := app(t)
-		r.write(tsc, "{}\n")
-		ship := appShip + "allow:\n" + allow
-		r.out.Reset()
-		if err := Init(r.dir, r.config(ship), r.opts, true); err == nil || strings.Contains(r.out.String(), "kept") {
-			t.Errorf("%s-diff: %v\n%s", allow, err, r.out.String())
-		}
-		r.out.Reset()
-		if err := Init(r.dir, r.config(ship), r.opts, false); err != nil ||
-			r.out.String() != "ship: wrote "+tsc+"\n" {
-			t.Errorf("%sinit: %v\n%s", allow, err, r.out.String())
-		}
-	}
-	r := app(t)
-	r.write(tsc, "{}\n")
-	if out, err := r.run(appShip + "allow:\n  - { rule: scaffold, image: \"\", path: " + tsc + ", why: own }\n"); err == nil ||
-		!strings.Contains(out, "FAIL scaffold: differs") {
-		t.Errorf("image-scoped allow excused conform: %v\n%s", err, out)
 	}
 }
 

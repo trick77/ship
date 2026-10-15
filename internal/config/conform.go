@@ -8,45 +8,23 @@ type Allow struct {
 	Rule string `yaml:"rule"`
 	// Image is an image suffix ("" the repo's own image); unset = every image.
 	Image *string `yaml:"image"`
-	// Path is repo-relative, slash form; empty = every file. A scaffold allow with a path keeps that existing file
-	// out of ship init for good: canon updates no longer reach it; drop the allow to take them again (a missing
-	// owned file init always restores). When a path entry and a path-less one for the same rule both match, the
-	// path entry's why is quoted, for every rule.
+	// Path is repo-relative; empty = every file.
 	Path string `yaml:"path"`
 	Why  string `yaml:"why"`
 }
 
-// Allowed returns the entry excusing rule for image (nil: no image) and path, if any; an entry naming path wins
-// over a path-less one, so conform and init quote the same why. Paths compare in CleanPath form: ./ui/x matches ui/x.
+// Allowed returns the entry excusing rule for image (nil: no image) and path, if any.
 func (c *Config) Allowed(rule string, image *string, path string) (Allow, bool) {
-	if a, ok := c.byPath(rule, image, path); ok {
+	for _, a := range c.Allow {
+		if a.Rule != rule || a.Path != "" && a.Path != path {
+			continue
+		}
+		if a.Image != nil && (image == nil || *a.Image != *image) {
+			continue
+		}
 		return a, true
 	}
-	for _, a := range c.Allow {
-		if a.Rule == rule && a.Path == "" && imageMatches(a, image) {
-			return a, true
-		}
-	}
 	return Allow{}, false
-}
-
-// AllowedByPath is Allowed, no image, for the entries naming path only: a path-less entry never matches.
-func (c *Config) AllowedByPath(rule, path string) (Allow, bool) { return c.byPath(rule, nil, path) }
-
-func (c *Config) byPath(rule string, image *string, path string) (Allow, bool) {
-	if path == "" {
-		return Allow{}, false
-	}
-	for _, a := range c.Allow {
-		if a.Rule == rule && a.Path != "" && CleanPath(a.Path) == CleanPath(path) && imageMatches(a, image) {
-			return a, true
-		}
-	}
-	return Allow{}, false
-}
-
-func imageMatches(a Allow, image *string) bool {
-	return a.Image == nil || image != nil && *a.Image == *image
 }
 
 func (c *Config) validateConform() error {
