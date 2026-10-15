@@ -51,6 +51,23 @@ func TestParse_whenAllowAndVisibility_thenMatched(t *testing.T) {
 	}
 }
 
+// A backslash is part of a name on every OS: ship.yaml spells paths with /, matching never depends on the OS.
+func TestAllowed_whenBackslashPath_thenNoMatch(t *testing.T) {
+	c, err := Parse([]byte("allow:\n  - { rule: scaffold, path: ui/x.js, why: a }\n  - { rule: golangci, path: 'ui\\y.yaml', why: b }\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := c.Allowed("scaffold", nil, `ui\x.js`); ok {
+		t.Error(`ui\x.js matched ui/x.js`)
+	}
+	if _, ok := c.AllowedByPath("golangci", "ui/y.yaml"); ok {
+		t.Error(`ui/y.yaml matched ui\y.yaml`)
+	}
+	if _, ok := c.AllowedByPath("golangci", `ui\y.yaml`); !ok {
+		t.Error(`ui\y.yaml did not match itself`)
+	}
+}
+
 // A path entry wins over a path-less one listed first: conform and init quote the same why.
 func TestAllowed_whenPathAndPathlessMatch_thenPathWins(t *testing.T) {
 	c, err := Parse([]byte("allow:\n  - { rule: scaffold, why: wide }\n  - { rule: scaffold, path: ./Makefile, why: own }\n"))

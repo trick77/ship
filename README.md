@@ -181,13 +181,14 @@ what is left is by hand.
 The CI caller's `node-version` is the Containerfile's `node:N` builder major (26 without one): Dependabot moves the
 builder, `ship init` moves CI after it. Dependabot updates kit in its own group (v0.x: a minor may break).
 `ship init -diff` prints what init would write, writes nothing, exits 1 when anything would be written; kept files'
-diffs follow under `ship: kept (allowed, not written):`, each labelled with its why, and do not count.
+diffs follow under `ship: kept (allowed, not written):`, each labelled `ship: kept <path> (allowed: <why>)`, and do
+not count.
 An existing owned file a `scaffold` allow names by `path` is kept: init and `-fix` never write it (a missing one
 they restore; a path-less allow does not stop init).
 
 | rule | what | allowable |
 |---|---|---|
-| `scaffold` | every owned file equals ship's template. The rules below read the owned files too; on one `scaffold` fails, not allowed, their findings are dropped (`ship init` rewrites it); an allowed diff keeps them | per `path` |
+| `scaffold` | every owned file equals ship's template. The rules below read the owned files too; on one `ship init` rewrites (missing or differing, not kept) their findings are dropped; a kept file keeps them | per `path` |
 | `workflows` | ci/release/cleanup callers use `trick77/ship/.github/workflows/<x>.yaml@master`; release: `packages: write` and `id-token: write` (cosign) ⇔ images, bump options include `auto`; no other image cleanup action, in any workflow | yes |
 | `visibility` | GitHub's visibility (Actions event, else the API unauthenticated, cached a day in the git dir) matches `visibility:`; a failed lookup: `visibility:` stands (a note), unset = FAIL; public: CI on every PR (no `if:`); private: Dependabot-only `if:`, every npm/docker/docker-compose update grouped, ≤ 5 open PRs, cleanup caller with images | yes |
 | `dependabot` | `commit-message: { prefix: deps }` everywhere; gomod (go.dir, go.modules), github-actions, npm (UI), docker (Containerfile), docker-compose `/` (a root `compose*.yaml` naming an image by a version tag) present | yes |
@@ -212,7 +213,9 @@ allow:
 ```
 
 A `scaffold` allow with a `path` keeps that file out of `ship init` for good: canon updates no longer reach it; drop
-the allow to take them again. When a path entry and a path-less one both match, the path entry's why is quoted.
+the allow to take them again. A path allow keeps an existing file only: a missing owned file `ship init` always
+restores. When a path entry and a path-less one for the same rule both match, the path entry's why is quoted (every
+rule). Paths are slash form as written (`./ui/x` is `ui/x`; a backslash is part of a name).
 
 ## Adopting ship
 

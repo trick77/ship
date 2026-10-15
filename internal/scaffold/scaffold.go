@@ -75,6 +75,10 @@ type File struct {
 	Want   []byte
 	// Manual is set when ship cannot write the file itself (Want is then unset).
 	Manual string
+	// Kept: an existing file ship.yaml's scaffold allow names by path; init never writes it. KeptWhy is that
+	// allow's why. Set by the caller (conform), not Files.
+	Kept    bool
+	KeptWhy string
 }
 
 // Differs reports whether the file needs ship init (or a hand fix).

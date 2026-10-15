@@ -76,8 +76,8 @@ func (o Options) withDefaults() Options {
 type finding struct {
 	what, file string
 	image      *string
-	// rerender: a scaffold finding ship init fixes by rewriting file (missing or differing, never Manual).
-	rerender bool
+	// kept: the why of the allow keeping file (scaffold's Kept), reported allowed without another lookup.
+	kept string
 }
 
 // result is a rule's verdict: findings, or skip (the rule does not apply), or an ok with a note.
@@ -153,6 +153,24 @@ func (e *env) render() {
 		f.Visibility = e.vis
 	}
 	e.files, e.renderErr = scaffold.Files(e.root, e.c, f)
+	// Classified once: init, the scaffold rule and the stale set read Kept.
+	for i, sf := range e.files {
+		if a, ok := e.c.AllowedByPath(Scaffold, sf.Path); ok && sf.Exists {
+			e.files[i].Kept, e.files[i].KeptWhy = true, a.Why
+		}
+	}
+}
+
+// rewrites reports whether ship init writes f: it differs, ship can write it, and it is not kept.
+func rewrites(f scaffold.File) bool { return f.Differs() && f.Manual == "" && !f.Kept }
+
+// keptLine is init's line for a kept file, its Manual reason appended so it is not hidden.
+func keptLine(f scaffold.File) string {
+	s := fmt.Sprintf("ship: kept %s (allowed: %s)", f.Path, f.KeptWhy)
+	if f.Manual != "" {
+		s += "; " + f.Manual
+	}
+	return s
 }
 
 // Run checks root against the canon and prints one line per rule (ok, FAIL, allowed, skip). Any FAIL is an error.
@@ -169,28 +187,24 @@ func Init(root string, c *config.Config, o Options, diff bool) error {
 	if e.renderErr != nil {
 		return e.renderErr
 	}
-	var files []scaffold.File
-	type keptFile struct {
-		f   scaffold.File
-		why string
-	}
-	var kept []keptFile
+	var files, kept []scaffold.File
 	for _, f := range e.files {
-		a, ok := c.AllowedByPath(Scaffold, f.Path)
 		switch {
-		case !ok || !f.Exists:
+		case !f.Kept:
 			files = append(files, f)
 		case f.Differs():
-			kept = append(kept, keptFile{f, a.Why})
+			kept = append(kept, f)
 		}
 	}
 	if diff {
 		differs := scaffold.PrintDiff(e.o.Out, files)
 		if len(kept) > 0 {
 			_, _ = fmt.Fprintln(e.o.Out, "ship: kept (allowed, not written):")
-			for _, k := range kept {
-				_, _ = fmt.Fprintf(e.o.Out, "%s (allowed: %s)\n", k.f.Path, k.why)
-				scaffold.PrintDiff(e.o.Out, []scaffold.File{k.f})
+			for _, f := range kept {
+				_, _ = fmt.Fprintln(e.o.Out, keptLine(f))
+				if f.Manual == "" {
+					scaffold.PrintDiff(e.o.Out, []scaffold.File{f})
+				}
 			}
 		}
 		if differs {
@@ -198,8 +212,8 @@ func Init(root string, c *config.Config, o Options, diff bool) error {
 		}
 		return nil
 	}
-	for _, k := range kept {
-		_, _ = fmt.Fprintf(e.o.Out, "ship: kept %s (allowed: %s)\n", k.f.Path, k.why)
+	for _, f := range kept {
+		_, _ = fmt.Fprintln(e.o.Out, keptLine(f))
 	}
 	wrote, err := scaffold.Write(root, files)
 	for _, p := range wrote {
@@ -235,16 +249,17 @@ func (e *env) report() error { return e.reportOf(rules()) }
 func (e *env) reportOf(rs []rule) error {
 	known := map[string]bool{}
 	fails := 0
-	// stale are the owned files scaffold fails, not allowed: ship init rewrites them, so another rule's finding there
-	// only doubles scaffold's. Scaffold runs before every other rule whatever its place in rs. An allowed diff keeps
-	// every rule's findings, its one guard; a Manual file too (ship writes none of it). scaffold is run once, here.
+	// stale are exactly the owned files ship init writes (rewrites): another rule's finding there only doubles
+	// scaffold's. A path-less scaffold allow does not change the set: init writes those files all the same. A kept
+	// file keeps every rule's findings, its one guard; a Manual file too (ship writes none of it). Scaffold runs
+	// before every other rule whatever its place in rs, once, here.
 	var scaff result
 	stale := map[string]bool{}
 	if i := slices.IndexFunc(rs, func(r rule) bool { return r.name == Scaffold }); i >= 0 {
 		scaff = rs[i].fn(e)
-		for _, f := range scaff.findings {
-			if _, ok := e.c.Allowed(Scaffold, f.image, f.file); f.rerender && !ok {
-				stale[config.CleanPath(f.file)] = true
+		for _, f := range e.files {
+			if rewrites(f) {
+				stale[config.CleanPath(f.Path)] = true
 			}
 		}
 	}
@@ -272,10 +287,16 @@ func (e *env) reportOf(rs []rule) error {
 		}
 		var seen []string
 		for _, f := range res.findings {
-			if a, ok := e.c.Allowed(r.name, f.image, f.file); ok {
-				if !slices.Contains(seen, a.Why) {
-					seen = append(seen, a.Why)
-					_, _ = fmt.Fprintf(e.o.Out, "allowed %s: %s\n", r.name, a.Why)
+			why, ok := f.kept, f.kept != ""
+			if !ok {
+				var a config.Allow
+				a, ok = e.c.Allowed(r.name, f.image, f.file)
+				why = a.Why
+			}
+			if ok {
+				if !slices.Contains(seen, why) {
+					seen = append(seen, why)
+					_, _ = fmt.Fprintf(e.o.Out, "allowed %s: %s\n", r.name, why)
 				}
 				continue
 			}

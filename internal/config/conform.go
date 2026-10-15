@@ -8,8 +8,10 @@ type Allow struct {
 	Rule string `yaml:"rule"`
 	// Image is an image suffix ("" the repo's own image); unset = every image.
 	Image *string `yaml:"image"`
-	// Path is repo-relative; empty = every file. A scaffold allow with a path keeps that file out of ship init for
-	// good: canon updates no longer reach it; drop the allow to take them again.
+	// Path is repo-relative, slash form; empty = every file. A scaffold allow with a path keeps that existing file
+	// out of ship init for good: canon updates no longer reach it; drop the allow to take them again (a missing
+	// owned file init always restores). When a path entry and a path-less one for the same rule both match, the
+	// path entry's why is quoted, for every rule.
 	Path string `yaml:"path"`
 	Why  string `yaml:"why"`
 }

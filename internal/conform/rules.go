@@ -43,11 +43,11 @@ func (e *env) scaffold() result {
 	for _, f := range e.files {
 		switch {
 		case f.Manual != "":
-			fs = append(fs, finding{what: f.Manual, file: f.Path})
+			fs = append(fs, finding{what: f.Manual, file: f.Path, kept: f.KeptWhy})
 		case !f.Exists:
-			fs = append(fs, finding{what: "missing (ship init)", file: f.Path, rerender: true})
+			fs = append(fs, finding{what: "missing (ship init)", file: f.Path})
 		case f.Differs():
-			fs = append(fs, finding{what: "differs from ship's template (ship init -diff)", file: f.Path, rerender: true})
+			fs = append(fs, finding{what: "differs from ship's template (ship init -diff)", file: f.Path, kept: f.KeptWhy})
 		}
 	}
 	return result{findings: fs}
