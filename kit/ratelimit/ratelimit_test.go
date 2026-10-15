@@ -210,6 +210,82 @@ func TestConcurrentUse(t *testing.T) {
 	}
 }
 
+// Take gates and charges under one lock: parallel requests cannot all pass before any is charged.
+func TestTake_whenConcurrent_thenOnlyTheBurstPasses(t *testing.T) {
+	l := New(Options{Rate: 1e-9, Burst: 100})
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	allowed := 0
+	for range 200 {
+		wg.Go(func() {
+			if ok, _ := l.Take("a", 1, 1); ok {
+				mu.Lock()
+				allowed++
+				mu.Unlock()
+			}
+		})
+	}
+	wg.Wait()
+	if allowed != 100 {
+		t.Errorf("allowed %d of 200 concurrent Takes, want the burst of 100", allowed)
+	}
+}
+
+func TestTake_whenRefused_thenPenaltyDeepensTheWait(t *testing.T) {
+	c := newClock()
+	l := limiter(c, 0.5, 2)
+	if ok, wait := l.Take("a", 2, 1); !ok || wait != 0 {
+		t.Fatalf("first Take = %v %s, want allowed", ok, wait)
+	}
+	if ok, wait := l.Take("a", 1, 0); ok || wait != 2*time.Second {
+		t.Errorf("Take without penalty = %v %s, want refused, 2s", ok, wait)
+	}
+	if ok, wait := l.Take("a", 1, 1); ok || wait != 4*time.Second {
+		t.Errorf("Take with penalty = %v %s, want refused, 4s (from -1 to 1 at 0.5/s)", ok, wait)
+	}
+	if got := l.RetryAfter("a"); got != 4*time.Second {
+		t.Errorf("RetryAfter = %s, want the penalised 4s", got)
+	}
+}
+
+// A NaN cost would leave a bucket no comparison refuses; it charges nothing instead.
+func TestTake_whenNaN_thenChargesNothing(t *testing.T) {
+	l := limiter(newClock(), 1e-9, 1)
+	l.Take("a", math.NaN(), 1)
+	l.Charge("a", math.NaN())
+	if ok, _ := l.Take("a", 1, 0); !ok {
+		t.Fatal("NaN spent the token")
+	}
+	if ok, _ := l.Take("a", 1, 0); ok {
+		t.Error("NaN left a bucket that admits for good")
+	}
+}
+
+// A refund to a pruned key is dropped: recreating it could prune other callers.
+func TestCharge_whenRefundToUnknownKey_thenNoBucket(t *testing.T) {
+	l := limiter(newClock(), 1, 1)
+	l.Charge("gone", -1)
+	if l.Len() != 0 {
+		t.Errorf("Len = %d, a refund created a bucket", l.Len())
+	}
+}
+
+// The documented 404 pattern: reserve, refund a free outcome.
+func TestTake_whenRefunded_thenOnlyCostlyOutcomesCount(t *testing.T) {
+	l := limiter(newClock(), 1e-9, 2)
+	for range 10 {
+		if ok, _ := l.Take("a", 1, 1); !ok {
+			t.Fatal("free outcomes ran the bucket dry")
+		}
+		l.Charge("a", -1)
+	}
+	l.Take("a", 1, 1)
+	l.Take("a", 1, 1)
+	if ok, _ := l.Take("a", 1, 1); ok {
+		t.Error("third 404 allowed past a burst of 2")
+	}
+}
+
 func TestMiddleware(t *testing.T) {
 	c := newClock()
 	l := limiter(c, 0.1, 1)

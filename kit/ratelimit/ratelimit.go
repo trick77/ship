@@ -5,10 +5,27 @@
 //	lim := ratelimit.New(ratelimit.Options{Rate: 50.0 / 60, Burst: 50})
 //	api = lim.Middleware(ratelimit.ClientKey(1))(api)
 //
-// Charge and Permitted split the gate from the cost, for a limit that meters an outcome rather than a request (the
-// 404s a scanner causes): a request that is not Permitted is refused AND charged, an allowed one is charged after
-// if its outcome costs. The charge on refusal is what runs a bucket into debt, down to -Burst, so a caller that keeps
-// knocking while blocked stays blocked for longer than one refill; charging only outcomes never goes below 0.
+// Take splits the gate from the cost, for a limit that meters an outcome rather than a request (the 404s a scanner
+// causes): Take(key, cost, penalty) refuses AND charges penalty when the bucket holds no whole token, and spends cost
+// when it does, both under one lock. Reserve the outcome's cost up front and refund it after when the outcome turned
+// out free, or parallel requests all pass the gate before any of them is charged:
+//
+//	ok, wait := lim.Take(key, 1, 1) // refused or 404: one token
+//	if !ok {
+//		httpx.TooManyRequests(w, wait)
+//		return
+//	}
+//	if status != http.StatusNotFound {
+//		lim.Charge(key, -1) // free outcome, the reservation goes back
+//	}
+//
+// The charge on refusal is what runs a bucket into debt, down to -Burst, so a caller that keeps knocking while blocked
+// stays blocked for longer than one refill; charging only outcomes never goes below 0. A refund never lifts a bucket
+// past Burst, so one that refilled while the request ran loses that much of it, and a refund to a key pruned
+// meanwhile is dropped. The reservation is the price of the atomic gate: a caller's requests in flight hold tokens
+// until they finish, so one caller's concurrency beyond its balance is refused (and penalised) whatever the outcomes;
+// size Burst above what a legitimate client runs at once. Permitted and Charge are the parts of Take, for a gate
+// that may race.
 package ratelimit
 
 import (
@@ -76,13 +93,31 @@ func New(o Options) *Limiter {
 	return &Limiter{o: o, buckets: map[string]*bucket{}}
 }
 
-// Allow spends one token of key's bucket and reports whether there was one.
+// Allow spends one token of key's bucket and reports whether there was one: Take(key, 1, 0).
 func (l *Limiter) Allow(key string) bool {
-	ok, _ := l.take(key)
+	ok, _ := l.Take(key, 1, 0)
 	return ok
 }
 
-// Permitted reports whether key's bucket holds a whole token, without spending it.
+// Take is Permitted and Charge under one lock: when key's bucket holds a whole token it spends cost and reports true,
+// otherwise it spends penalty and reports false with the wait, after the penalty, until the next token. The gate is
+// Permitted's, one whole token whatever cost is: a cost above the balance is admitted and runs the bucket into debt,
+// as Charge does, and a negative cost or penalty refunds. Permitted then Charge is two locks: parallel requests for
+// one key can all pass Permitted before any of them is charged.
+func (l *Limiter) Take(key string, cost, penalty float64) (ok bool, retryAfter time.Duration) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	b := l.refilled(key)
+	if b.tokens < 1 {
+		l.spend(b, penalty)
+		return false, l.wait(b.tokens)
+	}
+	l.spend(b, cost)
+	return true, 0
+}
+
+// Permitted reports whether key's bucket holds a whole token, without spending it. A gate in front of a later
+// Charge races its parallel requests through; Take is the atomic form.
 func (l *Limiter) Permitted(key string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -90,11 +125,24 @@ func (l *Limiter) Permitted(key string) bool {
 }
 
 // Charge spends cost tokens of key's bucket, into debt if need be, down to -Burst: the deepest a block goes is one
-// burst's worth of refill on top of the wait for a token. A negative cost refunds, never past Burst.
+// burst's worth of refill on top of the wait for a token. A negative cost refunds, never past Burst; a refund to a
+// key without a bucket is dropped, since the fresh one it would create is full anyway, and creating it could prune
+// other callers' records.
 func (l *Limiter) Charge(key string, cost float64) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	b := l.refilled(key)
+	if _, ok := l.buckets[key]; !ok && !(cost > 0) {
+		return
+	}
+	l.spend(l.refilled(key), cost)
+}
+
+// spend takes cost off b, down to -Burst and, for a refund, up to Burst. A NaN cost charges nothing: stored, it would
+// leave a bucket no comparison refuses, admitting its key for good. Called with mu held.
+func (l *Limiter) spend(b *bucket, cost float64) {
+	if math.IsNaN(cost) {
+		return
+	}
 	b.tokens = min(max(b.tokens-cost, -l.o.Burst), l.o.Burst)
 }
 
@@ -121,25 +169,13 @@ func (l *Limiter) Len() int {
 func (l *Limiter) Middleware(key func(*http.Request) string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if ok, wait := l.take(key(r)); !ok {
+			if ok, wait := l.Take(key(r), 1, 0); !ok {
 				httpx.TooManyRequests(w, wait)
 				return
 			}
 			next.ServeHTTP(w, r)
 		})
 	}
-}
-
-// take is Allow, with the wait for the next token when there is none: one lock, so the wait describes the refusal.
-func (l *Limiter) take(key string) (bool, time.Duration) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	b := l.refilled(key)
-	if b.tokens < 1 {
-		return false, l.wait(b.tokens)
-	}
-	b.tokens--
-	return true, 0
 }
 
 // wait is how long a balance of tokens takes to reach one.

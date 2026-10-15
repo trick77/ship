@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -818,8 +819,11 @@ func TestThrottle(t *testing.T) {
 	now := time.Unix(1000, 0)
 	th.now = func() time.Time { return now }
 	waits := []time.Duration{}
+	if got := th.RetryAfter("a"); got != 0 {
+		t.Errorf("RetryAfter of an unknown key = %s, want 0", got)
+	}
 	for range 3 {
-		d, ok := th.turn("a")
+		_, d, ok := th.turn("a")
 		if !ok {
 			t.Fatal("refused too early")
 		}
@@ -828,10 +832,21 @@ func TestThrottle(t *testing.T) {
 	if waits[0] != 0 || waits[1] != 500*time.Millisecond || waits[2] != time.Second {
 		t.Errorf("waits = %v", waits)
 	}
-	if _, ok := th.turn("a"); ok {
+	if _, _, ok := th.turn("a"); ok {
 		t.Error("queue past maxWait accepted")
 	}
-	if d, ok := th.turn("b"); !ok || d != 0 {
+	// Next free slot at +1.5s, maxWait 1s: let in again in 500ms.
+	if got := th.RetryAfter("a"); got != 500*time.Millisecond {
+		t.Errorf("RetryAfter of a refused key = %s, want 500ms", got)
+	}
+	now = now.Add(500 * time.Millisecond)
+	if got := th.RetryAfter("a"); got != 0 {
+		t.Errorf("RetryAfter once due = %s, want 0", got)
+	}
+	if _, _, ok := th.turn("a"); !ok {
+		t.Error("refused once RetryAfter said 0")
+	}
+	if _, d, ok := th.turn("b"); !ok || d != 0 {
 		t.Error("one key's flood throttled another")
 	}
 	// Stale entries are swept once the map is large.
@@ -845,18 +860,109 @@ func TestThrottle(t *testing.T) {
 	}
 }
 
+// Only the latest booking is given back: with another queued behind it, moving next would hand that slot out twice.
+func TestThrottle_whenLaterBookingQueued_thenReleaseKeepsIt(t *testing.T) {
+	th := NewThrottle(time.Second, time.Hour)
+	now := time.Unix(1000, 0)
+	th.now = func() time.Time { return now }
+	th.turn("k")
+	a, _, _ := th.turn("k")
+	b, _, _ := th.turn("k")
+	th.release("k", a)
+	if got := th.next["k"]; !got.Equal(b.Add(time.Second)) {
+		t.Errorf("next = %v after releasing an earlier booking, want %v", got, b.Add(time.Second))
+	}
+	th.release("k", b)
+	if got := th.next["k"]; !got.Equal(b) {
+		t.Errorf("next = %v after releasing the latest booking, want its slot %v", got, b)
+	}
+	th.release("gone", a) // a key swept meanwhile is not recreated
+	if _, ok := th.next["gone"]; ok {
+		t.Error("release booked a key it never had")
+	}
+}
+
+// Live entries are not rescanned on every call: the next sweep waits until the map has doubled or an interval has
+// passed.
+func TestThrottle_whenEntriesLive_thenSweepAmortized(t *testing.T) {
+	th := NewThrottle(time.Minute, time.Minute)
+	now := time.Unix(1000, 0)
+	th.now = func() time.Time { return now }
+	for i := range 1025 {
+		th.turn(strconv.Itoa(i))
+	}
+	th.turn("first sweep") // 1025 > minPrune: sweeps, keeps all 1025 live
+	if th.pruneAt != 2050 || !th.swept.Equal(now) {
+		t.Fatalf("pruneAt %d swept %v after the first sweep, want 2050 at %v", th.pruneAt, th.swept, now)
+	}
+	now = now.Add(90 * time.Second) // 1025 stale, interval of 2m not yet over
+	for i := range 1000 {
+		th.turn("live" + strconv.Itoa(i))
+	}
+	if n := len(th.next); n != 2026 {
+		t.Fatalf("len = %d, want 2026: no sweep before the map doubles or the interval ends", n)
+	}
+	th.turn("doubling") // 2026, then 2027 entries: still under 2050
+	for i := range 30 {
+		th.turn("more" + strconv.Itoa(i))
+	}
+	if _, ok := th.next["0"]; ok {
+		t.Error("map doubled past pruneAt without a sweep")
+	}
+	if n := len(th.next); n != 1031 {
+		t.Errorf("len = %d after the doubling sweep, want the 1031 live keys", n)
+	}
+}
+
+// A burst's keys go once it is over, without waiting for the map to double again.
+func TestThrottle_whenBurstGoesQuiet_thenSweptAfterInterval(t *testing.T) {
+	th := NewThrottle(time.Minute, time.Minute)
+	now := time.Unix(1000, 0)
+	th.now = func() time.Time { return now }
+	for i := range 5000 {
+		th.turn(strconv.Itoa(i))
+	}
+	now = now.Add(2 * time.Minute)
+	th.turn("after")
+	if n := len(th.next); n != 1 {
+		t.Errorf("len = %d one interval after the burst, want only the new key", n)
+	}
+}
+
 func TestThrottleWait(t *testing.T) {
 	th := NewThrottle(time.Hour, time.Hour)
 	if err := th.Wait(context.Background(), "k"); err != nil {
 		t.Fatalf("first Wait = %v", err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := th.Wait(ctx, "k"); !errors.Is(err, context.Canceled) {
-		t.Errorf("cancelled Wait = %v", err)
+	gone, cancelGone := context.WithCancel(context.Background())
+	cancelGone()
+	if err := th.Wait(gone, "k"); !errors.Is(err, context.Canceled) {
+		t.Errorf("Wait with a cancelled context = %v", err)
+	}
+	if got := th.RetryAfter("k"); got != 0 {
+		t.Errorf("a Wait cancelled before asking booked a turn: RetryAfter = %s", got)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if err := th.Wait(ctx, "k"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("timed-out Wait = %v", err)
+	}
+	// The cancelled attempt gave its turn back: k's next one is queued at +1h again, not refused at +2h.
+	queued, cancelQueued := context.WithCancel(context.Background())
+	done := make(chan error)
+	go func() { done <- th.Wait(queued, "k") }()
+	for deadline := time.Now().Add(5 * time.Second); th.RetryAfter("k") == 0; {
+		if time.Now().After(deadline) {
+			t.Fatal("the queued Wait never booked its turn")
+		}
+		time.Sleep(time.Millisecond)
 	}
 	if err := th.Wait(context.Background(), "k"); !errors.Is(err, ErrThrottled) {
 		t.Errorf("over-queued Wait = %v", err)
+	}
+	cancelQueued()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Errorf("queued Wait after cancel = %v", err)
 	}
 	quick := NewThrottle(time.Millisecond, time.Second)
 	_ = quick.Wait(context.Background(), "k")
