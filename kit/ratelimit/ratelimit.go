@@ -21,8 +21,11 @@
 //
 // The charge on refusal is what runs a bucket into debt, down to -Burst, so a caller that keeps knocking while blocked
 // stays blocked for longer than one refill; charging only outcomes never goes below 0. A refund never lifts a bucket
-// past Burst, so one that refilled while the request ran loses that much of it. Permitted and Charge are the parts
-// of Take, for a gate that may race.
+// past Burst, so one that refilled while the request ran loses that much of it, and a refund to a key pruned
+// meanwhile is dropped. The reservation is the price of the atomic gate: a caller's requests in flight hold tokens
+// until they finish, so one caller's concurrency beyond its balance is refused (and penalised) whatever the outcomes;
+// size Burst above what a legitimate client runs at once. Permitted and Charge are the parts of Take, for a gate
+// that may race.
 package ratelimit
 
 import (
@@ -122,18 +125,23 @@ func (l *Limiter) Permitted(key string) bool {
 }
 
 // Charge spends cost tokens of key's bucket, into debt if need be, down to -Burst: the deepest a block goes is one
-// burst's worth of refill on top of the wait for a token. A negative cost refunds, never past Burst.
+// burst's worth of refill on top of the wait for a token. A negative cost refunds, never past Burst; a refund to a
+// key without a bucket is dropped, since the fresh one it would create is full anyway, and creating it could prune
+// other callers' records.
 func (l *Limiter) Charge(key string, cost float64) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if _, ok := l.buckets[key]; !ok && !(cost > 0) {
+		return
+	}
 	l.spend(l.refilled(key), cost)
 }
 
-// spend takes cost off b, down to -Burst and, for a refund, up to Burst. A NaN cost panics: it would leave a bucket
-// that no comparison refuses, admitting its key for good. Called with mu held.
+// spend takes cost off b, down to -Burst and, for a refund, up to Burst. A NaN cost charges nothing: stored, it would
+// leave a bucket no comparison refuses, admitting its key for good. Called with mu held.
 func (l *Limiter) spend(b *bucket, cost float64) {
 	if math.IsNaN(cost) {
-		panic("ratelimit: NaN cost")
+		return
 	}
 	b.tokens = min(max(b.tokens-cost, -l.o.Burst), l.o.Burst)
 }

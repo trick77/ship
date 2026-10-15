@@ -99,6 +99,9 @@ func (t *Throttle) release(key string, at time.Time) {
 // Wait blocks until key's turn: ErrThrottled when the queue is too long, ctx's error when the caller gave up. A
 // caller that gives up frees its turn when no later attempt of key has queued behind it.
 func (t *Throttle) Wait(ctx context.Context, key string) error {
+	if err := ctx.Err(); err != nil {
+		return err // gone before asking: book nothing
+	}
 	at, d, ok := t.turn(key)
 	if !ok {
 		return ErrThrottled

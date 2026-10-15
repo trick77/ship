@@ -248,15 +248,26 @@ func TestTake_whenRefused_thenPenaltyDeepensTheWait(t *testing.T) {
 	}
 }
 
-// A NaN cost would leave a bucket no comparison refuses.
-func TestTake_whenNaN_thenPanics(t *testing.T) {
-	l := limiter(newClock(), 1, 1)
-	defer func() {
-		if recover() == nil {
-			t.Error("no panic for a NaN cost")
-		}
-	}()
+// A NaN cost would leave a bucket no comparison refuses; it charges nothing instead.
+func TestTake_whenNaN_thenChargesNothing(t *testing.T) {
+	l := limiter(newClock(), 1e-9, 1)
 	l.Take("a", math.NaN(), 1)
+	l.Charge("a", math.NaN())
+	if ok, _ := l.Take("a", 1, 0); !ok {
+		t.Fatal("NaN spent the token")
+	}
+	if ok, _ := l.Take("a", 1, 0); ok {
+		t.Error("NaN left a bucket that admits for good")
+	}
+}
+
+// A refund to a pruned key is dropped: recreating it could prune other callers.
+func TestCharge_whenRefundToUnknownKey_thenNoBucket(t *testing.T) {
+	l := limiter(newClock(), 1, 1)
+	l.Charge("gone", -1)
+	if l.Len() != 0 {
+		t.Errorf("Len = %d, a refund created a bucket", l.Len())
+	}
 }
 
 // The documented 404 pattern: reserve, refund a free outcome.

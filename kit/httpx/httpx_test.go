@@ -934,10 +934,18 @@ func TestThrottleWait(t *testing.T) {
 	if err := th.Wait(context.Background(), "k"); err != nil {
 		t.Fatalf("first Wait = %v", err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := th.Wait(ctx, "k"); !errors.Is(err, context.Canceled) {
-		t.Errorf("cancelled Wait = %v", err)
+	gone, cancelGone := context.WithCancel(context.Background())
+	cancelGone()
+	if err := th.Wait(gone, "k"); !errors.Is(err, context.Canceled) {
+		t.Errorf("Wait with a cancelled context = %v", err)
+	}
+	if got := th.RetryAfter("k"); got != 0 {
+		t.Errorf("a Wait cancelled before asking booked a turn: RetryAfter = %s", got)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if err := th.Wait(ctx, "k"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("timed-out Wait = %v", err)
 	}
 	// The cancelled attempt gave its turn back: k's next one is queued at +1h again, not refused at +2h.
 	queued, cancelQueued := context.WithCancel(context.Background())
