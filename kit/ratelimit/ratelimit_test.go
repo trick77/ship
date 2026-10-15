@@ -248,6 +248,17 @@ func TestTake_whenRefused_thenPenaltyDeepensTheWait(t *testing.T) {
 	}
 }
 
+// A NaN cost would leave a bucket no comparison refuses.
+func TestTake_whenNaN_thenPanics(t *testing.T) {
+	l := limiter(newClock(), 1, 1)
+	defer func() {
+		if recover() == nil {
+			t.Error("no panic for a NaN cost")
+		}
+	}()
+	l.Take("a", math.NaN(), 1)
+}
+
 // The documented 404 pattern: reserve, refund a free outcome.
 func TestTake_whenRefunded_thenOnlyCostlyOutcomesCount(t *testing.T) {
 	l := limiter(newClock(), 1e-9, 2)

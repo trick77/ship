@@ -97,9 +97,10 @@ func (l *Limiter) Allow(key string) bool {
 }
 
 // Take is Permitted and Charge under one lock: when key's bucket holds a whole token it spends cost and reports true,
-// otherwise it spends penalty and reports false with the wait, after the penalty, until the next token. Both charges
-// go into debt and refund as Charge does. Permitted then Charge is two locks: parallel requests for one key can all
-// pass Permitted before any of them is charged.
+// otherwise it spends penalty and reports false with the wait, after the penalty, until the next token. The gate is
+// Permitted's, one whole token whatever cost is: a cost above the balance is admitted and runs the bucket into debt,
+// as Charge does, and a negative cost or penalty refunds. Permitted then Charge is two locks: parallel requests for
+// one key can all pass Permitted before any of them is charged.
 func (l *Limiter) Take(key string, cost, penalty float64) (ok bool, retryAfter time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -128,8 +129,12 @@ func (l *Limiter) Charge(key string, cost float64) {
 	l.spend(l.refilled(key), cost)
 }
 
-// spend takes cost off b, down to -Burst and, for a refund, up to Burst. Called with mu held.
+// spend takes cost off b, down to -Burst and, for a refund, up to Burst. A NaN cost panics: it would leave a bucket
+// that no comparison refuses, admitting its key for good. Called with mu held.
 func (l *Limiter) spend(b *bucket, cost float64) {
+	if math.IsNaN(cost) {
+		panic("ratelimit: NaN cost")
+	}
 	b.tokens = min(max(b.tokens-cost, -l.o.Burst), l.o.Burst)
 }
 

@@ -47,7 +47,8 @@ type Throttle struct {
 	now          func() time.Time
 	mu           sync.Mutex
 	next         map[string]time.Time
-	pruneAt      int // map size that triggers the next sweep
+	pruneAt      int       // map size that triggers the next sweep
+	swept        time.Time // when the last sweep ran
 }
 
 // NewThrottle spaces attempts gap apart and refuses a key once it would queue past maxWait.
@@ -60,16 +61,18 @@ func (t *Throttle) turn(key string) (time.Time, time.Duration, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	now := t.now()
-	// Past entries carry no information; drop them before the map grows with every address that ever tried. A sweep
-	// runs once the map has doubled since the last one left it: amortized O(1) a call while every entry is live, and
-	// the map never holds more than twice the keys queued within the last maxWait+gap (or minPrune).
-	if len(t.next) > t.pruneAt {
+	// Past entries carry no information; drop them before the map grows with every address that ever tried. Above
+	// minPrune a sweep runs once the map has doubled since the last one left it, or once maxWait+gap has passed since
+	// it, when everything it kept is stale: one scan per doubling or per interval, never one per call while the
+	// entries are live. The map stays within twice what the last sweep kept (or minPrune), and a burst's keys are
+	// gone within two intervals of going quiet.
+	if n := len(t.next); n > t.pruneAt || n > minPrune && !now.Before(t.swept.Add(t.maxWait+t.gap)) {
 		for k, at := range t.next {
 			if at.Before(now) {
 				delete(t.next, k)
 			}
 		}
-		t.pruneAt = max(minPrune, 2*len(t.next))
+		t.pruneAt, t.swept = max(minPrune, 2*len(t.next)), now
 	}
 	at := t.next[key]
 	if at.Before(now) {

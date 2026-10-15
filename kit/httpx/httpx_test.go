@@ -882,27 +882,50 @@ func TestThrottle_whenLaterBookingQueued_thenReleaseKeepsIt(t *testing.T) {
 	}
 }
 
-// Live entries are not rescanned on every call: the next sweep waits until the map has doubled, and the map stays
-// bounded by twice the live set.
+// Live entries are not rescanned on every call: the next sweep waits until the map has doubled or an interval has
+// passed.
 func TestThrottle_whenEntriesLive_thenSweepAmortized(t *testing.T) {
-	th := NewThrottle(time.Hour, time.Hour)
+	th := NewThrottle(time.Minute, time.Minute)
 	now := time.Unix(1000, 0)
 	th.now = func() time.Time { return now }
-	for i := range 2000 {
+	for i := range 1025 {
 		th.turn(strconv.Itoa(i))
 	}
-	if th.pruneAt != 2*1025 {
-		t.Fatalf("pruneAt = %d after a sweep that found 1025 live entries, want 2050", th.pruneAt)
+	th.turn("first sweep") // 1025 > minPrune: sweeps, keeps all 1025 live
+	if th.pruneAt != 2050 || !th.swept.Equal(now) {
+		t.Fatalf("pruneAt %d swept %v after the first sweep, want 2050 at %v", th.pruneAt, th.swept, now)
 	}
-	now = now.Add(2 * time.Hour) // every entry stale
-	for i := range 2000 {
-		th.turn("new" + strconv.Itoa(i))
+	now = now.Add(90 * time.Second) // 1025 stale, interval of 2m not yet over
+	for i := range 1000 {
+		th.turn("live" + strconv.Itoa(i))
 	}
-	if n := len(th.next); n > 2*th.pruneAt {
-		t.Errorf("len = %d past twice the sweep threshold %d", n, th.pruneAt)
+	if n := len(th.next); n != 2026 {
+		t.Fatalf("len = %d, want 2026: no sweep before the map doubles or the interval ends", n)
+	}
+	th.turn("doubling") // 2026, then 2027 entries: still under 2050
+	for i := range 30 {
+		th.turn("more" + strconv.Itoa(i))
 	}
 	if _, ok := th.next["0"]; ok {
-		t.Error("stale entries survived the sweep")
+		t.Error("map doubled past pruneAt without a sweep")
+	}
+	if n := len(th.next); n != 1031 {
+		t.Errorf("len = %d after the doubling sweep, want the 1031 live keys", n)
+	}
+}
+
+// A burst's keys go once it is over, without waiting for the map to double again.
+func TestThrottle_whenBurstGoesQuiet_thenSweptAfterInterval(t *testing.T) {
+	th := NewThrottle(time.Minute, time.Minute)
+	now := time.Unix(1000, 0)
+	th.now = func() time.Time { return now }
+	for i := range 5000 {
+		th.turn(strconv.Itoa(i))
+	}
+	now = now.Add(2 * time.Minute)
+	th.turn("after")
+	if n := len(th.next); n != 1 {
+		t.Errorf("len = %d one interval after the burst, want only the new key", n)
 	}
 }
 
@@ -920,7 +943,10 @@ func TestThrottleWait(t *testing.T) {
 	queued, cancelQueued := context.WithCancel(context.Background())
 	done := make(chan error)
 	go func() { done <- th.Wait(queued, "k") }()
-	for th.RetryAfter("k") == 0 {
+	for deadline := time.Now().Add(5 * time.Second); th.RetryAfter("k") == 0; {
+		if time.Now().After(deadline) {
+			t.Fatal("the queued Wait never booked its turn")
+		}
 		time.Sleep(time.Millisecond)
 	}
 	if err := th.Wait(context.Background(), "k"); !errors.Is(err, ErrThrottled) {
