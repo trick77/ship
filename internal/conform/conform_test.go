@@ -163,14 +163,11 @@ func (r *repo) remove(p string) {
 
 func (r *repo) edit(p, old, new string) {
 	r.t.Helper()
-	b, err := os.ReadFile(filepath.Join(r.dir, p))
-	if err != nil {
-		r.t.Fatal(err)
-	}
-	if !strings.Contains(string(b), old) {
+	s := r.read(p)
+	if !strings.Contains(s, old) {
 		r.t.Fatalf("%s lacks %q", p, old)
 	}
-	r.write(p, strings.Replace(string(b), old, new, 1))
+	r.write(p, strings.Replace(s, old, new, 1))
 }
 
 func (r *repo) config(s string) *config.Config {
@@ -909,26 +906,26 @@ func TestInit_whenPathlessAllow_thenWritten(t *testing.T) {
 	}
 }
 
-// A kept file ship cannot write anyway stays by-hand work: init and -diff still count it.
-func TestInit_whenKeptAndManual_thenStillCounts(t *testing.T) {
+// A kept file ship cannot write anyway: never counted, its kept line names the by-hand part.
+func TestInit_whenKeptAndManual_thenNotCounted(t *testing.T) {
 	r := app(t)
 	r.write("Makefile", "check:\n\tgo test ./...\n")
 	c := r.config(appShip + allowScaffold("Makefile"))
 	r.out.Reset()
 	err := Init(r.dir, c, r.opts, false)
-	if err == nil || !strings.Contains(err.Error(), "by hand:\n  Makefile: ") ||
-		!strings.HasPrefix(r.out.String(), "ship: kept Makefile (allowed: own)\n") {
-		t.Errorf("init: %v\n%s", err, r.out.String())
+	out := r.out.String()
+	if err != nil || !strings.HasPrefix(out, "ship: kept Makefile (allowed: own); ") || strings.Count(out, "\n") != 1 {
+		t.Errorf("init: %v\n%s", err, out)
 	}
+	line := out
 	r.out.Reset()
 	err = Init(r.dir, c, r.opts, true)
-	if err == nil || !strings.HasPrefix(r.out.String(), "ship: kept (allowed, not written):\nship: kept Makefile (allowed: own)\n"+
-		"Makefile: ") {
+	if err != nil || r.out.String() != "ship: kept (allowed, not written):\n"+line {
 		t.Errorf("-diff: %v\n%s", err, r.out.String())
 	}
 }
 
-// -diff: what init writes first and counted, kept files after their header, not counted.
+// -diff: what init writes first and counted, kept files by name after their header, not counted.
 func TestInit_whenDiffAndKept_thenListedApart(t *testing.T) {
 	r := app(t)
 	r.write("ui/"+scaffold.TSConfigNode, ownTSNode)
@@ -937,8 +934,8 @@ func TestInit_whenDiffAndKept_thenListedApart(t *testing.T) {
 	if err := Init(r.dir, c, r.opts, true); err != nil {
 		t.Fatalf("kept only: %v\n%s", err, r.out.String())
 	}
-	if out := r.out.String(); !strings.HasPrefix(out, "ship: kept (allowed, not written):\n"+
-		"ship: kept ui/tsconfig.node.json (allowed: own)\n") || !strings.Contains(out, `"own": true`) {
+	if out := r.out.String(); out != "ship: kept (allowed, not written):\n"+
+		"ship: kept ui/tsconfig.node.json (allowed: own)\n" {
 		t.Errorf("kept only:\n%s", out)
 	}
 	r.edit(scaffold.Release, "default: patch", "default: minor")

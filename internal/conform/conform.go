@@ -176,42 +176,43 @@ func keptBy(c *config.Config, f scaffold.File) (string, bool) {
 }
 
 // Init writes the owned files that differ from ship's templates, but keeps an existing one a scaffold allow names
-// by path. diff: print what would change, write nothing, error when anything differs; kept files follow under
-// their own header and do not count (a Manual one still does).
+// by path. diff: print what would change, write nothing, error when anything differs; kept files are listed by
+// name under their own header. A kept file never counts, a Manual one neither: its line names the by-hand part.
 func Init(root string, c *config.Config, o Options, diff bool) error {
 	e := newEnv(root, c, o)
 	if e.renderErr != nil {
 		return e.renderErr
 	}
 	var files, kept []scaffold.File
-	var keptLines []string
 	for _, f := range e.files {
-		if why, ok := keptBy(c, f); ok && f.Differs() {
+		if _, ok := keptBy(c, f); ok && f.Differs() {
 			kept = append(kept, f)
-			keptLines = append(keptLines, fmt.Sprintf("ship: kept %s (allowed: %s)", f.Path, why))
 			continue
 		}
 		files = append(files, f)
+	}
+	printKept := func() {
+		for _, f := range kept {
+			why, _ := keptBy(c, f)
+			l := fmt.Sprintf("ship: kept %s (allowed: %s)", f.Path, why)
+			if f.Manual != "" {
+				l += "; " + f.Manual
+			}
+			_, _ = fmt.Fprintln(e.o.Out, l)
+		}
 	}
 	if diff {
 		differs := scaffold.PrintDiff(e.o.Out, files)
 		if len(kept) > 0 {
 			_, _ = fmt.Fprintln(e.o.Out, "ship: kept (allowed, not written):")
 		}
-		for i, f := range kept {
-			_, _ = fmt.Fprintln(e.o.Out, keptLines[i])
-			if scaffold.PrintDiff(e.o.Out, []scaffold.File{f}) && f.Manual != "" {
-				differs = true
-			}
-		}
+		printKept()
 		if differs {
 			return errors.New("init -diff: owned files differ from ship's templates (ship init writes them)")
 		}
 		return nil
 	}
-	for _, l := range keptLines {
-		_, _ = fmt.Fprintln(e.o.Out, l)
-	}
+	printKept()
 	wrote, err := scaffold.Write(root, files)
 	for _, p := range wrote {
 		_, _ = fmt.Fprintln(e.o.Out, "ship: wrote", p)
@@ -220,7 +221,7 @@ func Init(root string, c *config.Config, o Options, diff bool) error {
 		return err
 	}
 	var manual []string
-	for _, f := range e.files {
+	for _, f := range files {
 		if f.Manual != "" {
 			manual = append(manual, fmt.Sprintf("  %s: %s", f.Path, f.Manual))
 		}
