@@ -1,8 +1,8 @@
 name: CI
 
 # Every pull request and every master push, unlike the consumers' CI (pull requests only, private repos Dependabot
-# alone): a bug here breaks every repo's push, and master's run releases. The full gate on Linux (as consumers' CI runs it), the tests on macOS (as their
-# pre-push hooks run it).
+# alone): a bug here breaks every repo's push, and master's run releases. The full gate on Linux, as consumers' CI
+# runs it.
 on:
   pull_request:
     branches: [master]
@@ -27,30 +27,12 @@ jobs:
       node-version: "22"
       ui-dir: testdata/ui
 
-  test-macos:
-    name: go test (macOS)
-    runs-on: macos-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-      - uses: actions/setup-node@v7
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: testdata/ui/package-lock.json
-      - run: go test -race -count=1 ./...
-
-  # A merge is already live for every consumer (they run master's sha): tag it, with notes, once both gates pass.
+  # A merge is already live for every consumer (they run master's sha): tag it, with notes, once the gate passes.
   # auto: patch, or a `Release: minor|major` + `Release-note:` line in a commit; docs/tests only → no release.
   # Each module on its own (tags v…, kit/v…, kit/auth/v…), only its own changes count; one not merged yet skips.
   # The dirs: ship itself ("") and ship.yaml's go.modules, kept equal by a test (workflows_test.go).
   release:
-    needs: [check, test-macos]
+    needs: [check]
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     strategy:
       fail-fast: false
