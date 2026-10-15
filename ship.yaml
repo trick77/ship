@@ -8,7 +8,7 @@ go:
 allow:
   - rule: scaffold
     path: .github/workflows/ci.yaml
-    why: ship's CI runs on every push, gates with go run ., tests on macOS and releases master
+    why: ship's CI runs on every push, gates with go run . and releases master
   - rule: scaffold
     path: .github/workflows/release.yaml
     why: release.yaml here is the reusable workflow consumers call, not a caller
