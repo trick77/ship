@@ -814,6 +814,19 @@ func TestClientIP(t *testing.T) {
 	}
 }
 
+// A proxy that adds its own X-Forwarded-For line (HAProxy) must not leave the caller's line in the trusted slot.
+func TestClientIPJoinsEveryLine(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Add("X-Forwarded-For", "6.6.6.6")
+	req.Header.Add("X-Forwarded-For", "203.0.113.9")
+	if got := ClientIP(req, 1); got != "203.0.113.9" {
+		t.Errorf("1 hop = %q, want the proxy's line", got)
+	}
+	if got := ClientIP(req, 2); got != "6.6.6.6" {
+		t.Errorf("2 hops = %q, want the caller's line", got)
+	}
+}
+
 func TestThrottle(t *testing.T) {
 	th := NewThrottle(500*time.Millisecond, time.Second)
 	now := time.Unix(1000, 0)
