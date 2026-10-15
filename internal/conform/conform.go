@@ -161,20 +161,34 @@ func Run(root string, c *config.Config, o Options) error {
 	return e.report()
 }
 
-// Init writes the owned files that differ from ship's templates. diff: print what would change, write nothing,
-// error when anything differs.
+// Init writes the owned files that differ from ship's templates, but keeps those whose scaffold diff ship.yaml allows
+// by path. diff: print what would change, write nothing, error when anything not kept differs.
 func Init(root string, c *config.Config, o Options, diff bool) error {
 	e := newEnv(root, c, o)
 	if e.renderErr != nil {
 		return e.renderErr
 	}
+	var files []scaffold.File
+	for _, f := range e.files {
+		a, ok := e.kept(f.Path)
+		if !ok {
+			files = append(files, f)
+			continue
+		}
+		if f.Differs() {
+			_, _ = fmt.Fprintf(e.o.Out, "ship: kept %s (allowed: %s)\n", f.Path, a.Why)
+			if diff {
+				scaffold.PrintDiff(e.o.Out, []scaffold.File{f})
+			}
+		}
+	}
 	if diff {
-		if scaffold.PrintDiff(e.o.Out, e.files) {
+		if scaffold.PrintDiff(e.o.Out, files) {
 			return errors.New("init -diff: owned files differ from ship's templates (ship init writes them)")
 		}
 		return nil
 	}
-	wrote, err := scaffold.Write(root, e.files)
+	wrote, err := scaffold.Write(root, files)
 	for _, p := range wrote {
 		_, _ = fmt.Fprintln(e.o.Out, "ship: wrote", p)
 	}
@@ -182,7 +196,7 @@ func Init(root string, c *config.Config, o Options, diff bool) error {
 		return err
 	}
 	var manual []string
-	for _, f := range e.files {
+	for _, f := range files {
 		if f.Manual != "" {
 			manual = append(manual, fmt.Sprintf("  %s: %s", f.Path, f.Manual))
 		}
@@ -191,6 +205,18 @@ func Init(root string, c *config.Config, o Options, diff bool) error {
 		return fmt.Errorf("init: by hand:\n%s", strings.Join(manual, "\n"))
 	}
 	return nil
+}
+
+// kept returns the scaffold allow naming owned file p by path, as conform matches it; a path-less entry excuses the
+// diff but does not stop init, the explicit write.
+func (e *env) kept(p string) (config.Allow, bool) {
+	var byPath config.Config
+	for _, a := range e.c.Allow {
+		if a.Path != "" {
+			byPath.Allow = append(byPath.Allow, a)
+		}
+	}
+	return byPath.Allowed(Scaffold, nil, p)
 }
 
 // Fix runs init, then conform: what is left is the manual part.

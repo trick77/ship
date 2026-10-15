@@ -27,6 +27,16 @@ func TestParse_whenAllowAndVisibility_thenMatched(t *testing.T) {
 	if _, ok := c.Allowed("scaffold", nil, "ui/eslint.config.js"); !ok {
 		t.Error("path entry")
 	}
+	if _, ok := c.Allowed("scaffold", nil, "./ui//eslint.config.js"); !ok {
+		t.Error("unclean path")
+	}
+	if _, ok := c.Allowed("scaffold", nil, ""); ok {
+		t.Error("path entry matched no path")
+	}
+	c.Allow[1].Path = "./ui/eslint.config.js"
+	if _, ok := c.Allowed("scaffold", nil, "ui/eslint.config.js"); !ok {
+		t.Error("unclean entry path")
+	}
 	if _, ok := c.Allowed("golangci", nil, "x/.golangci.yaml"); !ok {
 		t.Error("rule-wide entry")
 	}

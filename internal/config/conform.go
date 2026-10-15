@@ -13,10 +13,11 @@ type Allow struct {
 	Why  string `yaml:"why"`
 }
 
-// Allowed returns the entry excusing rule for image (nil: no image) and path, if any.
+// Allowed returns the entry excusing rule for image (nil: no image) and path, if any. Paths compare in clean slash
+// form: ./ui/x matches ui/x.
 func (c *Config) Allowed(rule string, image *string, path string) (Allow, bool) {
 	for _, a := range c.Allow {
-		if a.Rule != rule || a.Path != "" && a.Path != path {
+		if a.Rule != rule || a.Path != "" && (path == "" || cleanPath(a.Path) != cleanPath(path)) {
 			continue
 		}
 		if a.Image != nil && (image == nil || *a.Image != *image) {
@@ -25,6 +26,11 @@ func (c *Config) Allowed(rule string, image *string, path string) (Allow, bool) 
 		return a, true
 	}
 	return Allow{}, false
+}
+
+func cleanPath(p string) string {
+	c, _ := CleanDir(p)
+	return c
 }
 
 func (c *Config) validateConform() error {

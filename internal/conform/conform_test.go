@@ -860,6 +860,73 @@ func TestFix_whenManualLeft_thenListed(t *testing.T) {
 	}
 }
 
+// ismimodown: ship.yaml allows its own ui/tsconfig.node.json; init and conform -fix keep it, -diff shows it uncounted.
+func TestInit_whenScaffoldAllowedByPath_thenKept(t *testing.T) {
+	const own = "{ \"own\": true }\n"
+	tsc := "ui/" + scaffold.TSConfigNode
+	for _, p := range []string{tsc, "./" + tsc} {
+		r := app(t)
+		r.write(tsc, own)
+		r.edit("Makefile", "# ship:end", "own:\n\ttrue\n# ship:end")
+		ship := appShip + allowScaffold(p) + "  - { rule: scaffold, path: Makefile, why: own target }\n"
+		r.out.Reset()
+		if err := Init(r.dir, r.config(ship), r.opts, true); err != nil {
+			t.Fatalf("%s: -diff counted a kept file: %v\n%s", p, err, r.out.String())
+		}
+		out := r.out.String()
+		for _, s := range []string{"ship: kept " + tsc + " (allowed: own)\n", "-{ \"own\": true }\n",
+			"ship: kept Makefile (allowed: own target)\n", "-own:\n"} {
+			if !strings.Contains(out, s) {
+				t.Errorf("%s: -diff lacks %q:\n%s", p, s, out)
+			}
+		}
+		r.remove(scaffold.Release)
+		r.out.Reset()
+		if err := Fix(r.dir, r.config(ship), r.opts); err != nil {
+			t.Fatalf("%s: fix: %v\n%s", p, err, r.out.String())
+		}
+		out = r.out.String()
+		if !strings.Contains(out, "ship: kept "+tsc+" (allowed: own)\n") ||
+			!strings.Contains(out, "ship: wrote "+scaffold.Release+"\n") || strings.Contains(out, "wrote "+tsc) ||
+			strings.Contains(out, "wrote Makefile") || !strings.Contains(out, "allowed scaffold: own\n") {
+			t.Errorf("%s: fix:\n%s", p, out)
+		}
+		if b, _ := os.ReadFile(filepath.Join(r.dir, tsc)); string(b) != own {
+			t.Errorf("%s: overwritten: %s", p, b)
+		}
+		if b, _ := os.ReadFile(filepath.Join(r.dir, "Makefile")); !strings.Contains(string(b), "own:\n") {
+			t.Errorf("%s: Makefile block overwritten:\n%s", p, b)
+		}
+	}
+}
+
+// A path-less scaffold allow excuses conform but does not stop init; an image-scoped one never names an owned file,
+// in conform neither.
+func TestInit_whenScaffoldAllowWithoutPathOrWithImage_thenWritten(t *testing.T) {
+	tsc := "ui/" + scaffold.TSConfigNode
+	for _, allow := range []string{"  - { rule: scaffold, why: own }\n",
+		"  - { rule: scaffold, image: \"\", path: " + tsc + ", why: own }\n"} {
+		r := app(t)
+		r.write(tsc, "{}\n")
+		ship := appShip + "allow:\n" + allow
+		r.out.Reset()
+		if err := Init(r.dir, r.config(ship), r.opts, true); err == nil || strings.Contains(r.out.String(), "kept") {
+			t.Errorf("%s-diff: %v\n%s", allow, err, r.out.String())
+		}
+		r.out.Reset()
+		if err := Init(r.dir, r.config(ship), r.opts, false); err != nil ||
+			r.out.String() != "ship: wrote "+tsc+"\n" {
+			t.Errorf("%sinit: %v\n%s", allow, err, r.out.String())
+		}
+	}
+	r := app(t)
+	r.write(tsc, "{}\n")
+	if out, err := r.run(appShip + "allow:\n  - { rule: scaffold, image: \"\", path: " + tsc + ", why: own }\n"); err == nil ||
+		!strings.Contains(out, "FAIL scaffold: differs") {
+		t.Errorf("image-scoped allow excused conform: %v\n%s", err, out)
+	}
+}
+
 func TestParseOrigin(t *testing.T) {
 	for u, want := range map[string]string{
 		"https://github.com/trick77/ship.git\n": "trick77/ship",

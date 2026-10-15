@@ -181,6 +181,8 @@ what is left is by hand.
 The CI caller's `node-version` is the Containerfile's `node:N` builder major (26 without one): Dependabot moves the
 builder, `ship init` moves CI after it. Dependabot updates kit in its own group (v0.x: a minor may break).
 `ship init -diff` prints the difference, writes nothing, exits 1 when anything differs.
+An owned file a `scaffold` allow names by `path` is kept: init and `-fix` never write it, `-diff` shows it as kept
+and does not count it (a path-less allow does not stop init).
 
 | rule | what | allowable |
 |---|---|---|
