@@ -90,7 +90,9 @@ Gates beyond the build and tests, all hard failures:
 
 - golangci-lint: the family config embedded in ship (`internal/check/golangci.yaml`), unless the repo keeps its own
   `.golangci.{yml,yaml,toml,json}` between `go.dir` and the root.
-- govulncheck (pinned, `go run`): a known vulnerability the module's code reaches.
+- govulncheck (pinned, `go run`): a known vulnerability the module's code reaches. The Check and Release workflows
+  run the newest patch of go.mod's major.minor (the higher of its `go` and `toolchain` lines), not the exact
+  version: a pinned `go 1.x.0` would fail CI on stdlib fixes a newer local Go already has.
 - npm audit (with `ui:`, in `ui.dir`, after ui build): `npm audit --audit-level=high --omit=dev`, a high or
   critical advisory in what the UI ships; dev dependencies only build it.
 - `go mod tidy -diff`: go.mod/go.sum as tidy leaves them.

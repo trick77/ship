@@ -2,6 +2,8 @@ package main
 
 import (
 	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -70,6 +72,92 @@ func TestCIRelease_whenMaster_thenEveryModuleReleased(t *testing.T) {
 	want := append([]string{""}, c.Go.Modules...)
 	if got := w.Jobs.Release.Strategy.Matrix.Dir; !slices.Equal(got, want) {
 		t.Errorf("ci.yaml release matrix dir %q, want %q (\"\" + ship.yaml go.modules)", got, want)
+	}
+}
+
+// CI's Go is go.mod's major.minor at its newest patch, never setup-go's exact go.mod version: a pinned 1.x.0 misses the
+// stdlib fixes govulncheck demands. check.yaml and release.yaml each carry the step; this keeps them one.
+// Each workflow's step is run as the runner does (bash -e) on go.mod shapes: the higher of go and toolchain lines.
+func TestSetupGo_whenRun_thenNewestPatchOfGoMod(t *testing.T) {
+	type step struct {
+		ID   string            `yaml:"id"`
+		Uses string            `yaml:"uses"`
+		Run  string            `yaml:"run"`
+		Env  map[string]string `yaml:"env"`
+		With map[string]string `yaml:"with"`
+	}
+	var scripts []string
+	for _, f := range []string{".github/workflows/check.yaml", ".github/workflows/release.yaml"} {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var w struct {
+			Jobs map[string]struct {
+				Steps []step `yaml:"steps"`
+			} `yaml:"jobs"`
+		}
+		if err := yaml.Unmarshal(b, &w); err != nil {
+			t.Fatal(err)
+		}
+		var found bool
+		for _, j := range w.Jobs {
+			for i, s := range j.Steps {
+				if s.ID != "go" {
+					continue
+				}
+				found = true
+				if s.Env["MOD"] != "${{ inputs.go-dir }}/go.mod" {
+					t.Errorf("%s: step go reads MOD %q, want go-dir's go.mod", f, s.Env["MOD"])
+				}
+				scripts = append(scripts, s.Run)
+				next := step{}
+				if i+1 < len(j.Steps) {
+					next = j.Steps[i+1]
+				}
+				if next.Uses != "actions/setup-go@v7" || next.With["go-version"] != "${{ steps.go.outputs.version }}" ||
+					next.With["check-latest"] != "true" || next.With["go-version-file"] != "" {
+					t.Errorf("%s: step go not followed by setup-go with its version and check-latest: %+v", f, next)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("%s: no step id go", f)
+		}
+	}
+	if scripts[0] != scripts[1] {
+		t.Errorf("step go differs:\ncheck.yaml:\n%s\nrelease.yaml:\n%s", scripts[0], scripts[1])
+	}
+	for _, tc := range []struct{ mod, want string }{
+		{"module x\n\ngo 1.27.0\n", "1.27"},
+		{"module x\n\ngo 1.27.0 // why\r\n\ntoolchain go1.28.1\n", "1.28"},
+		{"module x\n\ngo 1.28.0\n\ntoolchain go1.27.5\n", "1.28"},
+		{"module x\n\ngo 1.9.0\n\ntoolchain go1.10.1\n", "1.10"},
+		{"module x\n\ngo 1.27.3\n\ntoolchain default\n", "1.27"},
+		{"module x\n\ngo 1.27\n", "1.27"},
+		{"module x\n", ""},
+		{"", ""}, // no go.mod at all
+	} {
+		dir := t.TempDir()
+		mod, out := filepath.Join(dir, "go.mod"), filepath.Join(dir, "out")
+		if tc.mod != "" {
+			if err := os.WriteFile(mod, []byte(tc.mod), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		cmd := exec.Command("bash", "-e", "-c", scripts[0])
+		cmd.Env = append(os.Environ(), "MOD="+mod, "GITHUB_OUTPUT="+out)
+		msg, err := cmd.CombinedOutput()
+		got, _ := os.ReadFile(out)
+		if tc.want == "" {
+			if err == nil || !strings.HasPrefix(string(msg), "::error::") {
+				t.Errorf("%q: want an ::error:: and a failure, got %v %s", tc.mod, err, msg)
+			}
+			continue
+		}
+		if err != nil || string(got) != "version="+tc.want+"\n" {
+			t.Errorf("%q: got %q (%v %s), want version=%s", tc.mod, got, err, msg, tc.want)
+		}
 	}
 }
 
