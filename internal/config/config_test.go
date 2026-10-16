@@ -277,3 +277,16 @@ func TestParse_whenPostgresUnquoted_thenString(t *testing.T) {
 		}
 	}
 }
+
+func TestParse_whenEmbedSpelledLoosely_thenCleaned(t *testing.T) {
+	c, err := Parse([]byte("ui:\n  embed: ./backend/web/dist/\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.UI.Embed != "backend/web/dist" || c.UI.EmbedFromDir() != "../backend/web/dist" {
+		t.Errorf("embed %q, from ui.dir %q", c.UI.Embed, c.UI.EmbedFromDir())
+	}
+	if _, err := Parse([]byte("ui:\n  embed: ../x\n")); err == nil {
+		t.Error("an embed outside the repo passed")
+	}
+}

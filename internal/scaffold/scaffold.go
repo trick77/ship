@@ -186,8 +186,16 @@ func Files(root string, c *config.Config, f Facts) ([]File, error) {
 				return nil, err
 			}
 		}
-		// What the gate and the UI build write into the tree, the block last: the repo's own lines stay above.
-		if err := add(GitIgnore, "gitignore", "", appendPlain); err != nil {
+		// What the gate and the UI build write into the tree, the block last: the repo's own lines stay above. One
+		// of them ignoring the embed dir itself would make the block's !<embed>/.gitkeep dead (git re-includes
+		// nothing below an excluded directory): by hand, as a Makefile target outside the block is.
+		if err := add(GitIgnore, "gitignore", "", func(have []byte, block string) ([]byte, string) {
+			if l := ignoresDir(have, d.Embed); l != "" {
+				return nil, fmt.Sprintf(".gitignore ignores the embed dir itself (%q): git re-includes no .gitkeep "+
+					"below it; drop the line, the %s/* of the %s/%s block takes its place", l, d.Embed, Begin, End)
+			}
+			return appendPlain(have, block)
+		}); err != nil {
 			return nil, err
 		}
 	}
@@ -310,7 +318,8 @@ func appendBlock(have []byte, block string) ([]byte, string) {
 }
 
 // appendPlain adds the block last, the repo's lines above it: in a .gitignore later lines win, so the block's
-// !<embed>/.gitkeep stands whatever the repo ignores above.
+// patterns stand over an earlier line naming the same paths. A line excluding a whole directory is the one thing
+// no later line undoes (Files refuses it for the embed dir).
 func appendPlain(have []byte, block string) ([]byte, string) {
 	if b, ok := replaceBlock(have, block); ok {
 		return b, ""
@@ -322,6 +331,25 @@ func appendPlain(have []byte, block string) ([]byte, string) {
 		have = append(have, '\n')
 	}
 	return slices.Concat(have, []byte("\n"+block)), ""
+}
+
+// ignoresDir is the line of have, outside the owned block, that ignores dir itself (dir, dir/, /dir, /dir/); "" when
+// none or dir is empty. dir/* and the like are patterns below the dir: git re-includes under those.
+func ignoresDir(have []byte, dir string) string {
+	if dir == "" {
+		return ""
+	}
+	s := string(have)
+	if i, j, ok := blockRange(have); ok {
+		s = s[:i] + s[j:]
+	}
+	for _, l := range strings.Split(s, "\n") {
+		t := strings.TrimSpace(l)
+		if !strings.HasPrefix(t, "#") && strings.TrimSuffix(strings.TrimPrefix(t, "/"), "/") == dir {
+			return t
+		}
+	}
+	return ""
 }
 
 // Write writes every file that differs and ship can render; it returns the paths written.

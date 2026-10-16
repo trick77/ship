@@ -117,14 +117,17 @@ var viteBase = []viteWant{
 }
 
 // viteWants is viteBase and, with ui.embed, the build's output: outDir names the embed dir from ui.dir (a literal
-// there, or a const the build block takes) and emptyOutDir is off, since vite would delete the tracked .gitkeep;
-// check empties the dir itself.
+// there, or a const the build block takes; vite's own dist needs no line) and emptyOutDir is off explicitly. vite's
+// default is off for an outDir outside the UI dir and on inside it, where it would delete the tracked .gitkeep;
+// check empties the dir itself either way.
 func (e *env) viteWants() []viteWant {
 	ws := slices.Clone(viteBase)
 	if rel := e.c.UI.EmbedFromDir(); rel != "" {
-		ws = append(ws,
-			viteWant{`"` + rel + `"`, "build.outDir \"" + rel + "\" (ship.yaml ui.embed, from ui.dir)"},
-			viteWant{"emptyOutDir: false", "build.emptyOutDir: false (vite would delete .gitkeep; check empties ui.embed)"})
+		if rel != "dist" {
+			ws = append(ws, viteWant{`"` + rel + `"`, "build.outDir \"" + rel + "\" (ship.yaml ui.embed, from ui.dir)"})
+		}
+		ws = append(ws, viteWant{"emptyOutDir: false", "build.emptyOutDir: false (explicit: vite's default empties an " +
+			"outDir inside the UI dir, .gitkeep with it; check empties ui.embed)"})
 	}
 	return ws
 }
