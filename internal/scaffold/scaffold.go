@@ -1,6 +1,7 @@
-// Package scaffold renders the files ship owns in a consumer repo (workflow callers, dependabot, .dockerignore,
-// the UI's ESLint config, tsconfig.node.json and .npmrc, the Makefile's ship block) from ship.yaml and the repo's facts. Owned means byte-equal to the
-// rendered template: a copied file that drifts is caught on the next push, never in an audit.
+// Package scaffold renders the files ship owns in a consumer repo (workflow callers, dependabot, the UI's ESLint
+// config, tsconfig.node.json and .npmrc, the ship blocks of .dockerignore, .gitignore and the Makefile) from ship.yaml
+// and the repo's facts. Owned means byte-equal to the rendered template: a copied file that drifts is caught on the
+// next push, never in an audit.
 package scaffold
 
 import (
@@ -27,7 +28,7 @@ import (
 // gated by the hook).
 const DependabotOnly = "github.event_name != 'pull_request' || github.event.pull_request.user.login == 'dependabot[bot]'"
 
-// Begin and End mark the block ship owns inside a file the repo otherwise keeps (Makefile, .dockerignore).
+// Begin and End mark the block ship owns inside a file the repo otherwise keeps (Makefile, .dockerignore, .gitignore).
 const (
 	Begin = "# ship:begin"
 	End   = "# ship:end"
@@ -40,6 +41,7 @@ const (
 	Cleanup    = ".github/workflows/cleanup-images.yaml"
 	Dependabot = ".github/dependabot.yaml"
 	Ignore     = ".dockerignore"
+	GitIgnore  = ".gitignore"
 	Makefile   = "Makefile"
 	// In the UI's directory.
 	ESLint       = "eslint.config.js"
@@ -86,7 +88,9 @@ type data struct {
 	Branches, GoDir, GoDirAbs, UIDir, UIDirAbs string
 	DependabotOnly, NodeVersion, Packages      string
 	TypescriptCap                              string
-	DockerDirs, GoModules                      []string
+	// Embed is ui.embed; Coverage the directory ui.test writes lcov into. Both repo-relative, "" without a UI.
+	Embed, Coverage       string
+	DockerDirs, GoModules []string
 	// Ignore is ship.yaml's dependabot.ignore by ecosystem.
 	Ignore map[string][]config.Ignore
 }
@@ -118,6 +122,7 @@ func Files(root string, c *config.Config, f Facts) ([]File, error) {
 	}
 	if c.UI != nil {
 		d.UIDir, d.UIDirAbs, d.UIDirSet = c.UI.Dir, abs(c.UI.Dir), c.UI.Dir != "ui"
+		d.Embed, d.Coverage = c.UI.Embed, c.UI.LcovDir()
 	}
 	var files []File
 	add := func(p, tmpl, manual string, block func(have []byte, block string) ([]byte, string)) error {
@@ -180,6 +185,10 @@ func Files(root string, c *config.Config, f Facts) ([]File, error) {
 			if err := add(path.Join(d.UIDir, t.name), t.tmpl, "", nil); err != nil {
 				return nil, err
 			}
+		}
+		// What the gate and the UI build write into the tree, the block last: the repo's own lines stay above.
+		if err := add(GitIgnore, "gitignore", "", appendPlain); err != nil {
+			return nil, err
 		}
 	}
 	// A library without a Makefile needs none; an app (images or a UI) gets the gate's targets.
@@ -296,6 +305,15 @@ func appendBlock(have []byte, block string) ([]byte, string) {
 					"then owns the block)", strings.TrimSuffix(t, ":"), Begin, End)
 			}
 		}
+	}
+	return appendPlain(have, block)
+}
+
+// appendPlain adds the block last, the repo's lines above it: in a .gitignore later lines win, so the block's
+// !<embed>/.gitkeep stands whatever the repo ignores above.
+func appendPlain(have []byte, block string) ([]byte, string) {
+	if b, ok := replaceBlock(have, block); ok {
+		return b, ""
 	}
 	if len(have) == 0 {
 		return []byte(block), ""

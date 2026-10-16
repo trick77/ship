@@ -17,9 +17,14 @@ import (
 	"github.com/trick77/ship/internal/pins"
 )
 
-// uiTest asks vitest for lcov itself: its default reporters write none, and a repo relying on the default must not
-// fail on a missing report.
-const uiTest = "npm run test -- --coverage --coverage.reporter=lcov --coverage.reporter=text-summary"
+// The UI defaults conform holds every repo to: the build is the typecheck, lint is ESLint then Prettier. uiTest asks
+// vitest for lcov itself: its default reporters write none, and a repo relying on the default must not fail on a
+// missing report.
+const (
+	UIBuild = "npm ci && npm run build"
+	UILint  = "npm run lint"
+	uiTest  = "npm run test -- --coverage --coverage.reporter=lcov --coverage.reporter=text-summary"
+)
 
 // File is the config file name, at the repo root.
 const File = "ship.yaml"
@@ -82,10 +87,11 @@ type UI struct {
 	Dir   string  `yaml:"dir"`
 	Floor float64 `yaml:"floor"`
 	// Build runs first in check, so the Go packages embed a fresh dist, never a stale one. The family's
-	// `npm run build` is `tsc -b && vite build`: the typecheck.
+	// `npm run build` is `tsc -b && vite build`: the typecheck. Default UIBuild, the only value conform passes:
+	// check empties Embed itself; a make target may still do so for local builds.
 	Build string `yaml:"build"`
-	// Lint is the UI's lint/format check (eslint, prettier --check), run after the Go lint; default npm run lint,
-	// the only value conform passes; "" runs none, needs a ui allow.
+	// Lint is the UI's lint/format check (eslint, prettier --check), run after the Go lint; default UILint, the
+	// only value conform passes; "" runs none, needs a ui allow.
 	Lint string `yaml:"lint"`
 	// Test runs the UI tests with coverage and must write Lcov.
 	Test string `yaml:"test"`
@@ -95,6 +101,21 @@ type UI struct {
 	// the build, so no file of an older build ships.
 	Embed string `yaml:"embed"`
 }
+
+// EmbedFromDir is Embed as vite's build.outDir spells it, relative to Dir ("../backend/web/dist"); "" without one.
+func (u UI) EmbedFromDir() string {
+	if u.Embed == "" {
+		return ""
+	}
+	rel, err := filepath.Rel(filepath.FromSlash(u.Dir), filepath.FromSlash(path.Clean(filepath.ToSlash(u.Embed))))
+	if err != nil {
+		return ""
+	}
+	return filepath.ToSlash(rel)
+}
+
+// LcovDir is the directory Test writes the coverage report into, repo-relative (.gitignore's line).
+func (u UI) LcovDir() string { return path.Dir(filepath.ToSlash(u.Lcov)) }
 
 // Step is one extra check command, run with sh -c.
 type Step struct {
@@ -151,7 +172,7 @@ func Parse(b []byte) (*Config, error) {
 	// `ui:` (null) decodes to nil and is put back: naming the key means a UI, never a silently skipped gate.
 	// Two passes, not a UnmarshalYAML method: node.Decode would drop KnownFields inside the ui: block.
 	uiDefaults := func() *UI {
-		return &UI{Dir: "ui", Floor: 75, Build: "npm ci && npm run build", Lint: "npm run lint", Test: uiTest}
+		return &UI{Dir: "ui", Floor: 75, Build: UIBuild, Lint: UILint, Test: uiTest}
 	}
 	var keys map[string]any
 	_ = yaml.Unmarshal(b, &keys) // malformed input fails the strict decode below

@@ -18,6 +18,9 @@ import (
 
 const appShip = "go:\n  dir: backend\nui:\n  lint: npm run lint\nimages:\n  - {}\n  - { suffix: -ui, target: core-ui }\n"
 
+// appShipEmbed: the UI builds into the Go tree.
+var appShipEmbed = strings.Replace(appShip, "  lint: npm run lint\n", "  lint: npm run lint\n  embed: backend/web/dist\n", 1)
+
 const appContainerfile = `# Two images from one file.
 FROM node:26-alpine AS ui
 WORKDIR /ui
@@ -374,6 +377,15 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 			"FAIL ui: devDependency typescript-eslint missing", "FAIL ui: devDependency eslint-config-prettier missing",
 			"FAIL ui: devDependency @eslint/js missing", "FAIL ui: devDependency eslint-plugin-react-hooks missing",
 			"FAIL scaffold: missing (ship init) (ui/eslint.config.js)"}},
+		{"ui build", strings.Replace(appShip, "  lint: npm run lint\n", "  lint: npm run lint\n  build: cd .. && make fe-build\n", 1),
+			func(*repo) {}, []string{`FAIL ui: ui.build "cd .. && make fe-build", want npm ci && npm run build (check empties ui.embed itself; a make target stays for local builds) (ship.yaml)`}},
+		// With an embed, vite must build into it and leave .gitkeep alone; init carries it into the ignore blocks.
+		{"ui vite embed", appShipEmbed, func(r *repo) {
+			if err := Init(r.dir, r.config(appShipEmbed), r.opts, false); err != nil {
+				r.t.Fatal(err)
+			}
+		}, []string{`FAIL ui: no "../backend/web/dist": want build.outDir "../backend/web/dist" (ship.yaml ui.embed, from ui.dir) (ui/vite.config.ts)`,
+			`FAIL ui: no emptyOutDir: false: want build.emptyOutDir: false (vite would delete .gitkeep; check empties ui.embed) (ui/vite.config.ts)`}},
 		{"ui eslint config missing allowed", appShip + allowScaffold("ui/"+scaffold.ESLint), func(r *repo) { r.remove("ui/" + scaffold.ESLint) },
 			[]string{"FAIL ui: missing (ship init) (ui/eslint.config.js)"}},
 		// Dependabot moves a version per repo: any exact one passes, a range or TypeScript 6.1+ does not.

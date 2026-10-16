@@ -104,25 +104,44 @@ const typescriptCap = pins.TypescriptCap
 // anything a repo adds there.
 const SetupImport = `import "@testing-library/jest-dom/vitest";`
 
-// viteWants are literals vite.config.ts must contain. Plain string checks, not a parser: it is TypeScript, nothing
+// A viteWant is a literal vite.config.ts must contain. Plain string checks, not a parser: it is TypeScript, nothing
 // in the standard library parses it and ship's dependencies stay stdlib + yaml. The format script covers '*.ts', so
 // Prettier fixes quotes and spacing: the literals are stable, and a miss names the line to write.
-var viteWants = []struct{ lit, why string }{
+type viteWant struct{ lit, why string }
+
+var viteBase = []viteWant{
 	{`from "vitest/config"`, "defineConfig from vitest/config (types the test key)"},
 	{"globals: true", "test.globals: true (Testing Library's cleanup)"},
 	{`setupFiles: ["./src/test/setup.ts"]`, `test.setupFiles: ["./src/test/setup.ts"]`},
 	{`reportsDirectory: "../coverage/ui"`, `coverage.reportsDirectory: "../coverage/ui" (ship.yaml ui.lcov: coverage/ui/lcov.info)`},
 }
 
-// ui: one lint (ESLint, then Prettier, every tool at one pinned version), the build is the typecheck, vitest runs
-// the tests with one setup.
+// viteWants is viteBase and, with ui.embed, the build's output: outDir names the embed dir from ui.dir (a literal
+// there, or a const the build block takes) and emptyOutDir is off, since vite would delete the tracked .gitkeep;
+// check empties the dir itself.
+func (e *env) viteWants() []viteWant {
+	ws := slices.Clone(viteBase)
+	if rel := e.c.UI.EmbedFromDir(); rel != "" {
+		ws = append(ws,
+			viteWant{`"` + rel + `"`, "build.outDir \"" + rel + "\" (ship.yaml ui.embed, from ui.dir)"},
+			viteWant{"emptyOutDir: false", "build.emptyOutDir: false (vite would delete .gitkeep; check empties ui.embed)"})
+	}
+	return ws
+}
+
+// ui: the default build (the typecheck; check empties ui.embed itself), one lint (ESLint,
+// then Prettier, every tool at one pinned version), vitest runs the tests with one setup.
 func (e *env) ui() result {
 	if e.c.UI == nil {
 		return result{skip: "no ui"}
 	}
 	var fs []finding
-	if e.c.UI.Lint != "npm run lint" {
-		fs = append(fs, finding{what: fmt.Sprintf("ui.lint %q, want npm run lint", e.c.UI.Lint), file: "ship.yaml"})
+	if e.c.UI.Build != config.UIBuild {
+		fs = append(fs, finding{what: fmt.Sprintf("ui.build %q, want %s (check empties ui.embed itself; "+
+			"a make target stays for local builds)", e.c.UI.Build, config.UIBuild), file: "ship.yaml"})
+	}
+	if e.c.UI.Lint != config.UILint {
+		fs = append(fs, finding{what: fmt.Sprintf("ui.lint %q, want %s", e.c.UI.Lint, config.UILint), file: "ship.yaml"})
 	}
 	pj := e.uiPath("package.json")
 	p, err := e.packageJSON()
@@ -179,7 +198,7 @@ func (e *env) tsconfigRef() []finding {
 	return nil
 }
 
-// viteConfig: vitest typed, globals, the one setup file, one coverage directory (viteWants).
+// viteConfig: vitest typed, globals, the one setup file, one coverage directory, the embed dir as outDir (viteWants).
 func (e *env) viteConfig() []finding {
 	f := e.uiPath("vite.config.ts")
 	b, err := e.read(f)
@@ -190,7 +209,7 @@ func (e *env) viteConfig() []finding {
 		return []finding{{what: "missing", file: f}}
 	}
 	var fs []finding
-	for _, w := range viteWants {
+	for _, w := range e.viteWants() {
 		if !bytes.Contains(b, []byte(w.lit)) {
 			fs = append(fs, finding{what: fmt.Sprintf("no %s: want %s", w.lit, w.why), file: f})
 		}

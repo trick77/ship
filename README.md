@@ -43,11 +43,11 @@ go:
 ui:                   # omit for no UI
   dir: ui
   floor: 75
-  build: npm ci && npm run build      # tsc -b && vite build: the typecheck
+  build: npm ci && npm run build      # tsc -b && vite build: the typecheck; the only value conform passes
   lint: npm run lint                  # eslint / prettier --check, the only value conform passes; "" = none, needs a ui allow
   test: npm run test -- --coverage --coverage.reporter=lcov --coverage.reporter=text-summary  # must write lcov
   lcov: coverage/ui/lcov.info         # repo-relative, vite reportsDirectory "../coverage/ui"; SF: paths relative to ui.dir
-  embed: backend/web/dist             # go:embed dir, emptied but for .gitkeep before ui.build; omit for none
+  embed: backend/web/dist             # go:embed dir, emptied but for .gitkeep before ui.build (no make target for it); omit for none
 steps:                # repo-specific checks, run after lint
   - { name: openapi lint, run: npx spectral lint api.yaml }
 images:               # release builds these; none = tag + GitHub release only
@@ -73,8 +73,9 @@ it), and its changed lines in the patch gate; `go.exclude` applies, `go.coverpkg
 cleaned like go.dir (`./kit/auth/` is `kit/auth`); one outside the repo (absolute or through `..`), the root or a
 duplicate fails.
 
-The Go coverage report lives in the git dir (`.git/ship/`), never in the tree. Gitignore the UI test runner's
-coverage output.
+The Go coverage report lives in the git dir (`.git/ship/`), never in the tree. What the UI side writes there (the
+test runner's coverage output, `node_modules`, the tsbuildinfo, the embed dir but its `.gitkeep`) is `.gitignore`'s
+ship block, written by `ship init`.
 
 ## Commands
 
@@ -178,8 +179,10 @@ what is left is by hand.
 
 `ship init` writes the files ship owns, rendered from `ship.yaml` and the repo (origin, visibility, Containerfiles):
 `.github/workflows/ci.yaml`, `release.yaml`, `cleanup-images.yaml` (images), `.github/dependabot.yaml`,
-`<ui.dir>/eslint.config.js`, `tsconfig.node.json` and `.npmrc` (UI), and in `.dockerignore` (images) and `Makefile`
-(apps, or one that exists) only the block between `# ship:begin` and `# ship:end`; the rest of those two is the repo's. Owned means byte-equal.
+`<ui.dir>/eslint.config.js`, `tsconfig.node.json` and `.npmrc` (UI), and in `.dockerignore` (images), `.gitignore`
+(UI) and `Makefile` (apps, or one that exists) only the block between `# ship:begin` and `# ship:end`; the rest of
+those three is the repo's. Owned means byte-equal. With `ui.embed` the `.dockerignore` block keeps the host's build
+out of the context (the image builds its own) and the `.gitignore` block ignores it but `.gitkeep`.
 The CI caller's `node-version` is the Containerfile's `node:N` builder major (26 without one): Dependabot moves the
 builder, `ship init` moves CI after it. Dependabot updates kit in its own group (v0.x: a minor may break).
 `ship init -diff` prints the difference, writes nothing, exits 1 when anything differs.
@@ -195,7 +198,7 @@ it until the allow goes; `-diff` lists it by name, never counted); conform still
 | `containerfile` | per image: `ARG VERSION` into `-X github.com/trick77/ship/kit/version.Version=${VERSION}`, `-trimpath`, non-root final stage, builder `golang:X.Y` = go.mod's and ≥ ship's Go floor (1.27), floating its patch (`golang:1.27-alpine`, never `golang:1.27.0-alpine`: the image gets the newest patch's stdlib, as CI does; a `@sha256:` digest on the floating tag passes, Dependabot moves it with every patch), builder `node:N` ≥ ship's Node floor (26), every base (not a stage, `scratch` or `${ARG}`) with a tag or digest (untagged = a floating `:latest` Dependabot cannot track) | per `image` |
 | `distroless` | final stage on `gcr.io/distroless/` | per `image` |
 | `dockerignore` | exists with images; excludes `<ui.dir>/node_modules` and `<ui.dir>/dist` | yes |
-| `ui` | `ui.lint: npm run lint`; scripts exactly `build` = `tsc -b && vite build`, `lint` = `eslint . --max-warnings 0 && npm run format:check`, `format` = `prettier --write 'src/**/*.{ts,tsx,css}' '*.ts'`, `format:check` = `prettier --check …` (same globs), `test` = `vitest run`; devDependencies `typescript`, `prettier`, `eslint`, `typescript-eslint`, `eslint-config-prettier`, `@eslint/js`, `eslint-plugin-react-hooks` present at an exact version (no range; the version is the repo's), typescript below `pins.TypescriptCap` (typescript-eslint); eslint.config.js; tsconfig.json references `./tsconfig.node.json`; vite.config.ts: `defineConfig` from `vitest/config`, `globals: true`, `setupFiles: ["./src/test/setup.ts"]`, `reportsDirectory: "../coverage/ui"`; `src/test/setup.ts`'s first statement `import "@testing-library/jest-dom/vitest";` | yes |
+| `ui` | `ui.build: npm ci && npm run build` (check empties `ui.embed` itself), `ui.lint: npm run lint`; scripts exactly `build` = `tsc -b && vite build`, `lint` = `eslint . --max-warnings 0 && npm run format:check`, `format` = `prettier --write 'src/**/*.{ts,tsx,css}' '*.ts'`, `format:check` = `prettier --check …` (same globs), `test` = `vitest run`; devDependencies `typescript`, `prettier`, `eslint`, `typescript-eslint`, `eslint-config-prettier`, `@eslint/js`, `eslint-plugin-react-hooks` present at an exact version (no range; the version is the repo's), typescript below `pins.TypescriptCap` (typescript-eslint); eslint.config.js; tsconfig.json references `./tsconfig.node.json`; vite.config.ts: `defineConfig` from `vitest/config`, `globals: true`, `setupFiles: ["./src/test/setup.ts"]`, `reportsDirectory: "../coverage/ui"`, with `ui.embed` its path from `ui.dir` (`"../backend/web/dist"`, the `outDir`) and `emptyOutDir: false`; `src/test/setup.ts`'s first statement `import "@testing-library/jest-dom/vitest";` | yes |
 | `golangci` | no `.golangci.yaml`/`.yml` in the repo: ship's config is the family's | per `path` |
 | `gomod` | `go x.y.z` ≥ 1.27.0 in go.dir and every go.modules module; kit's version is Dependabot's to move | yes |
 | `kit` | a repo with images requires kit | yes |
@@ -217,7 +220,7 @@ allow:
 A repo moving to ship, in one PR (its own subject already Go style: the new gate checks it):
 
 1. `ship.yaml` at the root: only the keys that differ from the defaults above.
-2. `ship init`: the workflow callers, dependabot, `.dockerignore` and `Makefile` blocks, the UI's ESLint config,
+2. `ship init`: the workflow callers, dependabot, the `.dockerignore`, `.gitignore` and `Makefile` blocks, the UI's ESLint config,
    tsconfig.node.json and .npmrc. Drop the repo's own gate scripts and hooks.
 3. `ship conform`: what init cannot write (Containerfile, package.json scripts and devDependencies, vite config, kit, AGENTS.md)
    by hand, or an `allow` entry with its why. AGENTS.md, verbatim with the repo's own areas:
