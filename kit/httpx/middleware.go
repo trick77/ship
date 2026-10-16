@@ -317,8 +317,20 @@ func Chain(h http.Handler, mws ...func(http.Handler) http.Handler) http.Handler 
 // what the outer middleware set (security headers, the request id) stays, what the panicking handler set or changed
 // is undone. So is what middleware inside Recover set: one whose header must reach the 500 (CORS) goes outside it.
 // http.ErrAbortHandler is re-raised: it is net/http's own signal to drop the connection, not a bug.
-// Wrap it inside AccessLog, so the panic's line and the 500 carry the request id.
+// Wrap it inside AccessLog, so the panic's line and the 500 carry the request id. RecoverWith takes the options.
 func Recover(log *slog.Logger) func(http.Handler) http.Handler {
+	return RecoverWith(log, RecoverOptions{})
+}
+
+// RecoverOptions shapes RecoverWith. The zero value is Recover.
+type RecoverOptions struct {
+	// Path is what the panic's line logs as the path; nil logs r.URL.Path. The same masker as
+	// AccessLogOptions.Path: a secret in a path segment is kept out of this line too.
+	Path func(*http.Request) string
+}
+
+// RecoverWith is Recover with o.
+func RecoverWith(log *slog.Logger, o RecoverOptions) func(http.Handler) http.Handler {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -336,7 +348,11 @@ func Recover(log *slog.Logger) func(http.Handler) http.Handler {
 				if err, ok := rec.(error); ok && errors.Is(err, http.ErrAbortHandler) {
 					panic(rec)
 				}
-				log.ErrorContext(r.Context(), "Panic recovered", "panic", rec, "path", r.URL.Path,
+				path := r.URL.Path
+				if o.Path != nil {
+					path = o.Path(r)
+				}
+				log.ErrorContext(r.Context(), "Panic recovered", "panic", rec, "path", path,
 					"stack", string(debug.Stack()))
 				// Headers already sent: a 500 now would be a superfluous WriteHeader and an error body glued to the
 				// handler's output. The log line is all there is.
