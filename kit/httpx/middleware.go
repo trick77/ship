@@ -145,6 +145,10 @@ type AccessLogOptions struct {
 	NoRequestID bool
 	// ClientIP resolves the logged ip; nil means ClientIP(r, 0), the TCP peer.
 	ClientIP func(*http.Request) string
+	// Path is what the line logs as the path; nil logs r.URL.Path. For a secret in a path segment (a share token, a
+	// signed link): the handler, Quiet, ProbePaths and Skip see the real path, the line a masked one. The query
+	// string is never logged either way.
+	Path func(*http.Request) string
 	// Quiet paths are not logged while they succeed (polled endpoints); a failing one still is.
 	Quiet []string
 	// ProbePaths are not logged, whatever the status, and run no OnRecord: the orchestrator hits them every few
@@ -268,6 +272,10 @@ func AccessLog(log *slog.Logger, opts AccessLogOptions) func(http.Handler) http.
 				lvl := level(status)
 				ms := float64(dur.Microseconds()) / 1000
 				ip := clientIP(r)
+				path := r.URL.Path
+				if opts.Path != nil {
+					path = opts.Path(r)
+				}
 				attrs := make([]slog.Attr, 0, 8+len(extra))
 				// The id goes in explicitly, on the unbound context: any handler shows it, none shows it twice.
 				if id != "" {
@@ -276,7 +284,7 @@ func AccessLog(log *slog.Logger, opts AccessLogOptions) func(http.Handler) http.
 				attrs = append(attrs,
 					slog.String("ip", ip),
 					slog.String("method", r.Method),
-					slog.String("path", r.URL.Path),
+					slog.String("path", path),
 					slog.String("proto", r.Proto),
 					slog.Int("status", status),
 					slog.Float64("duration_ms", math.Round(ms*10)/10),

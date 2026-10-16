@@ -14,8 +14,14 @@ func lookup(m map[string]string) func(string) string {
 func TestValues(t *testing.T) {
 	r := New(lookup(map[string]string{
 		"S": " v ", "I": "42", "F": "0.5", "B": "YES", "D": "90s",
-		"U": "https://example.com/x", "L": "a, ,b,", "BLANK": "  ",
+		"U": "https://example.com/x", "L": "a, ,b,", "BLANK": "  ", "E": "oidc",
 	}))
+	if got := r.Enum("E", "", "password", "oidc"); got != "oidc" {
+		t.Errorf("Enum = %q", got)
+	}
+	if got := r.Enum("NONE", "password", "password", "oidc"); got != "password" {
+		t.Errorf("unset Enum = %q, want default", got)
+	}
 	if got := r.String("S", "d"); got != "v" {
 		t.Errorf("String = %q", got)
 	}
@@ -84,7 +90,7 @@ func TestBoolSpellings(t *testing.T) {
 // Every fault is reported, in call order, never just the first.
 func TestFaultsInOrder(t *testing.T) {
 	r := New(lookup(map[string]string{
-		"I": "4x", "F": "NaN", "B": "ture", "D": "30", "U": "/relative", "U2": "ftp://h",
+		"I": "4x", "F": "NaN", "B": "ture", "D": "30", "U": "/relative", "U2": "ftp://h", "E": "saml",
 	}))
 	r.Required("MISSING")
 	if got := r.Int("I", 3); got != 3 {
@@ -95,13 +101,16 @@ func TestFaultsInOrder(t *testing.T) {
 	r.Duration("D", 0)
 	r.URL("U", "")
 	r.URL("U2", "")
+	if got := r.Enum("E", "password", "password", "oidc"); got != "password" {
+		t.Errorf("bad Enum returned %q, want the default", got)
+	}
 	r.Fail("%s must not exceed %s", "A", "B")
 	err := r.Err()
 	if err == nil {
 		t.Fatal("Err = nil")
 	}
 	want := []string{"MISSING is required", `I: "4x"`, `F: "NaN"`, `B: "ture"`, `D: "30"`, `U: "/relative"`,
-		`U2: "ftp://h"`, "A must not exceed B"}
+		`U2: "ftp://h"`, `E: "saml", want one of password, oidc`, "A must not exceed B"}
 	lines := strings.Split(err.Error(), "\n")
 	if len(lines) != len(want) {
 		t.Fatalf("got %d faults, want %d:\n%v", len(lines), len(want), err)

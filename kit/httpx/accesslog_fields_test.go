@@ -104,3 +104,21 @@ func TestStatusLevel(t *testing.T) {
 		}
 	}
 }
+
+// Path masks what the line says; the handler sees the real path.
+func TestAccessLogPath(t *testing.T) {
+	var logs bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	var seen string
+	inner := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { seen = r.URL.Path })
+	h := AccessLog(log, AccessLogOptions{Path: func(r *http.Request) string {
+		if r.URL.Path == "/share/s3cret" {
+			return "/share/{token}"
+		}
+		return r.URL.Path
+	}})(inner)
+	m, _ := accessLine(t, h, &logs, httptest.NewRequest(http.MethodGet, "/share/s3cret", nil))
+	if m == nil || m["path"] != "/share/{token}" || seen != "/share/s3cret" {
+		t.Errorf("line path %v, handler saw %q", m["path"], seen)
+	}
+}

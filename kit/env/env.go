@@ -16,6 +16,7 @@ import (
 	"math"
 	"net/url"
 	"strconv"
+	"slices"
 	"strings"
 	"time"
 )
@@ -152,6 +153,20 @@ func (r *Reader) List(name string, def []string) []string {
 		}
 	}
 	return out
+}
+
+// Enum is name when it is one of allowed, or def when unset; any other value is a fault naming the choices (an auth
+// mode, a log format). def need not be in allowed: "" for "off" is common.
+func (r *Reader) Enum(name, def string, allowed ...string) string {
+	v, ok := r.raw(name)
+	if !ok {
+		return def
+	}
+	if slices.Contains(allowed, v) {
+		return v
+	}
+	r.Fail("%s: %q, want one of %s", name, v, strings.Join(allowed, ", "))
+	return def
 }
 
 // Err joins every fault in call order, nil when there are none.
