@@ -105,7 +105,8 @@ func TestFiles_whenApp_thenEveryOwnedFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{CI, Release, Cleanup, Dependabot, Ignore, "ui/" + ESLint, "ui/" + TSConfigNode, "ui/" + NPMRC, Makefile}
+	want := []string{CI, Release, Cleanup, Dependabot, Ignore, "ui/" + ESLint, "ui/" + TSConfigNode, "ui/" + NPMRC,
+		GitIgnore, Makefile}
 	if got := paths(files); strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Fatalf("files %v", got)
 	}
@@ -131,6 +132,9 @@ func TestFiles_whenApp_thenEveryOwnedFile(t *testing.T) {
 	if ig := string(byPath(t, files, Ignore).Want); !strings.Contains(ig, "*\n!backend\n!ui\n") ||
 		!strings.Contains(ig, "ui/node_modules\nui/dist\n") {
 		t.Errorf(".dockerignore:\n%s", ig)
+	}
+	if gi := string(byPath(t, files, GitIgnore).Want); !strings.Contains(gi, "coverage/ui/\nui/node_modules/\nui/*.tsbuildinfo\nui/dist/\n") {
+		t.Errorf(".gitignore:\n%s", gi)
 	}
 	if i, j := strings.Index(dep, "    groups:\n      # First"), strings.Index(dep, "\n\n  # Base images"); i < 0 || j < i ||
 		dep[i:j+1] != npmGroups {
@@ -446,3 +450,31 @@ const tsconfigNode = `{
   "include": ["vite.config.ts"]
 }
 `
+
+// With ui.embed the ignore blocks carry the embed dir: out of the image's context (it builds its own dist), and in git
+// everything but .gitkeep. The repo's own .gitignore lines stay above the block. Without a UI, no .gitignore is owned.
+func TestFiles_whenEmbed_thenIgnoreBlocksCarryIt(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, GitIgnore, "bin/\n")
+	c := parse(t, "go:\n  dir: backend\nui:\n  embed: backend/web/dist\nimages:\n  - {}\n")
+	files, err := Files(dir, c, Facts{Repo: "r", Visibility: "public", DockerDirs: []string{"/"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ig := string(byPath(t, files, Ignore).Want); !strings.Contains(ig, "ui/coverage\n# The host's UI build") ||
+		!strings.Contains(ig, "\nbackend/web/dist\n"+End+"\n") {
+		t.Errorf(".dockerignore:\n%s", ig)
+	}
+	gi := string(byPath(t, files, GitIgnore).Want)
+	if !strings.HasPrefix(gi, "bin/\n\n"+Begin) || !strings.Contains(gi, "coverage/ui/\nui/node_modules/\nui/*.tsbuildinfo\n# The UI build") ||
+		!strings.HasSuffix(gi, "backend/web/dist/*\n!backend/web/dist/.gitkeep\n"+End+"\n") || strings.Contains(gi, "ui/dist") {
+		t.Errorf(".gitignore:\n%s", gi)
+	}
+	files, err = Files(dir, parse(t, "images:\n  - {}\n"), Facts{Repo: "r", Visibility: "public"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(paths(files), " "); strings.Contains(got, GitIgnore) {
+		t.Errorf(".gitignore owned without a UI: %s", got)
+	}
+}

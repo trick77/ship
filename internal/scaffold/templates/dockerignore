@@ -20,5 +20,10 @@ coverage
 [[ .UIDir ]]/node_modules
 [[ .UIDir ]]/dist
 [[ .UIDir ]]/coverage
+[[- if .Embed ]]
+# The host's UI build in the Go tree: the image builds dist in its own stage, a stale one must not come in with the
+# context.
+[[ .Embed ]]
+[[- end ]]
 [[- end ]]
 # ship:end

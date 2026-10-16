@@ -1,0 +1,13 @@
+# ship:begin (owned by ship init; the repo's own lines go above the begin marker)
+# What the gate and the UI build write into the tree.
+[[ .Coverage ]]/
+[[ .UIDir ]]/node_modules/
+[[ .UIDir ]]/*.tsbuildinfo
+[[- if .Embed ]]
+# The UI build the Go binary embeds; .gitkeep stays tracked so go:embed's dir exists in a fresh clone.
+[[ .Embed ]]/*
+![[ .Embed ]]/.gitkeep
+[[- else ]]
+[[ .UIDir ]]/dist/
+[[- end ]]
+# ship:end
