@@ -76,31 +76,38 @@ func newRequestID() string {
 	return hex.EncodeToString(b[:])
 }
 
-// statusWriter records the status a handler sent. Flush and Hijack keep the http.Flusher and http.Hijacker
-// assertions working through it; Unwrap keeps the rest of http.ResponseController (deadlines).
-type statusWriter struct {
+// StatusWriter records the status a handler sent, for a middleware that logs or counts it (AccessLog and Recover
+// here; a service's own). Flush and Hijack keep the http.Flusher and http.Hijacker assertions working through it;
+// Unwrap keeps the rest of http.ResponseController (deadlines).
+type StatusWriter struct {
 	http.ResponseWriter
 	status int
 }
 
-func (w *statusWriter) WriteHeader(code int) {
+// NewStatusWriter wraps w.
+func NewStatusWriter(w http.ResponseWriter) *StatusWriter { return &StatusWriter{ResponseWriter: w} }
+
+// Status is the status sent, 0 before any header or body (net/http sends 200 then, when the handler returns).
+func (w *StatusWriter) Status() int { return w.status }
+
+func (w *StatusWriter) WriteHeader(code int) {
 	if w.status == 0 {
 		w.status = code
 	}
 	w.ResponseWriter.WriteHeader(code)
 }
 
-func (w *statusWriter) Write(b []byte) (int, error) {
+func (w *StatusWriter) Write(b []byte) (int, error) {
 	if w.status == 0 {
 		w.status = http.StatusOK
 	}
 	return w.ResponseWriter.Write(b)
 }
 
-func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+func (w *StatusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 // FlushError is what http.ResponseController.Flush calls. A flush sends the header: 200 unless one was written.
-func (w *statusWriter) FlushError() error {
+func (w *StatusWriter) FlushError() error {
 	if w.status == 0 {
 		w.status = http.StatusOK
 	}
@@ -108,10 +115,10 @@ func (w *statusWriter) FlushError() error {
 }
 
 // Flush serves the http.Flusher assertion an SSE handler makes behind the access log.
-func (w *statusWriter) Flush() { _ = w.FlushError() }
+func (w *StatusWriter) Flush() { _ = w.FlushError() }
 
 // Hijack serves the http.Hijacker assertion (websockets).
-func (w *statusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+func (w *StatusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return http.NewResponseController(w.ResponseWriter).Hijack()
 }
 
@@ -241,7 +248,7 @@ func AccessLog(log *slog.Logger, opts AccessLogOptions) func(http.Handler) http.
 			}
 			la := &lineAttrs{}
 			ctx = context.WithValue(ctx, logAttrsKey{}, la)
-			sw := &statusWriter{ResponseWriter: w}
+			sw := NewStatusWriter(w)
 			start := time.Now()
 			defer func() {
 				dur := time.Since(start)
@@ -305,7 +312,7 @@ func Recover(log *slog.Logger) func(http.Handler) http.Handler {
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			sw := &statusWriter{ResponseWriter: w}
+			sw := NewStatusWriter(w)
 			// The header as the outer middleware left it: the 500 must not carry what the handler set before it
 			// panicked (a CSV's Content-Disposition, its Cache-Control).
 			snap := w.Header().Clone()
