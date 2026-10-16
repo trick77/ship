@@ -244,7 +244,10 @@ func (e *env) containerfile() result {
 					// digest on the floating tag (golang:1.27-alpine@sha256:…) pins on purpose and Dependabot moves
 					// it with every patch: it passes. A patch tag fails with or without a digest.
 					if m[6] >= 0 {
-						float, _, _ := strings.Cut(s.base[:m[6]]+s.base[m[7]:], "@")
+						float, _, pinned := strings.Cut(s.base[:m[6]]+s.base[m[7]:], "@")
+						if pinned {
+							float += " (its own digest)"
+						}
 						add(fmt.Sprintf("builder %s pins a patch: use %s, the floating tag gets the newest patch",
 							s.base, float))
 					}

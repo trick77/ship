@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-const digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+const testDigest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 // CI builds with the newest patch of go.mod's Go; a builder tag pinning a patch ships an older stdlib in the image.
 func TestContainerfile_whenGolangPatchPinned_thenFails(t *testing.T) {
@@ -14,9 +14,9 @@ func TestContainerfile_whenGolangPatchPinned_thenFails(t *testing.T) {
 		{"golang:1.27.12", "builder golang:1.27.12 pins a patch: use golang:1.27, the floating tag gets the newest patch"},
 		{"docker.io/library/golang:1.27.0-alpine3.22",
 			"builder docker.io/library/golang:1.27.0-alpine3.22 pins a patch: use docker.io/library/golang:1.27-alpine3.22"},
-		// The digest pins the patch's image all the same; the hint drops the stale digest.
-		{"golang:1.27.0-alpine@sha256:" + digest,
-			"builder golang:1.27.0-alpine@sha256:" + digest + " pins a patch: use golang:1.27-alpine, the floating tag"},
+		// The digest pins the patch's image all the same; the hint drops the stale digest, asks for the new one.
+		{"golang:1.27.0-alpine@sha256:" + testDigest, "builder golang:1.27.0-alpine@sha256:" + testDigest +
+			" pins a patch: use golang:1.27-alpine (its own digest), the floating tag"},
 	} {
 		t.Run(tc.tag, func(t *testing.T) {
 			r := app(t)
@@ -41,7 +41,7 @@ func TestContainerfile_whenGolangPatchPinned_thenFails(t *testing.T) {
 func TestContainerfile_whenGolangFloatsOrDigest_thenOK(t *testing.T) {
 	for _, tag := range []string{"golang:1.27", "golang:1.27-alpine3.22",
 		// A digest on the floating tag pins on purpose and Dependabot moves it with every patch.
-		"golang:1.27-alpine@sha256:" + digest} {
+		"golang:1.27-alpine@sha256:" + testDigest} {
 		t.Run(tag, func(t *testing.T) {
 			r := app(t)
 			r.edit("Containerfile", "golang:1.27-alpine", tag)
