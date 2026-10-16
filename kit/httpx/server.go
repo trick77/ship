@@ -82,6 +82,8 @@ func Healthcheck(url string) int {
 
 func healthcheck(url string, w io.Writer) int {
 	c := http.Client{
+		// Never through HTTP_PROXY: Go skips it for loopback only, and a bind IP proxied arrives from the proxy, 404.
+		Transport:     &http.Transport{},
 		Timeout:       3 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}

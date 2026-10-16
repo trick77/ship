@@ -56,7 +56,8 @@ func (la *lineAttrs) take() []slog.Attr {
 // LogAttrs adds fields to the "http_request" line AccessLog writes for the request ctx belongs to: an account id a
 // handler deep in the chain resolved, which AccessLogOptions.Attrs (outside, on the outer request) cannot see. Safe
 // from several goroutines; a no-op outside AccessLog, and after the line is written. logging.With, by contrast, puts
-// a field on every line the handler logs, not on the access-log line.
+// a field on every line the handler logs, not on the access-log line. Keys are not checked: one AccessLog writes
+// itself (status, ip, path) duplicates it.
 func LogAttrs(ctx context.Context, attrs ...slog.Attr) {
 	la, _ := ctx.Value(logAttrsKey{}).(*lineAttrs)
 	if la == nil {
@@ -149,7 +150,7 @@ type AccessLogOptions struct {
 	// OnRecord runs after every request's line, even one the logger's level drops, with the ip the line logged
 	// (ClientIP resolves it once per request), the final status and the duration: a visitor list, a metric.
 	OnRecord func(r *http.Request, ip string, status int, dur time.Duration)
-	// RoutineLevel is the level of a routine line (status < 400, 401, 404); nil means slog.LevelDebug, so the
+	// RoutineLevel is the level of a routine line (StatusLevel); nil means slog.LevelDebug, so the
 	// family's default LOG_LEVEL=info hides them and LOG_LEVEL=debug shows them. A service that wants every request
 	// at info sets slog.LevelInfo. A Leveler, not a Level, because the zero Level is info. Unused when Level is set.
 	RoutineLevel slog.Leveler
@@ -187,9 +188,8 @@ func StatusLevel(status int, routine slog.Level) slog.Level {
 // the request context (logging.With), so every line the handler logs with that context carries it too; see
 // AccessLogOptions for where it comes from.
 //
-// Level follows the status: 5xx error, other 4xx warn; routine lines (status < 400, 401 for a signed-out browser,
-// 404 for bots and scanners) log at RoutineLevel, debug by default, so the access log is not noise at info.
-// AccessLogOptions.Level replaces the rule. A handler adds its own fields to the line with LogAttrs. A service that
+// Level follows the status (StatusLevel): routine lines log at RoutineLevel, debug by default, so the access log is
+// not noise at info. AccessLogOptions.Level replaces the rule. A handler adds its own fields to the line with LogAttrs. A service that
 // does not wire AccessLog has no access log at all.
 func AccessLog(log *slog.Logger, opts AccessLogOptions) func(http.Handler) http.Handler {
 	if log == nil {

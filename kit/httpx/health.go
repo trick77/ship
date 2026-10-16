@@ -72,7 +72,8 @@ func local(h http.HandlerFunc) http.HandlerFunc {
 // never sees the SYN-ACK), and another host or a bridged container connects from its own address. The residual: in a
 // private network namespace loopback reaches only the container, the bind IP also anything sharing the namespace, so
 // a host-network process on the same machine passes too. Such a process proxying to the bind IP must send a
-// forwarding header (nginx's proxy_pass adds none by default), as a proxy to loopback always had to.
+// forwarding header (nginx's proxy_pass adds none by default), as a proxy to loopback always had to; a layer-4
+// proxy (HAProxy mode tcp, socat) cannot, and publishes the probes, to loopback and bind IP alike.
 func isLocal(r *http.Request) bool {
 	for _, h := range []string{"X-Forwarded-For", "Forwarded", "X-Real-Ip"} {
 		if _, ok := r.Header[h]; ok {

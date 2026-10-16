@@ -71,7 +71,8 @@ func TestHealthBindIPOverTCP(t *testing.T) {
 	}
 	req, _ := http.NewRequest(http.MethodGet, app.URL+"/healthz", nil)
 	req.Header.Set("X-Forwarded-For", "192.0.2.1")
-	resp, err := http.DefaultClient.Do(req)
+	direct := &http.Client{Transport: &http.Transport{}, Timeout: 3 * time.Second} // never via HTTP_PROXY
+	resp, err := direct.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
