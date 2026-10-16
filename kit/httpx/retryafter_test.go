@@ -22,7 +22,9 @@ func TestSetRetryAfter(t *testing.T) {
 		if got := rec.Header().Get("Retry-After"); got != want {
 			t.Errorf("%s: Retry-After %q, want %q", d, got, want)
 		}
-		if rec.Body.Len() != 0 || rec.Code != 200 {
+		// The caller still picks the status: a header already written would keep the recorder's 200.
+		rec.WriteHeader(503)
+		if rec.Body.Len() != 0 || rec.Code != 503 {
 			t.Errorf("%s: wrote a response (%d, %q), want the header only", d, rec.Code, rec.Body.String())
 		}
 	}
