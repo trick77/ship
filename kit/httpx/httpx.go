@@ -26,11 +26,16 @@ func WriteError(w http.ResponseWriter, status int, msg string) {
 	WriteJSON(w, status, map[string]string{"error": msg})
 }
 
-// TooManyRequests writes a 429 with Retry-After: retryAfter in whole seconds, rounded up and never below one. Rounded
-// up, because a client obeying 179 for a 179.5 s block comes back early into a second 429; never below one, because
-// "Retry-After: 0" reads as "retry now". The body is WriteError's, "rate limited".
-func TooManyRequests(w http.ResponseWriter, retryAfter time.Duration) {
-	secs := max(int64(math.Ceil(retryAfter.Seconds())), 1)
+// SetRetryAfter sets the Retry-After header to d in whole seconds, rounded up and never below one. Rounded up, because
+// a client obeying 179 for a 179.5 s block comes back early into a second 429; never below one, because
+// "Retry-After: 0" reads as "retry now". Call it before WriteHeader, for a 429 or 503 with a body of your own.
+func SetRetryAfter(w http.ResponseWriter, d time.Duration) {
+	secs := max(int64(math.Ceil(d.Seconds())), 1)
 	w.Header().Set("Retry-After", strconv.FormatInt(secs, 10))
+}
+
+// TooManyRequests writes a 429 with SetRetryAfter's Retry-After. The body is WriteError's, "rate limited".
+func TooManyRequests(w http.ResponseWriter, retryAfter time.Duration) {
+	SetRetryAfter(w, retryAfter)
 	WriteError(w, http.StatusTooManyRequests, "rate limited")
 }

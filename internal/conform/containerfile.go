@@ -133,7 +133,8 @@ func chain(stages []stage, final int) []int {
 }
 
 var (
-	golangTag = regexp.MustCompile(`^(?:docker\.io/)?(?:library/)?golang:(\d+)\.(\d+)`)
+	// golangTag's third group is a patch the tag pins: golang:1.27.0-alpine, not golang:1.27-alpine.
+	golangTag = regexp.MustCompile(`^(?:docker\.io/)?(?:library/)?golang:(\d+)\.(\d+)(\.\d+)?`)
 	nodeTag   = regexp.MustCompile(`^(?:docker\.io/)?(?:library/)?node:(\d+)`)
 	// toolchain matches any golang or node base, numbered or not: node:lts or golang:alpine would slip past the
 	// floors and the go.mod match unseen.
@@ -237,8 +238,19 @@ func (e *env) containerfile() result {
 				if s.base != "scratch" && !strings.Contains(s.base, "$") && !compose.Pinned(s.base) {
 					add(fmt.Sprintf("base %s has no tag or digest", s.base))
 				}
-				if m := golangTag.FindStringSubmatch(s.base); m != nil {
-					golang = append(golang, m[1]+"."+m[2])
+				if m := golangTag.FindStringSubmatchIndex(s.base); m != nil {
+					golang = append(golang, s.base[m[2]:m[3]]+"."+s.base[m[4]:m[5]])
+					// A patch tag freezes the stdlib the release image ships, while CI tests the newest patch. A
+					// digest on the floating tag (golang:1.27-alpine@sha256:…) pins on purpose and Dependabot moves
+					// it with every patch: it passes. A patch tag fails with or without a digest.
+					if m[6] >= 0 {
+						float, _, pinned := strings.Cut(s.base[:m[6]]+s.base[m[7]:], "@")
+						if pinned {
+							float += " (its own digest)"
+						}
+						add(fmt.Sprintf("builder %s pins a patch: use %s, the floating tag gets the newest patch",
+							s.base, float))
+					}
 				} else if t := toolchain.FindStringSubmatch(s.base); t != nil && !nodeTag.MatchString(s.base) {
 					add(fmt.Sprintf("builder %s names no %s version", s.base, t[1]))
 				}
