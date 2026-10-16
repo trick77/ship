@@ -189,8 +189,8 @@ func StatusLevel(status int, routine slog.Level) slog.Level {
 // AccessLogOptions for where it comes from.
 //
 // Level follows the status (StatusLevel): routine lines log at RoutineLevel, debug by default, so the access log is
-// not noise at info. AccessLogOptions.Level replaces the rule. A handler adds its own fields to the line with LogAttrs. A service that
-// does not wire AccessLog has no access log at all.
+// not noise at info. AccessLogOptions.Level replaces the rule. A handler adds its own fields to the line with
+// LogAttrs. A service that does not wire AccessLog has no access log at all.
 func AccessLog(log *slog.Logger, opts AccessLogOptions) func(http.Handler) http.Handler {
 	if log == nil {
 		log = slog.Default()
