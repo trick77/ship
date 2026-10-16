@@ -1,6 +1,7 @@
 // Package ratelimit is the per-caller token bucket a public endpoint is throttled with: a burst a caller may spend at
 // once, refilled at a steady rate, in a map bounded however many callers arrive. Keyed by Key: an IPv6 caller by its
-// /64, since rotating the low 64 bits is free and a per-address bucket over v6 bounds nobody.
+// /64, since rotating the low 64 bits is free and a per-address bucket over v6 bounds nobody. Throttle, beside it,
+// spaces one key's attempts apart (a login form): the gate on tries, where Limiter meters volume.
 //
 //	lim := ratelimit.New(ratelimit.Options{Rate: 50.0 / 60, Burst: 50})
 //	api = lim.Middleware(ratelimit.ClientKey(1))(api)

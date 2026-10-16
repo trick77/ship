@@ -1,38 +1,11 @@
-package httpx
+package ratelimit
 
 import (
 	"context"
 	"errors"
-	"net"
-	"net/http"
-	"strings"
 	"sync"
 	"time"
 )
-
-// ClientIP is the request's client address. X-Forwarded-For is a list a caller can prepend anything to while each
-// proxy appends the peer it saw, so the trustworthy entry is trustedHops from the right, never the leftmost. With
-// trustedHops 0, or no usable header, it is the TCP peer. Use the number of proxies in front of the app: 1 behind
-// a single Traefik. Every X-Forwarded-For line counts, joined in order (RFC 9110 5.3): HAProxy, the OpenShift router
-// among them, adds its own line instead of appending to the caller's, and reading only the first would hand the
-// caller the trusted slot.
-func ClientIP(r *http.Request, trustedHops int) string {
-	if trustedHops > 0 {
-		if xff := strings.TrimSpace(strings.Join(r.Header.Values("X-Forwarded-For"), ",")); xff != "" {
-			parts := strings.Split(xff, ",")
-			if i := len(parts) - trustedHops; i >= 0 {
-				if ip := strings.TrimSpace(parts[i]); ip != "" {
-					return ip
-				}
-			}
-		}
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
-}
 
 // ErrThrottled is what Throttle.Wait's refusal of a key with more queued than maxWait covers matches with errors.Is.
 // The refusal itself is a *ThrottledError carrying the wait.
@@ -55,9 +28,9 @@ func (e *ThrottledError) Is(target error) bool { return target == ErrThrottled }
 // minPrune is the map size below which Throttle never sweeps.
 const minPrune = 1024
 
-// Throttle spaces one key's attempts gap apart: a login form keyed by ClientIP caps guessing at 1/gap per client
+// Throttle spaces one key's attempts gap apart: a login form keyed by ClientKey caps guessing at 1/gap per client
 // however many connections it opens, while a flood from one client cannot lock anyone else out (a shared limit would
-// hand every visitor that lever).
+// hand every visitor that lever). Limiter, by contrast, meters volume: a burst spent at once, refilled at a rate.
 type Throttle struct {
 	gap, maxWait time.Duration
 	now          func() time.Time
@@ -116,7 +89,7 @@ func (t *Throttle) release(key string, at time.Time) {
 // Wait blocks until key's turn: a *ThrottledError (errors.Is ErrThrottled) when the queue is too long, ctx's error
 // when the caller gave up. A caller that gives up frees its turn when no later attempt of key has queued behind it.
 //
-//	var te *httpx.ThrottledError
+//	var te *ratelimit.ThrottledError
 //	if errors.As(err, &te) {
 //		httpx.TooManyRequests(w, te.RetryAfter)
 //	}
