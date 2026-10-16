@@ -3,7 +3,7 @@ package sqlitex
 import "testing"
 
 func TestDSN(t *testing.T) {
-	const base = "?_pragma=journal_mode(wal)&_pragma=busy_timeout(10000)&_pragma=foreign_keys(on)"
+	const base = "?_pragma=busy_timeout(10000)&_pragma=journal_mode(wal)&_pragma=foreign_keys(on)"
 	for _, tc := range []struct {
 		path  string
 		extra []string
