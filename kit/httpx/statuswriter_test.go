@@ -29,4 +29,15 @@ func TestStatusWriter(t *testing.T) {
 	if sw.Status() != http.StatusNotFound || rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, recorded %d; want 404", sw.Status(), rec.Code)
 	}
+
+	// 103 Early Hints goes through and is not the response's status.
+	sw = NewStatusWriter(httptest.NewRecorder())
+	sw.WriteHeader(http.StatusEarlyHints)
+	if sw.Status() != 0 {
+		t.Errorf("status after a 1xx = %d, want 0", sw.Status())
+	}
+	sw.WriteHeader(http.StatusOK)
+	if sw.Status() != http.StatusOK {
+		t.Errorf("status after 103 then 200 = %d, want 200", sw.Status())
+	}
 }

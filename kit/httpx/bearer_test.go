@@ -15,6 +15,8 @@ func TestBearer(t *testing.T) {
 		{"BEARER   abc  ", "abc", true},
 		{"Bearer", "", false},
 		{"Bearer ", "", false},
+		{"Bearer abc def", "", false},
+		{"Bearer\tabc", "", false},
 		{"Basic abc", "", false},
 		{"Bearerabc", "", false},
 		{"", "", false},

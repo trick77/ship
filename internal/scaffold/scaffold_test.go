@@ -470,6 +470,15 @@ func TestFiles_whenEmbed_thenIgnoreBlocksCarryIt(t *testing.T) {
 		!strings.HasSuffix(gi, "backend/web/dist/*\n!backend/web/dist/.gitkeep\n"+End+"\n") || strings.Contains(gi, "ui/dist") {
 		t.Errorf(".gitignore:\n%s", gi)
 	}
+	// A repo line ignoring the embed dir itself would keep .gitkeep out whatever the block says: by hand.
+	write(t, dir, GitIgnore, "bin/\n/backend/web/dist/\n")
+	files, err = Files(dir, c, Facts{Repo: "r", Visibility: "public", DockerDirs: []string{"/"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gi := byPath(t, files, GitIgnore); !strings.Contains(gi.Manual, `ignores the embed dir itself ("/backend/web/dist/")`) || gi.Want != nil {
+		t.Errorf("manual = %q, want = %q", gi.Manual, gi.Want)
+	}
 	files, err = Files(dir, parse(t, "images:\n  - {}\n"), Facts{Repo: "r", Visibility: "public"})
 	if err != nil {
 		t.Fatal(err)

@@ -90,9 +90,10 @@ func NewStatusWriter(w http.ResponseWriter) *StatusWriter { return &StatusWriter
 // Status is the status sent, 0 before any header or body (net/http sends 200 then, when the handler returns).
 func (w *StatusWriter) Status() int { return w.status }
 
-// WriteHeader records the first status; the rest is net/http's (a second one is superfluous there too).
+// WriteHeader records the first final status. An informational 1xx (103 Early Hints) is forwarded and not recorded:
+// the response's status follows it. The rest is net/http's (a second final one is superfluous there too).
 func (w *StatusWriter) WriteHeader(code int) {
-	if w.status == 0 {
+	if w.status == 0 && (code < 100 || code > 199) {
 		w.status = code
 	}
 	w.ResponseWriter.WriteHeader(code)

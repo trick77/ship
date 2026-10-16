@@ -102,12 +102,13 @@ type UI struct {
 	Embed string `yaml:"embed"`
 }
 
-// EmbedFromDir is Embed as vite's build.outDir spells it, relative to Dir ("../backend/web/dist"); "" without one.
+// EmbedFromDir is Embed as vite's build.outDir spells it, relative to Dir ("../backend/web/dist", both cleaned by
+// Parse); "" without one.
 func (u UI) EmbedFromDir() string {
 	if u.Embed == "" {
 		return ""
 	}
-	rel, err := filepath.Rel(filepath.FromSlash(u.Dir), filepath.FromSlash(path.Clean(filepath.ToSlash(u.Embed))))
+	rel, err := filepath.Rel(filepath.FromSlash(u.Dir), filepath.FromSlash(u.Embed))
 	if err != nil {
 		return ""
 	}
@@ -219,6 +220,12 @@ func (c *Config) defaults() error {
 	if c.UI != nil {
 		if c.UI.Dir, err = cleanDir("ui.dir", c.UI.Dir); err != nil {
 			return err
+		}
+		// Cleaned like the dirs: the ignore blocks and the vite want render it as is.
+		if c.UI.Embed != "" {
+			if c.UI.Embed, err = cleanDir("ui.embed", c.UI.Embed); err != nil {
+				return err
+			}
 		}
 		if c.UI.Lcov == "" {
 			// conform's vite reportsDirectory "../coverage/ui", seen from the repo root.

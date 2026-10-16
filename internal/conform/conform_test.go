@@ -385,7 +385,7 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 				r.t.Fatal(err)
 			}
 		}, []string{`FAIL ui: no "../backend/web/dist": want build.outDir "../backend/web/dist" (ship.yaml ui.embed, from ui.dir) (ui/vite.config.ts)`,
-			`FAIL ui: no emptyOutDir: false: want build.emptyOutDir: false (vite would delete .gitkeep; check empties ui.embed) (ui/vite.config.ts)`}},
+			`FAIL ui: no emptyOutDir: false: want build.emptyOutDir: false (explicit: vite's default empties an outDir inside the UI dir, .gitkeep with it; check empties ui.embed) (ui/vite.config.ts)`}},
 		{"ui eslint config missing allowed", appShip + allowScaffold("ui/"+scaffold.ESLint), func(r *repo) { r.remove("ui/" + scaffold.ESLint) },
 			[]string{"FAIL ui: missing (ship init) (ui/eslint.config.js)"}},
 		// Dependabot moves a version per repo: any exact one passes, a range or TypeScript 6.1+ does not.
@@ -999,5 +999,18 @@ func TestAtLeast(t *testing.T) {
 		if got := atLeast(tc.v, tc.floor); got != tc.want {
 			t.Errorf("atLeast(%s, %s) = %v", tc.v, tc.floor, got)
 		}
+	}
+}
+
+// vite's own dist needs no outDir line: the want is skipped there, emptyOutDir's stays (vite's default empties it).
+func TestViteWants_whenEmbedIsVitesDist_thenNoOutDirWant(t *testing.T) {
+	r := newRepo(t, nil)
+	e := newEnv(r.dir, r.config("ui:\n  embed: ui/dist\n"), r.opts)
+	var lits []string
+	for _, w := range e.viteWants() {
+		lits = append(lits, w.lit)
+	}
+	if slices.Contains(lits, `"dist"`) || !slices.Contains(lits, "emptyOutDir: false") {
+		t.Errorf("wants %q", lits)
 	}
 }
