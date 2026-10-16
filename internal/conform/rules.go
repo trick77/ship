@@ -129,7 +129,7 @@ func (e *env) viteWants() []viteWant {
 	return ws
 }
 
-// ui: the default build (the typecheck; check empties ui.embed, a make target doing it is a copy), one lint (ESLint,
+// ui: the default build (the typecheck; check empties ui.embed itself), one lint (ESLint,
 // then Prettier, every tool at one pinned version), vitest runs the tests with one setup.
 func (e *env) ui() result {
 	if e.c.UI == nil {
@@ -137,8 +137,8 @@ func (e *env) ui() result {
 	}
 	var fs []finding
 	if e.c.UI.Build != config.UIBuild {
-		fs = append(fs, finding{what: fmt.Sprintf("ui.build %q, want %s (check empties ui.embed itself: set it, "+
-			"drop the make target)", e.c.UI.Build, config.UIBuild), file: "ship.yaml"})
+		fs = append(fs, finding{what: fmt.Sprintf("ui.build %q, want %s (check empties ui.embed itself; "+
+			"a make target stays for local builds)", e.c.UI.Build, config.UIBuild), file: "ship.yaml"})
 	}
 	if e.c.UI.Lint != config.UILint {
 		fs = append(fs, finding{what: fmt.Sprintf("ui.lint %q, want %s", e.c.UI.Lint, config.UILint), file: "ship.yaml"})

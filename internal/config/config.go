@@ -88,7 +88,7 @@ type UI struct {
 	Floor float64 `yaml:"floor"`
 	// Build runs first in check, so the Go packages embed a fresh dist, never a stale one. The family's
 	// `npm run build` is `tsc -b && vite build`: the typecheck. Default UIBuild, the only value conform passes:
-	// check empties Embed itself, a make target doing the same is a copy.
+	// check empties Embed itself; a make target may still do so for local builds.
 	Build string `yaml:"build"`
 	// Lint is the UI's lint/format check (eslint, prettier --check), run after the Go lint; default UILint, the
 	// only value conform passes; "" runs none, needs a ui allow.

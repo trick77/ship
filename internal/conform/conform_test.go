@@ -378,7 +378,7 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 			"FAIL ui: devDependency @eslint/js missing", "FAIL ui: devDependency eslint-plugin-react-hooks missing",
 			"FAIL scaffold: missing (ship init) (ui/eslint.config.js)"}},
 		{"ui build", strings.Replace(appShip, "  lint: npm run lint\n", "  lint: npm run lint\n  build: cd .. && make fe-build\n", 1),
-			func(*repo) {}, []string{`FAIL ui: ui.build "cd .. && make fe-build", want npm ci && npm run build (check empties ui.embed itself: set it, drop the make target) (ship.yaml)`}},
+			func(*repo) {}, []string{`FAIL ui: ui.build "cd .. && make fe-build", want npm ci && npm run build (check empties ui.embed itself; a make target stays for local builds) (ship.yaml)`}},
 		// With an embed, vite must build into it and leave .gitkeep alone; init carries it into the ignore blocks.
 		{"ui vite embed", appShipEmbed, func(r *repo) {
 			if err := Init(r.dir, r.config(appShipEmbed), r.opts, false); err != nil {
