@@ -90,6 +90,7 @@ func NewStatusWriter(w http.ResponseWriter) *StatusWriter { return &StatusWriter
 // Status is the status sent, 0 before any header or body (net/http sends 200 then, when the handler returns).
 func (w *StatusWriter) Status() int { return w.status }
 
+// WriteHeader records the first status; the rest is net/http's (a second one is superfluous there too).
 func (w *StatusWriter) WriteHeader(code int) {
 	if w.status == 0 {
 		w.status = code
@@ -97,6 +98,7 @@ func (w *StatusWriter) WriteHeader(code int) {
 	w.ResponseWriter.WriteHeader(code)
 }
 
+// Write records 200 when no header went first, as net/http sends it.
 func (w *StatusWriter) Write(b []byte) (int, error) {
 	if w.status == 0 {
 		w.status = http.StatusOK
@@ -104,6 +106,7 @@ func (w *StatusWriter) Write(b []byte) (int, error) {
 	return w.ResponseWriter.Write(b)
 }
 
+// Unwrap is the wrapped writer, for http.ResponseController.
 func (w *StatusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 // FlushError is what http.ResponseController.Flush calls. A flush sends the header: 200 unless one was written.
