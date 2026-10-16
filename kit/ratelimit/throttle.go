@@ -28,9 +28,10 @@ func (e *ThrottledError) Is(target error) bool { return target == ErrThrottled }
 // minPrune is the map size below which Throttle never sweeps.
 const minPrune = 1024
 
-// Throttle spaces one key's attempts gap apart: a login form keyed by ClientKey caps guessing at 1/gap per client
-// however many connections it opens, while a flood from one client cannot lock anyone else out (a shared limit would
-// hand every visitor that lever). Limiter, by contrast, meters volume: a burst spent at once, refilled at a rate.
+// Throttle spaces one key's attempts gap apart: a login form keyed by the caller (Key over httpx.ClientIP) caps
+// guessing at 1/gap per client however many connections it opens, while a flood from one client cannot lock anyone
+// else out (a shared limit would hand every visitor that lever). Limiter, by contrast, meters volume: a burst spent
+// at once, refilled at a rate.
 type Throttle struct {
 	gap, maxWait time.Duration
 	now          func() time.Time
