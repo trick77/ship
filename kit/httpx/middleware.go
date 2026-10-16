@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"log/slog"
+	"maps"
 	"math"
 	"net"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/trick77/ship/kit/logging"
@@ -32,6 +34,39 @@ type requestIDKey struct{}
 func RequestID(ctx context.Context) string {
 	id, _ := ctx.Value(requestIDKey{}).(string)
 	return id
+}
+
+type logAttrsKey struct{}
+
+// lineAttrs collects LogAttrs' fields for one request's access-log line.
+type lineAttrs struct {
+	mu    sync.Mutex
+	attrs []slog.Attr
+	done  bool // the line is written
+}
+
+// take returns the fields and closes la to further LogAttrs.
+func (la *lineAttrs) take() []slog.Attr {
+	la.mu.Lock()
+	defer la.mu.Unlock()
+	la.done = true
+	return la.attrs
+}
+
+// LogAttrs adds fields to the "http_request" line AccessLog writes for the request ctx belongs to: an account id a
+// handler deep in the chain resolved, which AccessLogOptions.Attrs (outside, on the outer request) cannot see. Safe
+// from several goroutines; a no-op outside AccessLog, and after the line is written. logging.With, by contrast, puts
+// a field on every line the handler logs, not on the access-log line.
+func LogAttrs(ctx context.Context, attrs ...slog.Attr) {
+	la, _ := ctx.Value(logAttrsKey{}).(*lineAttrs)
+	if la == nil {
+		return
+	}
+	la.mu.Lock()
+	defer la.mu.Unlock()
+	if !la.done {
+		la.attrs = append(la.attrs, attrs...)
+	}
 }
 
 func newRequestID() string {
@@ -108,15 +143,43 @@ type AccessLogOptions struct {
 	ProbePaths []string
 	// Skip drops a request's line, and its OnRecord, when it returns true. Quiet is the common case of it.
 	Skip func(r *http.Request, status int) bool
-	// Attrs appends fields to the line.
+	// Attrs appends fields to the line. It sees the request as AccessLog got it; a handler further in adds its own
+	// with LogAttrs, which land after these.
 	Attrs func(r *http.Request, status int) []slog.Attr
 	// OnRecord runs after every request's line, even one the logger's level drops, with the ip the line logged
 	// (ClientIP resolves it once per request), the final status and the duration: a visitor list, a metric.
 	OnRecord func(r *http.Request, ip string, status int, dur time.Duration)
 	// RoutineLevel is the level of a routine line (status < 400, 401, 404); nil means slog.LevelDebug, so the
 	// family's default LOG_LEVEL=info hides them and LOG_LEVEL=debug shows them. A service that wants every request
-	// at info sets slog.LevelInfo. A Leveler, not a Level, because the zero Level is info.
+	// at info sets slog.LevelInfo. A Leveler, not a Level, because the zero Level is info. Unused when Level is set.
 	RoutineLevel slog.Leveler
+	// Level picks a line's level from its status, replacing the whole default rule (StatusLevel); RoutineLevel is
+	// then unused. nil means StatusLevel(status, RoutineLevel). A service that moves one status keeps the rest by
+	// falling back to StatusLevel: a 409 handshake at debug is
+	//
+	//	func(s int) slog.Level {
+	//		if s == http.StatusConflict {
+	//			return slog.LevelDebug
+	//		}
+	//		return httpx.StatusLevel(s, slog.LevelDebug)
+	//	}
+	//
+	// A routine level that changes at runtime (*slog.LevelVar) is read inside Level.
+	Level func(status int) slog.Level
+}
+
+// StatusLevel is AccessLog's default level for a status: 5xx error, other 4xx warn, routine lines (status < 400,
+// 401 for a signed-out browser, 404 for bots and scanners) routine.
+func StatusLevel(status int, routine slog.Level) slog.Level {
+	switch {
+	case status >= 500:
+		return slog.LevelError
+	// 401 (a signed-out browser) and 404 (bots and scanners, most of a public site's traffic) are routine: at warn
+	// they would bury the 4xx that point at a real problem.
+	case status >= 400 && status != http.StatusUnauthorized && status != http.StatusNotFound:
+		return slog.LevelWarn
+	}
+	return routine
 }
 
 // AccessLog writes one "http_request" line per request: request_id, ip, method, path (never the query, which carries
@@ -125,8 +188,9 @@ type AccessLogOptions struct {
 // AccessLogOptions for where it comes from.
 //
 // Level follows the status: 5xx error, other 4xx warn; routine lines (status < 400, 401 for a signed-out browser,
-// 404 for bots and scanners) log at RoutineLevel, debug by default, so the access log is not noise at info. A service
-// that does not wire AccessLog has no access log at all.
+// 404 for bots and scanners) log at RoutineLevel, debug by default, so the access log is not noise at info.
+// AccessLogOptions.Level replaces the rule. A handler adds its own fields to the line with LogAttrs. A service that
+// does not wire AccessLog has no access log at all.
 func AccessLog(log *slog.Logger, opts AccessLogOptions) func(http.Handler) http.Handler {
 	if log == nil {
 		log = slog.Default()
@@ -139,9 +203,14 @@ func AccessLog(log *slog.Logger, opts AccessLogOptions) func(http.Handler) http.
 	if clientIP == nil {
 		clientIP = func(r *http.Request) string { return ClientIP(r, 0) }
 	}
-	var routine slog.Leveler = slog.LevelDebug
-	if opts.RoutineLevel != nil {
-		routine = opts.RoutineLevel
+	level := opts.Level
+	if level == nil {
+		var routine slog.Leveler = slog.LevelDebug
+		if opts.RoutineLevel != nil {
+			routine = opts.RoutineLevel
+		}
+		// routine.Level() per request: a *slog.LevelVar may change at runtime.
+		level = func(status int) slog.Level { return StatusLevel(status, routine.Level()) }
 	}
 	quiet := make(map[string]bool, len(opts.Quiet))
 	for _, p := range opts.Quiet {
@@ -170,10 +239,13 @@ func AccessLog(log *slog.Logger, opts AccessLogOptions) func(http.Handler) http.
 				ctx = context.WithValue(ctx, requestIDKey{}, id)
 				ctx = logging.With(ctx, "request_id", id)
 			}
+			la := &lineAttrs{}
+			ctx = context.WithValue(ctx, logAttrsKey{}, la)
 			sw := &statusWriter{ResponseWriter: w}
 			start := time.Now()
 			defer func() {
 				dur := time.Since(start)
+				extra := la.take()
 				// A handler that wrote nothing still answered 200: net/http sends it when the handler returns.
 				status := sw.status
 				if status == 0 {
@@ -182,18 +254,10 @@ func AccessLog(log *slog.Logger, opts AccessLogOptions) func(http.Handler) http.
 				if (probe[r.URL.Path] && status != http.StatusNotFound) || (quiet[r.URL.Path] && status < 400) || (opts.Skip != nil && opts.Skip(r, status)) {
 					return
 				}
-				lvl := routine.Level() // per request: a *slog.LevelVar may change at runtime
-				switch {
-				case status >= 500:
-					lvl = slog.LevelError
-				// 401 (a signed-out browser) and 404 (bots and scanners, most of a public site's traffic) are
-				// routine: at warn they would bury the 4xx that point at a real problem.
-				case status >= 400 && status != http.StatusUnauthorized && status != http.StatusNotFound:
-					lvl = slog.LevelWarn
-				}
+				lvl := level(status)
 				ms := float64(dur.Microseconds()) / 1000
 				ip := clientIP(r)
-				attrs := make([]slog.Attr, 0, 8)
+				attrs := make([]slog.Attr, 0, 8+len(extra))
 				// The id goes in explicitly, on the unbound context: any handler shows it, none shows it twice.
 				if id != "" {
 					attrs = append(attrs, slog.String("request_id", id))
@@ -210,6 +274,7 @@ func AccessLog(log *slog.Logger, opts AccessLogOptions) func(http.Handler) http.
 				if opts.Attrs != nil {
 					attrs = append(attrs, opts.Attrs(r, status)...)
 				}
+				attrs = append(attrs, extra...)
 				log.LogAttrs(r.Context(), lvl, "http_request", attrs...)
 				if opts.OnRecord != nil {
 					opts.OnRecord(r, ip, status, dur)
@@ -229,7 +294,9 @@ func Chain(h http.Handler, mws ...func(http.Handler) http.Handler) http.Handler 
 }
 
 // Recover turns a handler panic into a logged stack and a 500 (only the log once the handler has written), so one
-// bad request never takes the process down.
+// bad request never takes the process down. The 500 carries the header as it was when Recover's handler started:
+// what the outer middleware set (security headers, the request id) stays, what the panicking handler set or changed
+// is undone. So is what middleware inside Recover set: one whose header must reach the 500 (CORS) goes outside it.
 // http.ErrAbortHandler is re-raised: it is net/http's own signal to drop the connection, not a bug.
 // Wrap it inside AccessLog, so the panic's line and the 500 carry the request id.
 func Recover(log *slog.Logger) func(http.Handler) http.Handler {
@@ -239,6 +306,9 @@ func Recover(log *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			sw := &statusWriter{ResponseWriter: w}
+			// The header as the outer middleware left it: the 500 must not carry what the handler set before it
+			// panicked (a CSV's Content-Disposition, its Cache-Control).
+			snap := w.Header().Clone()
 			defer func() {
 				rec := recover()
 				if rec == nil {
@@ -252,6 +322,9 @@ func Recover(log *slog.Logger) func(http.Handler) http.Handler {
 				// Headers already sent: a 500 now would be a superfluous WriteHeader and an error body glued to the
 				// handler's output. The log line is all there is.
 				if sw.status == 0 {
+					h := w.Header()
+					clear(h)
+					maps.Copy(h, snap)
 					WriteError(w, http.StatusInternalServerError, "internal server error")
 				}
 			}()
