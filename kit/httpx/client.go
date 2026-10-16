@@ -34,9 +34,21 @@ func ClientIP(r *http.Request, trustedHops int) string {
 	return host
 }
 
-// ErrThrottled is Throttle.Wait's answer to a key with more queued than maxWait covers. Throttle.RetryAfter is how
-// long until that key would be let into the queue again, the 429's Retry-After.
+// ErrThrottled is what Throttle.Wait's refusal of a key with more queued than maxWait covers matches with errors.Is.
+// The refusal itself is a *ThrottledError carrying the wait.
 var ErrThrottled = errors.New("too many attempts")
+
+// ThrottledError is Throttle.Wait's refusal. RetryAfter is how long until the key would be let into the queue again,
+// the 429's Retry-After, decided under the same lock as the refusal: get it with errors.As instead of a later
+// Throttle.RetryAfter call, which reads the queue anew. errors.Is(err, ErrThrottled) holds.
+type ThrottledError struct {
+	RetryAfter time.Duration
+}
+
+func (e *ThrottledError) Error() string { return ErrThrottled.Error() }
+
+// Is makes errors.Is(err, ErrThrottled) true.
+func (e *ThrottledError) Is(target error) bool { return target == ErrThrottled }
 
 // minPrune is the map size below which Throttle never sweeps.
 const minPrune = 1024
@@ -58,7 +70,8 @@ func NewThrottle(gap, maxWait time.Duration) *Throttle {
 	return &Throttle{gap: gap, maxWait: maxWait, now: time.Now, next: map[string]time.Time{}, pruneAt: minPrune}
 }
 
-// turn books key's next slot: the slot's start, how long to wait for it, and false when the queue is too long.
+// turn books key's next slot: the slot's start and how long to wait for it, or, when the queue is too long, false
+// and how long until it would not be.
 func (t *Throttle) turn(key string) (time.Time, time.Duration, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -80,8 +93,8 @@ func (t *Throttle) turn(key string) (time.Time, time.Duration, bool) {
 	if at.Before(now) {
 		at = now
 	}
-	if at.Sub(now) > t.maxWait {
-		return time.Time{}, 0, false
+	if d := at.Sub(now); d > t.maxWait {
+		return time.Time{}, d - t.maxWait, false
 	}
 	t.next[key] = at.Add(t.gap)
 	return at, at.Sub(now), true
@@ -98,15 +111,20 @@ func (t *Throttle) release(key string, at time.Time) {
 	}
 }
 
-// Wait blocks until key's turn: ErrThrottled when the queue is too long, ctx's error when the caller gave up. A
-// caller that gives up frees its turn when no later attempt of key has queued behind it.
+// Wait blocks until key's turn: a *ThrottledError (errors.Is ErrThrottled) when the queue is too long, ctx's error
+// when the caller gave up. A caller that gives up frees its turn when no later attempt of key has queued behind it.
+//
+//	var te *httpx.ThrottledError
+//	if errors.As(err, &te) {
+//		httpx.TooManyRequests(w, te.RetryAfter)
+//	}
 func (t *Throttle) Wait(ctx context.Context, key string) error {
 	if err := ctx.Err(); err != nil {
 		return err // gone before asking: book nothing
 	}
 	at, d, ok := t.turn(key)
 	if !ok {
-		return ErrThrottled
+		return &ThrottledError{RetryAfter: d}
 	}
 	if d <= 0 {
 		return nil
@@ -124,7 +142,8 @@ func (t *Throttle) Wait(ctx context.Context, key string) error {
 
 // RetryAfter is how long until key's next Wait would be queued rather than refused with ErrThrottled, 0 when it would
 // be now; the queued Wait may still block up to maxWait. It books nothing and reads the queue under its own lock, so
-// after a refusal it is that key's wait as of the call, not of the refusal: other attempts may have queued since.
+// after a refusal it is that key's wait as of the call, not of the refusal: other attempts may have queued since. The
+// refusal's own wait is its ThrottledError.RetryAfter.
 func (t *Throttle) RetryAfter(key string) time.Duration {
 	t.mu.Lock()
 	defer t.mu.Unlock()
