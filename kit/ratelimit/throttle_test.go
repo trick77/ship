@@ -9,6 +9,32 @@ import (
 	"time"
 )
 
+// A misconfigured throttle fails the boot, as a misconfigured Limiter does.
+func TestNewThrottle_whenMisconfigured_thenPanics(t *testing.T) {
+	for name, args := range map[string][2]time.Duration{
+		"zero gap":         {0, time.Second},
+		"negative gap":     {-time.Second, time.Second},
+		"negative maxWait": {time.Second, -time.Second},
+	} {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("NewThrottle(%v, %v) did not panic", args[0], args[1])
+				}
+			}()
+			NewThrottle(args[0], args[1])
+		})
+	}
+	// maxWait 0 is a valid "never queue": the second attempt within gap is refused outright.
+	th := NewThrottle(time.Second, 0)
+	if err := th.Wait(context.Background(), "k"); err != nil {
+		t.Fatalf("first Wait = %v", err)
+	}
+	if err := th.Wait(context.Background(), "k"); !errors.Is(err, ErrThrottled) {
+		t.Errorf("second Wait within gap, maxWait 0 = %v, want ErrThrottled", err)
+	}
+}
+
 func TestThrottle(t *testing.T) {
 	th := NewThrottle(500*time.Millisecond, time.Second)
 	now := time.Unix(1000, 0)

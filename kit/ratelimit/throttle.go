@@ -3,6 +3,7 @@ package ratelimit
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -41,8 +42,17 @@ type Throttle struct {
 	swept        time.Time // when the last sweep ran
 }
 
-// NewThrottle spaces attempts gap apart and refuses a key once it would queue past maxWait.
+// NewThrottle spaces attempts gap apart and refuses a key once it would queue past maxWait; 0 queues nothing, the
+// second attempt within gap is refused. A gap of 0 or below (no spacing: the form has no gate) or a negative maxWait
+// (every first attempt refused) panics, as New does: a misconfigured limit fails the boot, never admits or refuses
+// everyone at run time.
 func NewThrottle(gap, maxWait time.Duration) *Throttle {
+	if gap <= 0 {
+		panic(fmt.Sprintf("ratelimit.NewThrottle: gap %v, want above 0", gap))
+	}
+	if maxWait < 0 {
+		panic(fmt.Sprintf("ratelimit.NewThrottle: maxWait %v, want 0 or above", maxWait))
+	}
 	return &Throttle{gap: gap, maxWait: maxWait, now: time.Now, next: map[string]time.Time{}, pruneAt: minPrune}
 }
 
