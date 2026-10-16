@@ -3,6 +3,7 @@ package httpx
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -49,14 +50,18 @@ func TestThrottleWait_whenRefused_thenErrorCarriesWait(t *testing.T) {
 	if te.RetryAfter != 500*time.Millisecond || te.RetryAfter != th.RetryAfter("a") {
 		t.Errorf("refusal's RetryAfter = %s, RetryAfter = %s, want both 500ms", te.RetryAfter, th.RetryAfter("a"))
 	}
-	if err.Error() != ErrThrottled.Error() {
-		t.Errorf("Error() = %q, want %q", err.Error(), ErrThrottled.Error())
+	if want := "too many attempts, retry after 500ms"; err.Error() != want {
+		t.Errorf("Error() = %q, want %q", err.Error(), want)
 	}
 	now = now.Add(200 * time.Millisecond)
 	if te.RetryAfter != 500*time.Millisecond || th.RetryAfter("a") != 300*time.Millisecond {
 		t.Errorf("after 200ms: refusal's %s (want 500ms kept), RetryAfter %s (want 300ms)", te.RetryAfter, th.RetryAfter("a"))
 	}
-	if errors.Is(err, errors.New("too many attempts")) {
-		t.Error("errors.Is matched a foreign error by its text")
+	if errors.Is(err, context.Canceled) {
+		t.Error("the refusal matched context.Canceled")
+	}
+	wrapped := fmt.Errorf("login: %w", err)
+	if !errors.Is(wrapped, ErrThrottled) || !errors.As(wrapped, &te) {
+		t.Errorf("wrapped refusal lost ErrThrottled or its type: %v", wrapped)
 	}
 }

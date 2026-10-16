@@ -45,7 +45,9 @@ type ThrottledError struct {
 	RetryAfter time.Duration
 }
 
-func (e *ThrottledError) Error() string { return ErrThrottled.Error() }
+func (e *ThrottledError) Error() string {
+	return ErrThrottled.Error() + ", retry after " + e.RetryAfter.String()
+}
 
 // Is makes errors.Is(err, ErrThrottled) true.
 func (e *ThrottledError) Is(target error) bool { return target == ErrThrottled }
