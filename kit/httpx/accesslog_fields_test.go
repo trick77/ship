@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -102,5 +103,39 @@ func TestStatusLevel(t *testing.T) {
 		if got := StatusLevel(status, slog.LevelDebug); got != want {
 			t.Errorf("StatusLevel(%d) = %v, want %v", status, got, want)
 		}
+	}
+}
+
+// Path masks what the line says; the handler sees the real path.
+func TestAccessLogPath(t *testing.T) {
+	var logs bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	var seen string
+	inner := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { seen = r.URL.Path })
+	h := AccessLog(log, AccessLogOptions{Path: func(r *http.Request) string {
+		if r.URL.Path == "/share/s3cret" {
+			return "/share/{token}"
+		}
+		return r.URL.Path
+	}})(inner)
+	m, _ := accessLine(t, h, &logs, httptest.NewRequest(http.MethodGet, "/share/s3cret", nil))
+	if m == nil || m["path"] != "/share/{token}" || seen != "/share/s3cret" {
+		t.Errorf("line path %v, handler saw %q", m["path"], seen)
+	}
+}
+
+// RecoverWith's Path keeps the secret out of the panic line as well.
+func TestRecoverWithPath(t *testing.T) {
+	var logs bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	h := RecoverWith(log, RecoverOptions{Path: func(*http.Request) string { return "/share/{token}" }})(
+		http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic("boom") }))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/share/s3cret", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", rec.Code)
+	}
+	if line := logs.String(); !strings.Contains(line, `"path":"/share/{token}"`) || strings.Contains(line, "s3cret") {
+		t.Errorf("panic line = %s", line)
 	}
 }
