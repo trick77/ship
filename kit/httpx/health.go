@@ -31,9 +31,10 @@ const CheckTimeout = 5 * time.Second
 // GET /readyz is readiness: every check in order, 503 at the first failure with the check's name. The error itself
 // goes to log.
 //
-// Both answer only a direct caller on this host: the peer is loopback and the request carries no X-Forwarded-For,
-// Forwarded or X-Real-IP. Anyone else gets 404, as for a path that does not exist. The probes are the
-// orchestrator's, which probes from inside (Healthcheck, an exec probe); nobody else needs to know they exist. A
+// Both answer only a direct caller on this host: the peer is loopback, or the address the connection arrived on (a
+// service bound to one IP, LISTEN_ADDR=10.0.0.5:8080, whose Healthcheck dials that IP), and the request carries no
+// X-Forwarded-For, Forwarded or X-Real-IP. Anyone else gets 404, as for a path that does not exist. The probes are
+// the orchestrator's, which probes from inside (Healthcheck, an exec probe); nobody else needs to know they exist. A
 // proxy in the same network namespace (a sidecar) connects from loopback too, its forwarding header refuses it.
 //
 // The log reports transitions, not probes: an orchestrator probes every few seconds, so a line per failing probe
@@ -64,20 +65,45 @@ func local(h http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// isLocal: the TCP peer is loopback and no proxy forwarded the request. A forwarding header only ever refuses, so
-// a caller cannot add one to get in.
+// isLocal: the TCP peer is loopback or the connection's own local address, and no proxy forwarded the request. A
+// forwarding header only ever refuses, so a caller cannot add one to get in.
+//
+// Peer == local address is safe: a TCP handshake from that source completes only from this host (a spoofed source
+// never sees the SYN-ACK), and another host or a bridged container connects from its own address. The residual: in a
+// private network namespace loopback reaches only the container, the bind IP also anything sharing the namespace, so
+// a host-network process on the same machine passes too.
 func isLocal(r *http.Request) bool {
 	for _, h := range []string{"X-Forwarded-For", "Forwarded", "X-Real-Ip"} {
 		if _, ok := r.Header[h]; ok {
 			return false
 		}
 	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
+	ip, ok := addrIP(r.RemoteAddr)
+	if !ok {
 		return false
 	}
+	if ip.IsLoopback() {
+		return true
+	}
+	local, ok := r.Context().Value(http.LocalAddrContextKey).(net.Addr)
+	if !ok {
+		return false
+	}
+	lip, ok := addrIP(local.String())
+	return ok && lip == ip
+}
+
+// addrIP parses a host:port's host, unmapped. The zone stays: a link-local address matches only on its own link.
+func addrIP(hostport string) (netip.Addr, bool) {
+	host, _, err := net.SplitHostPort(hostport)
+	if err != nil {
+		return netip.Addr{}, false
+	}
 	ip, err := netip.ParseAddr(host)
-	return err == nil && ip.Unmap().IsLoopback()
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	return ip.Unmap(), true
 }
 
 // readiness runs the checks for /readyz and remembers the last state for the transition log.
