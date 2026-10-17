@@ -28,10 +28,15 @@ func Context(parent context.Context) (ctx context.Context, stop context.CancelFu
 
 // Sleep waits d or until ctx ends, whichever is first, and reports whether the full d passed: a loop's
 // `for run.Sleep(ctx, every) { … }` stops on shutdown instead of finishing its nap first. d <= 0 returns at once,
-// true unless ctx has already ended.
+// true unless ctx has already ended. An ended ctx always wins, even over a due timer: select picks at random among
+// ready cases, so a tiny d (a throttle's already-due slot, a backoff near zero) after shutdown would otherwise report
+// true about half the time and run the loop once more.
 func Sleep(ctx context.Context, d time.Duration) bool {
+	if ctx.Err() != nil {
+		return false
+	}
 	if d <= 0 {
-		return ctx.Err() == nil
+		return true
 	}
 	t := time.NewTimer(d)
 	defer t.Stop()

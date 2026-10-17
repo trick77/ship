@@ -36,6 +36,16 @@ func TestSleep_whenContextEnds_thenFalseAtOnce(t *testing.T) {
 	}
 }
 
+func TestSleep_whenContextAlreadyEnded_thenFalseOverADueTimer(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for i := range 200 {
+		if Sleep(ctx, time.Nanosecond) {
+			t.Fatalf("call %d: Sleep(ended, 1ns) = true, want false", i)
+		}
+	}
+}
+
 func TestSleep_whenNoDuration_thenReportsTheContext(t *testing.T) {
 	if !Sleep(context.Background(), 0) {
 		t.Error("Sleep(live, 0) = false, want true")
