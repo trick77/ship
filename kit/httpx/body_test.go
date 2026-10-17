@@ -93,6 +93,12 @@ func TestMaxBody(t *testing.T) {
 		t.Errorf("read past the limit: err = %v, want *http.MaxBytesError at 8", readErr)
 	}
 
+	// A hand-built request without a body is an empty one, not a nil dereference.
+	r := &http.Request{Method: http.MethodPost, Header: http.Header{}}
+	if !DecodeJSONWith(httptest.NewRecorder(), r, &struct{}{}, 8, DecodeOptions{AllowEmpty: true}) {
+		t.Error("a nil body with AllowEmpty was refused")
+	}
+
 	// No body stays http.NoBody.
 	var body io.ReadCloser
 	MaxBody(8)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { body = r.Body })).
@@ -116,6 +122,9 @@ func TestBodyLimitBelowOnePanics(t *testing.T) {
 	for name, f := range map[string]func(){
 		"MaxBody":    func() { MaxBody(0) },
 		"DecodeJSON": func() { DecodeJSON(httptest.NewRecorder(), httptest.NewRequest("POST", "/", nil), &struct{}{}, 0) },
+		"DecodeJSON into a value": func() {
+			DecodeJSON(httptest.NewRecorder(), httptest.NewRequest("POST", "/", strings.NewReader("{}")), struct{}{}, 8)
+		},
 	} {
 		func() {
 			defer func() {

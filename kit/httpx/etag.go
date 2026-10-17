@@ -31,8 +31,10 @@ func NotModified(w http.ResponseWriter, r *http.Request, tag string) bool {
 	return true
 }
 
-// noneMatch reports whether an If-None-Match header names tag, or is "*" (weak comparison, RFC 9110 13.1.2).
+// noneMatch reports whether an If-None-Match header names tag, or is "*" (weak comparison, RFC 9110 13.1.2: W/ off
+// both sides).
 func noneMatch(header, tag string) bool {
+	tag = strings.TrimPrefix(tag, "W/")
 	for t := range strings.SplitSeq(header, ",") {
 		t = strings.TrimPrefix(strings.TrimSpace(t), "W/")
 		// An empty entry is no tag: with an empty tag it would turn every request without the header into a 304.

@@ -51,6 +51,13 @@ func TestNotModified(t *testing.T) {
 		})
 	}
 
+	// A weak tag the caller passes matches the browser's echo of it.
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.Header.Set("If-None-Match", `W/"v1"`)
+	if !NotModified(httptest.NewRecorder(), r, `W/"v1"`) {
+		t.Error("a weak tag did not match its own echo")
+	}
+
 	// An empty tag matches nothing, a request without the header least of all.
 	if NotModified(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil), "") {
 		t.Error("an empty tag answered 304 to a request without If-None-Match")

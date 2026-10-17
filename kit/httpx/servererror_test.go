@@ -90,6 +90,7 @@ func TestServerLogLevels(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	for _, tt := range []struct{ line, level string }{
 		{"http: panic serving 1.2.3.4:5: boom\ngoroutine 1\n", "ERROR"},
+		{"http2: panic serving 1.2.3.4:5: boom\ngoroutine 1\n", "ERROR"},
 		{"http: TLS handshake error from 1.2.3.4:5: EOF\n", "DEBUG"},
 		{"http: superfluous response.WriteHeader call\n", "WARN"},
 	} {
@@ -97,7 +98,7 @@ func TestServerLogLevels(t *testing.T) {
 		_, _ = serverLog{}.Write([]byte(tt.line))
 		var line map[string]any
 		_ = json.Unmarshal(logs.Bytes(), &line)
-		if line["level"] != tt.level || strings.HasPrefix(line["err"].(string), "http: ") {
+		if msg, _ := line["err"].(string); line["level"] != tt.level || strings.HasPrefix(msg, "http") {
 			t.Errorf("%q logged %v, want level %s without the http: prefix", tt.line, line, tt.level)
 		}
 	}

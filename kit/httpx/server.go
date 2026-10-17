@@ -33,11 +33,16 @@ func NewServer(addr string, h http.Handler) *http.Server {
 }
 
 // serverLog is NewServer's ErrorLog writer. It resolves slog.Default per line, so a logger set up after NewServer
-// still gets them. net/http prefixes its own lines "http: ", which says nothing the message does not.
+// still gets them. net/http prefixes its own lines "http: " (HTTP/2 "http2: "), which says nothing the message does
+// not.
 type serverLog struct{}
 
 func (serverLog) Write(p []byte) (int, error) {
-	msg := strings.TrimPrefix(strings.TrimRight(string(p), "\n"), "http: ")
+	msg := strings.TrimRight(string(p), "\n")
+	// The bundled HTTP/2 server writes to the same ErrorLog, as "http2: ".
+	for _, prefix := range []string{"http: ", "http2: "} {
+		msg = strings.TrimPrefix(msg, prefix)
+	}
 	lvl := slog.LevelWarn
 	switch {
 	case strings.HasPrefix(msg, "panic serving"):

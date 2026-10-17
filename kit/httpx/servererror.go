@@ -17,7 +17,8 @@ import (
 // A request whose client went away fails on whatever it was waiting for, with an error that hides the cancel (a
 // database driver's interrupt reads like corruption). That one is "request cancelled" at warn, with the cancel's
 // cause next to err: the client left, nothing broke. A deadline the server set (a timeout middleware) is no client
-// leaving: it stays "request failed" at error.
+// leaving: it stays "request failed" at error. Serve's Close after a drain overrun cancels the same way a client
+// does and logs at warn too; Serve's own error reports that overrun.
 //
 // The line goes to slog.Default, which logging.Setup installs. err is logged as it is: a cause that may embed a URL
 // with a token in its query is the caller's to redact first.

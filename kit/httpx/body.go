@@ -37,7 +37,7 @@ type DecodeOptions struct {
 
 // DecodeJSON reads at most limit bytes of JSON from r into dst. It answers 413 for a body over the limit and 400 for
 // one that does not parse, an empty one included, and returns false for both, so the caller just returns. Checks on
-// the fields stay with the caller. A limit below one panics.
+// the fields stay with the caller. A limit below one panics, and so does a dst that is not a non-nil pointer.
 func DecodeJSON(w http.ResponseWriter, r *http.Request, dst any, limit int64) bool {
 	return DecodeJSONWith(w, r, dst, limit, DecodeOptions{})
 }
@@ -47,9 +47,17 @@ func DecodeJSONWith(w http.ResponseWriter, r *http.Request, dst any, limit int64
 	if limit < 1 {
 		panic("httpx.DecodeJSON: limit below one byte")
 	}
+	if r.Body == nil {
+		// A server request always has one; a hand-built one (a test, an in-process call) may not: it is empty.
+		r.Body = http.NoBody
+	}
 	r.Body = http.MaxBytesReader(base(w), r.Body, limit)
 	dec := json.NewDecoder(r.Body)
 	err := dec.Decode(dst)
+	if invalid := (*json.InvalidUnmarshalError)(nil); errors.As(err, &invalid) {
+		// dst is not a non-nil pointer: the handler's bug, which a 400 would pass off as the client's.
+		panic("httpx.DecodeJSON: " + invalid.Error())
+	}
 	if err == nil {
 		// One value and nothing after it: a second one, or junk, is a body that does not parse, and the rest of an
 		// oversized body is read until the limit says so.
