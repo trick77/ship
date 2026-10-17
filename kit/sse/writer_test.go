@@ -85,15 +85,127 @@ func TestSendJSON(t *testing.T) {
 	}
 }
 
-func TestSendEventNewlinePanics(t *testing.T) {
-	s, _ := Open(httptest.NewRecorder())
+func TestSendEventNewline(t *testing.T) {
+	rec := httptest.NewRecorder()
+	s, _ := Open(rec)
 	defer s.Close()
-	defer func() {
-		if recover() == nil {
-			t.Error("an event name with a newline did not panic")
+	if err := s.Send("a\nb", "x"); !errors.Is(err, ErrEventName) {
+		t.Errorf("err = %v, want ErrEventName", err)
+	}
+	if rec.Body.Len() != 0 {
+		t.Errorf("wrote %q", rec.Body)
+	}
+	if err := s.Send("ok", "x"); err != nil {
+		t.Errorf("the refusal closed the stream: %v", err)
+	}
+}
+
+// deadlineWriter records the write deadlines armed on it and fails writes once broken is set.
+type deadlineWriter struct {
+	*httptest.ResponseRecorder
+	mu        sync.Mutex
+	deadlines []time.Time
+	broken    bool
+}
+
+func (d *deadlineWriter) SetWriteDeadline(t time.Time) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.deadlines = append(d.deadlines, t)
+	return nil
+}
+
+func (d *deadlineWriter) Write(b []byte) (int, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.broken {
+		return 0, errors.New("broken pipe")
+	}
+	return d.ResponseRecorder.Write(b)
+}
+
+func (d *deadlineWriter) breakIt() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.broken = true
+}
+
+func TestWriteDeadlines(t *testing.T) {
+	d := &deadlineWriter{ResponseRecorder: httptest.NewRecorder()}
+	s, _ := Open(d)
+	_ = s.Send("x", "y")
+	s.Close()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	// Open, Send, then Close clearing it for net/http's own final write.
+	if len(d.deadlines) != 3 || d.deadlines[0].IsZero() || time.Until(d.deadlines[1]) > WriteTimeout ||
+		!d.deadlines[2].IsZero() {
+		t.Errorf("deadlines = %v", d.deadlines)
+	}
+}
+
+func TestFailedWriteClosesStream(t *testing.T) {
+	d := &deadlineWriter{ResponseRecorder: httptest.NewRecorder()}
+	s, _ := Open(d)
+	defer s.Close()
+	d.breakIt()
+	if err := s.Send("x", "y"); err == nil {
+		t.Fatal("a failed write returned nil")
+	}
+	select {
+	case <-s.Done():
+	default:
+		t.Fatal("Done not closed after a failed write")
+	}
+	if err := s.Send("x", "y"); !errors.Is(err, ErrClosed) {
+		t.Errorf("write after a failure = %v, want ErrClosed", err)
+	}
+}
+
+// A keepalive to a reader that left closes the stream: the handler, idle on its hub, learns it from Done.
+func TestHeartbeatFailureClosesStream(t *testing.T) {
+	d := &deadlineWriter{ResponseRecorder: httptest.NewRecorder()}
+	s, _ := Open(d)
+	defer s.Close()
+	d.breakIt()
+	s.Heartbeat(5 * time.Millisecond)
+	select {
+	case <-s.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("Done not closed after a failed keepalive")
+	}
+}
+
+// The silence between writes never runs past interval, wherever the last write fell.
+func TestHeartbeatGap(t *testing.T) {
+	rec := syncRecorder{httptest.NewRecorder(), &sync.Mutex{}}
+	s, _ := Open(rec)
+	const interval = 40 * time.Millisecond
+	s.Heartbeat(interval)
+	time.Sleep(interval / 4)
+	_ = s.Send("x", "y") // just after where a fixed ticker would have started
+	sent := time.Now()
+	deadline := time.Now().Add(2 * time.Second)
+	for !strings.Contains(rec.body(), "keepalive") {
+		if time.Now().After(deadline) {
+			t.Fatal("no keepalive")
 		}
-	}()
-	_ = s.Send("a\nb", "x")
+		time.Sleep(time.Millisecond)
+	}
+	s.Close()
+	if gap := time.Since(sent); gap > interval+interval/2 {
+		t.Errorf("silence ran %v, interval %v", gap, interval)
+	}
+}
+
+func TestDoneOnClose(t *testing.T) {
+	s, _ := Open(httptest.NewRecorder())
+	s.Close()
+	select {
+	case <-s.Done():
+	default:
+		t.Error("Done open after Close")
+	}
 }
 
 func TestCloseRefusesLaterWrites(t *testing.T) {
