@@ -72,6 +72,37 @@ func TestServerErrorClientGone(t *testing.T) {
 	}
 }
 
+// A deadline the server set is a failure, not a client leaving.
+func TestServerErrorServerTimeout(t *testing.T) {
+	logs := useDefault(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 0)
+	defer cancel()
+	<-ctx.Done()
+	ServerError(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx),
+		ctx.Err(), "timed out")
+	if !strings.Contains(logs.String(), `"level":"ERROR"`) || !strings.Contains(logs.String(), `"msg":"request failed"`) {
+		t.Errorf("log line = %s, want request failed at error", logs)
+	}
+}
+
+func TestServerLogLevels(t *testing.T) {
+	logs := useDefault(t)
+	slog.SetDefault(slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	for _, tt := range []struct{ line, level string }{
+		{"http: panic serving 1.2.3.4:5: boom\ngoroutine 1\n", "ERROR"},
+		{"http: TLS handshake error from 1.2.3.4:5: EOF\n", "DEBUG"},
+		{"http: superfluous response.WriteHeader call\n", "WARN"},
+	} {
+		logs.Reset()
+		_, _ = serverLog{}.Write([]byte(tt.line))
+		var line map[string]any
+		_ = json.Unmarshal(logs.Bytes(), &line)
+		if line["level"] != tt.level || strings.HasPrefix(line["err"].(string), "http: ") {
+			t.Errorf("%q logged %v, want level %s without the http: prefix", tt.line, line, tt.level)
+		}
+	}
+}
+
 func TestServerErrorCarriesRequestID(t *testing.T) {
 	var logs bytes.Buffer
 	prev := slog.Default()

@@ -31,6 +31,11 @@ func TestDecodeJSON(t *testing.T) {
 			wantMsg: "url is required"},
 		{name: "too large", body: `{"url":"` + strings.Repeat("a", 64) + `"}`, wantCode: 413,
 			wantMsg: "request body too large"},
+		{name: "trailing space", body: `{"url":"x"}` + "\n ", wantOK: true, wantURL: "x"},
+		{name: "second value", body: `{"url":"x"} {"url":"y"}`, wantCode: 400, wantMsg: "malformed request"},
+		{name: "junk after", body: `{"url":"x"} junk`, wantCode: 400, wantMsg: "malformed request"},
+		{name: "over the limit after a value", body: `{"url":"x"}` + strings.Repeat(" ", 64), wantCode: 413,
+			wantMsg: "request body too large"},
 		{name: "empty allowed", body: ``, opts: DecodeOptions{AllowEmpty: true}, wantOK: true, wantURL: "default"},
 		{name: "malformed with empty allowed", body: `{`, opts: DecodeOptions{AllowEmpty: true}, wantCode: 400,
 			wantMsg: "malformed request"},
@@ -86,6 +91,14 @@ func TestMaxBody(t *testing.T) {
 	var mbe *http.MaxBytesError
 	if !errors.As(readErr, &mbe) || mbe.Limit != 8 {
 		t.Errorf("read past the limit: err = %v, want *http.MaxBytesError at 8", readErr)
+	}
+
+	// No body stays http.NoBody.
+	var body io.ReadCloser
+	MaxBody(8)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { body = r.Body })).
+		ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+	if body != http.NoBody {
+		t.Errorf("a GET's body = %T, want http.NoBody", body)
 	}
 
 	// The smaller of the two limits wins, whichever side it is on.

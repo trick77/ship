@@ -50,4 +50,9 @@ func TestNotModified(t *testing.T) {
 			}
 		})
 	}
+
+	// An empty tag matches nothing, a request without the header least of all.
+	if NotModified(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil), "") {
+		t.Error("an empty tag answered 304 to a request without If-None-Match")
+	}
 }

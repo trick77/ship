@@ -35,6 +35,10 @@ func NotModified(w http.ResponseWriter, r *http.Request, tag string) bool {
 func noneMatch(header, tag string) bool {
 	for t := range strings.SplitSeq(header, ",") {
 		t = strings.TrimPrefix(strings.TrimSpace(t), "W/")
+		// An empty entry is no tag: with an empty tag it would turn every request without the header into a 304.
+		if t == "" {
+			continue
+		}
 		if t == "*" || t == tag {
 			return true
 		}

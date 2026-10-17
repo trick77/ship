@@ -2,6 +2,7 @@ package httpx
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 
@@ -15,12 +16,14 @@ import (
 //
 // A request whose client went away fails on whatever it was waiting for, with an error that hides the cancel (a
 // database driver's interrupt reads like corruption). That one is "request cancelled" at warn, with the cancel's
-// cause next to err: the client left, nothing broke.
+// cause next to err: the client left, nothing broke. A deadline the server set (a timeout middleware) is no client
+// leaving: it stays "request failed" at error.
 //
-// err is logged as it is: a cause that may embed a URL with a token in its query is the caller's to redact first.
+// The line goes to slog.Default, which logging.Setup installs. err is logged as it is: a cause that may embed a URL
+// with a token in its query is the caller's to redact first.
 func ServerError(w http.ResponseWriter, r *http.Request, err error, msg string) {
 	ctx := r.Context()
-	if ctx.Err() != nil {
+	if errors.Is(ctx.Err(), context.Canceled) {
 		slog.WarnContext(ctx, "request cancelled", "cause", context.Cause(ctx).Error(), "client_message", msg,
 			logging.Err(err))
 	} else {

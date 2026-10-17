@@ -9,14 +9,17 @@ import (
 
 // MaxBody bounds every request body at limit bytes, so a handler that reads r.Body on its own cannot be fed an
 // unbounded one. DecodeJSON's per-route limit composes with it: the smaller one wins. A read past the limit fails
-// with *http.MaxBytesError and the connection closes after the response. A limit below one panics.
+// with *http.MaxBytesError and the connection closes after the response. A request without a body keeps
+// http.NoBody, which code further in may compare against. A limit below one panics.
 func MaxBody(limit int64) func(http.Handler) http.Handler {
 	if limit < 1 {
 		panic("httpx.MaxBody: limit below one byte")
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			r.Body = http.MaxBytesReader(base(w), r.Body, limit)
+			if r.Body != nil && r.Body != http.NoBody {
+				r.Body = http.MaxBytesReader(base(w), r.Body, limit)
+			}
 			next.ServeHTTP(w, r)
 		})
 	}
@@ -45,10 +48,20 @@ func DecodeJSONWith(w http.ResponseWriter, r *http.Request, dst any, limit int64
 		panic("httpx.DecodeJSON: limit below one byte")
 	}
 	r.Body = http.MaxBytesReader(base(w), r.Body, limit)
-	err := json.NewDecoder(r.Body).Decode(dst)
+	dec := json.NewDecoder(r.Body)
+	err := dec.Decode(dst)
+	if err == nil {
+		// One value and nothing after it: a second one, or junk, is a body that does not parse, and the rest of an
+		// oversized body is read until the limit says so.
+		if err = dec.Decode(&struct{}{}); errors.Is(err, io.EOF) {
+			return true
+		} else if err == nil {
+			err = errors.New("data after the JSON value")
+		}
+	}
 	var tooLarge *http.MaxBytesError
 	switch {
-	case err == nil, o.AllowEmpty && errors.Is(err, io.EOF):
+	case o.AllowEmpty && errors.Is(err, io.EOF):
 		return true
 	case errors.As(err, &tooLarge):
 		WriteError(w, http.StatusRequestEntityTooLarge, "request body too large")

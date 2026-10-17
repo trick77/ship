@@ -19,8 +19,9 @@ import (
 // NewServer is an http.Server with the canonical timeouts. ReadHeaderTimeout stops a slowloris holding connections;
 // IdleTimeout reaps keep-alives of tabs that are gone. No WriteTimeout and no ReadTimeout: either would cut a
 // server-sent event stream or a long download mid-flight. ErrorLog sends what net/http itself reports (a failed TLS
-// handshake, a superfluous WriteHeader, an accept error) to slog as an "http_server" line at warn, not unstructured
-// to stderr. Callers may override any field before Serve.
+// handshake, a superfluous WriteHeader, an accept error) to slog as an "http_server" line, not unstructured to
+// stderr: a panic net/http recovered at error, a failed TLS handshake (scanners, one per probe) at debug, the rest at
+// warn. Callers may override any field before Serve.
 func NewServer(addr string, h http.Handler) *http.Server {
 	return &http.Server{
 		Addr:              addr,
@@ -37,7 +38,14 @@ type serverLog struct{}
 
 func (serverLog) Write(p []byte) (int, error) {
 	msg := strings.TrimPrefix(strings.TrimRight(string(p), "\n"), "http: ")
-	slog.Warn("http_server", "err", msg)
+	lvl := slog.LevelWarn
+	switch {
+	case strings.HasPrefix(msg, "panic serving"):
+		lvl = slog.LevelError
+	case strings.HasPrefix(msg, "TLS handshake error"):
+		lvl = slog.LevelDebug
+	}
+	slog.Log(context.Background(), lvl, "http_server", "err", msg)
 	return len(p), nil
 }
 
