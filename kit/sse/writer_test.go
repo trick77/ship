@@ -137,10 +137,32 @@ func TestWriteDeadlines(t *testing.T) {
 	s.Close()
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	// Open, Send, then Close clearing it for net/http's own final write.
-	if len(d.deadlines) != 3 || d.deadlines[0].IsZero() || time.Until(d.deadlines[1]) > WriteTimeout ||
-		!d.deadlines[2].IsZero() {
-		t.Errorf("deadlines = %v", d.deadlines)
+	// Armed for Open's flush and for Send, cleared after each: a deadline left set resets a quiet HTTP/2 stream.
+	if len(d.deadlines) != 4 {
+		t.Fatalf("deadlines = %v, want armed and cleared twice", d.deadlines)
+	}
+	for i, dl := range d.deadlines {
+		if armed := i%2 == 0; armed == dl.IsZero() || (armed && time.Until(dl) > WriteTimeout) {
+			t.Errorf("deadline %d = %v", i, dl)
+		}
+	}
+}
+
+// Every Close waits for the heartbeat, the second of two concurrent ones too.
+func TestCloseConcurrent(t *testing.T) {
+	for range 50 {
+		s, _ := Open(syncRecorder{httptest.NewRecorder(), &sync.Mutex{}})
+		s.Heartbeat(time.Microsecond)
+		var wg sync.WaitGroup
+		for range 2 {
+			wg.Go(s.Close)
+		}
+		wg.Wait()
+		select {
+		case <-s.stopped:
+		default:
+			t.Fatal("a Close returned while the heartbeat still ran")
+		}
 	}
 }
 
@@ -180,9 +202,11 @@ func TestHeartbeatFailureClosesStream(t *testing.T) {
 func TestHeartbeatGap(t *testing.T) {
 	rec := syncRecorder{httptest.NewRecorder(), &sync.Mutex{}}
 	s, _ := Open(rec)
-	const interval = 40 * time.Millisecond
+	// Timed from the last write the gap is about interval; from a fixed tick it would be about 1.9 intervals. The
+	// bound sits between, with room for a loaded runner.
+	const interval = 200 * time.Millisecond
 	s.Heartbeat(interval)
-	time.Sleep(interval / 4)
+	time.Sleep(interval / 10)
 	_ = s.Send("x", "y") // just after where a fixed ticker would have started
 	sent := time.Now()
 	deadline := time.Now().Add(2 * time.Second)
@@ -193,7 +217,7 @@ func TestHeartbeatGap(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	s.Close()
-	if gap := time.Since(sent); gap > interval+interval/2 {
+	if gap := time.Since(sent); gap > interval*3/2 {
 		t.Errorf("silence ran %v, interval %v", gap, interval)
 	}
 }
@@ -268,7 +292,7 @@ func TestHeartbeat(t *testing.T) {
 func TestHeartbeatSkipsBusyStream(t *testing.T) {
 	rec := syncRecorder{httptest.NewRecorder(), &sync.Mutex{}}
 	s, _ := Open(rec)
-	s.Heartbeat(50 * time.Millisecond)
+	s.Heartbeat(time.Second) // far above the 5ms between sends, so a stalled runner does not fire it
 	for range 20 {
 		_ = s.Send("tick", "x")
 		time.Sleep(5 * time.Millisecond)

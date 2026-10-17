@@ -31,7 +31,9 @@ var ErrEventName = errors.New("sse: event name with a newline")
 
 // WriteTimeout bounds each write and its flush. httpx.NewServer sets no WriteTimeout (it would cut every stream),
 // so without this a client that stops reading but keeps the connection open blocks a write, and the handler, for
-// good. A write that runs past it fails and ends the stream.
+// good. A write that runs past it fails and ends the stream. The deadline is cleared once the write is through:
+// HTTP/2 resets a stream whose deadline passes even with nothing pending, so one left armed would cut every stream
+// that stays quiet that long, and on HTTP/1.1 it would outlive the response on a keep-alive connection.
 const WriteTimeout = 10 * time.Second
 
 // Writer is one event stream. Its writes are serialized: the handler, a heartbeat and a goroutine the handler started
@@ -50,7 +52,8 @@ type Writer struct {
 }
 
 // Open starts the stream: the event-stream headers, the 200, and a flush, so the client's EventSource (or fetch
-// reader) opens at once. Cache-Control is no-store, as for every API body: a stream describes live state.
+// reader) opens at once. Only ErrNoFlush comes before the 200; any other error is a failed flush after it, and the
+// handler just returns. Cache-Control is no-store, as for every API body: a stream describes live state.
 // X-Accel-Buffering: no turns off nginx's response buffering, which would batch events; Traefik does not buffer a
 // response unless a buffering middleware is configured, and must not be for a stream.
 func Open(w http.ResponseWriter) (*Writer, error) {
@@ -62,9 +65,11 @@ func Open(w http.ResponseWriter) (*Writer, error) {
 	h.Set("Cache-Control", "no-store")
 	h.Set("X-Accel-Buffering", "no")
 	s := &Writer{w: w, rc: http.NewResponseController(w), done: make(chan struct{}), last: time.Now()}
-	s.deadline()
+	s.arm()
 	w.WriteHeader(http.StatusOK)
-	if err := s.rc.Flush(); err != nil {
+	err := s.rc.Flush()
+	s.disarm()
+	if err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -86,10 +91,10 @@ func canFlush(w http.ResponseWriter) bool {
 	}
 }
 
-// deadline arms WriteTimeout for the next write. A writer without deadlines (a test recorder) has nothing to arm.
-func (s *Writer) deadline() {
-	_ = s.rc.SetWriteDeadline(time.Now().Add(WriteTimeout))
-}
+// arm sets WriteTimeout for the write about to run, disarm clears it after. A writer without deadlines (a test
+// recorder) has nothing to set.
+func (s *Writer) arm()    { _ = s.rc.SetWriteDeadline(time.Now().Add(WriteTimeout)) }
+func (s *Writer) disarm() { _ = s.rc.SetWriteDeadline(time.Time{}) }
 
 // Send writes one event and flushes it. event "" sends an unnamed one (the client's "message"). data may hold
 // newlines: each line goes out as its own data: field, which the client joins back with "\n"; a bare newline in a
@@ -128,11 +133,12 @@ func (s *Writer) write(frame string) error {
 	if s.closed {
 		return ErrClosed
 	}
-	s.deadline()
+	s.arm()
 	_, err := s.w.Write([]byte(frame))
 	if err == nil {
 		err = s.rc.Flush()
 	}
+	s.disarm()
 	if err != nil {
 		s.shut()
 		return err
@@ -198,18 +204,19 @@ func (s *Writer) beat(interval time.Duration, stop <-chan struct{}, stopped chan
 	}
 }
 
-// Close shuts the stream to further writes and stops the heartbeat, returning once it has stopped. Safe to call
-// more than once, and after a failed write.
+// Close shuts the stream to further writes and stops the heartbeat, returning once it has stopped: every caller
+// waits, so no keepalive is still writing when a handler returns. Safe to call more than once, concurrently, and
+// after a failed write.
 func (s *Writer) Close() {
 	s.mu.Lock()
 	s.shut()
 	stop, stopped := s.stop, s.stopped
-	s.stop = nil
+	s.stop = nil // stopped stays, for a later caller to wait on
 	s.mu.Unlock()
 	if stop != nil {
 		close(stop)
+	}
+	if stopped != nil {
 		<-stopped
 	}
-	// The handler is returning: net/http's own final write must not run into the last event's deadline.
-	_ = s.rc.SetWriteDeadline(time.Time{})
 }
