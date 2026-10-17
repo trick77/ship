@@ -11,15 +11,15 @@
 package spa
 
 import (
-	"crypto/sha256"
 	_ "embed"
-	"encoding/hex"
 	"io/fs"
 	"mime"
 	"net/http"
 	"path"
 	"strconv"
 	"strings"
+
+	"github.com/trick77/ship/kit/httpx"
 )
 
 // Go's MIME table has no .webmanifest and a scratch image has no /etc/mime.types, so without this http.FileServer
@@ -65,7 +65,7 @@ func Handler(dist fs.FS, o Options) http.Handler {
 	}
 	files := http.FileServer(http.FS(dist))
 	shell, shellErr := fs.ReadFile(dist, "index.html")
-	shellTag := etag(shell)
+	shellTag := httpx.ETag(shell)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
@@ -105,36 +105,16 @@ func Handler(dist fs.FS, o Options) http.Handler {
 		body, tag := shell, shellTag
 		if o.Index != nil {
 			body = o.Index(shell, r)
-			tag = etag(body)
+			tag = httpx.ETag(body)
 		}
-		w.Header().Set("ETag", tag)
-		// Only If-None-Match, by hand: http.ServeContent would also answer Range with a 206 slice of the shell and
-		// If-Match with a 412, neither of which a page load means.
-		if (r.Method == http.MethodGet || r.Method == http.MethodHead) && noneMatch(r.Header.Get("If-None-Match"), tag) {
-			w.WriteHeader(http.StatusNotModified)
+		// Not http.ServeContent: it would also answer Range with a 206 slice of the shell and If-Match with a 412,
+		// neither of which a page load means.
+		if httpx.NotModified(w, r, tag) {
 			return
 		}
 		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 		_, _ = w.Write(body)
 	})
-}
-
-// noneMatch reports whether an If-None-Match header names tag, or is "*" (weak comparison, RFC 9110 13.1.2).
-func noneMatch(header, tag string) bool {
-	for _, t := range strings.Split(header, ",") {
-		t = strings.TrimPrefix(strings.TrimSpace(t), "W/")
-		if t == "*" || t == tag {
-			return true
-		}
-	}
-	return false
-}
-
-// etag is a strong validator over the content: the embedded shell carries no modification time, so without one a
-// browser never gets a 304.
-func etag(b []byte) string {
-	sum := sha256.Sum256(b)
-	return `"` + hex.EncodeToString(sum[:8]) + `"`
 }
 
 // Built reports whether dist holds a real build rather than only the tracked .gitkeep; tests use it to tell the two

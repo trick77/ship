@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -16,14 +18,40 @@ import (
 
 // NewServer is an http.Server with the canonical timeouts. ReadHeaderTimeout stops a slowloris holding connections;
 // IdleTimeout reaps keep-alives of tabs that are gone. No WriteTimeout and no ReadTimeout: either would cut a
-// server-sent event stream or a long download mid-flight. Callers may override any field before Serve.
+// server-sent event stream or a long download mid-flight. ErrorLog sends what net/http itself reports (a failed TLS
+// handshake, a superfluous WriteHeader, an accept error) to slog as an "http_server" line, not unstructured to
+// stderr: a panic net/http recovered at error, a failed TLS handshake (scanners, one per probe) at debug, the rest at
+// warn. Callers may override any field before Serve.
 func NewServer(addr string, h http.Handler) *http.Server {
 	return &http.Server{
 		Addr:              addr,
 		Handler:           h,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
+		ErrorLog:          log.New(serverLog{}, "", 0),
 	}
+}
+
+// serverLog is NewServer's ErrorLog writer. It resolves slog.Default per line, so a logger set up after NewServer
+// still gets them. net/http prefixes its own lines "http: " (HTTP/2 "http2: "), which says nothing the message does
+// not.
+type serverLog struct{}
+
+func (serverLog) Write(p []byte) (int, error) {
+	msg := strings.TrimRight(string(p), "\n")
+	// The bundled HTTP/2 server writes to the same ErrorLog, as "http2: ".
+	for _, prefix := range []string{"http: ", "http2: "} {
+		msg = strings.TrimPrefix(msg, prefix)
+	}
+	lvl := slog.LevelWarn
+	switch {
+	case strings.HasPrefix(msg, "panic serving"):
+		lvl = slog.LevelError
+	case strings.HasPrefix(msg, "TLS handshake error"):
+		lvl = slog.LevelDebug
+	}
+	slog.Log(context.Background(), lvl, "http_server", "err", msg)
+	return len(p), nil
 }
 
 // Serve runs srv until ctx ends or the process gets SIGINT/SIGTERM, then drains in-flight requests for up to

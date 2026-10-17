@@ -1,6 +1,7 @@
-// Package httpx is the HTTP plumbing every service repeats: JSON responses, health probes, the server lifecycle, the
-// container healthcheck and the middleware chain (access log with request id, panic recovery, cross-origin
-// protection, security headers). net/http only.
+// Package httpx is the HTTP plumbing every service repeats: JSON responses and bounded JSON request bodies, the
+// logged 500, ETag revalidation, health probes, the server lifecycle, the container healthcheck and the middleware
+// chain (access log with request id, panic recovery, cross-origin protection, security headers, a body limit).
+// net/http only.
 package httpx
 
 import (
