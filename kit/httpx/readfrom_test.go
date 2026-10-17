@@ -118,20 +118,45 @@ func (r *slowReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-// One read goes out before the rest: a short first chunk is not held back for 512 bytes.
+// With a Content-Type set nothing is sniffed: one read goes out before the rest, a short first chunk is not held
+// back for 512 bytes. Without one, the hook waits for what net/http sniffs from.
 func TestHeaderHookReadFromFirstChunk(t *testing.T) {
-	var first string
-	hook := &headerHook{ResponseWriter: &readerFromRecorder{ResponseRecorder: httptest.NewRecorder()},
-		hook: func(_ http.Header, body []byte) { first = string(body) }}
-	if _, err := hook.ReadFrom(&slowReader{chunks: []string{"tick\n", "tock\n"}}); err != nil {
-		t.Fatal(err)
-	}
-	if first != "tick\n" {
-		t.Errorf("hook saw %q, want the first chunk alone", first)
+	for _, tt := range []struct {
+		ct, want string
+	}{{"text/event-stream", "tick\n"}, {"", "<!doctype html><p>page"}} {
+		var first string
+		base := &readerFromRecorder{ResponseRecorder: httptest.NewRecorder()}
+		if tt.ct != "" {
+			base.Header().Set("Content-Type", tt.ct)
+		}
+		hook := &headerHook{ResponseWriter: base, hook: func(_ http.Header, body []byte) { first = string(body) }}
+		src := &slowReader{chunks: []string{"tick\n", "tock\n"}}
+		if tt.ct == "" {
+			src = &slowReader{chunks: []string{"<", "!doctype html>", "<p>page"}}
+		}
+		if _, err := hook.ReadFrom(src); err != nil {
+			t.Fatal(err)
+		}
+		if first != tt.want {
+			t.Errorf("type %q: hook saw %q, want %q", tt.ct, first, tt.want)
+		}
 	}
 }
 
-// Behind a real server: a body over 512 bytes arrives whole, an HTML one gets CSP and a JSON one does not.
+// emptyReader returns (0, nil) for ever.
+type emptyReader struct{}
+
+func (emptyReader) Read([]byte) (int, error) { return 0, nil }
+
+func TestReadFromGivesUpOnNoProgress(t *testing.T) {
+	sw := NewStatusWriter(&readerFromRecorder{ResponseRecorder: httptest.NewRecorder()})
+	if _, err := sw.ReadFrom(emptyReader{}); !errors.Is(err, io.ErrNoProgress) {
+		t.Errorf("ReadFrom of a reader that never progresses = %v, want io.ErrNoProgress", err)
+	}
+}
+
+// Behind a real server: a body over 512 bytes arrives whole, an HTML one gets CSP and a JSON one does not. The source
+// hides strings.Reader's WriteTo, so io.Copy takes the ReadFrom path.
 func TestHeaderHookReadFromServer(t *testing.T) {
 	html := "<!doctype html><p>" + strings.Repeat("x", 2000)
 	json := `{"k":"` + strings.Repeat("x", 2000) + `"}`
@@ -142,7 +167,10 @@ func TestHeaderHookReadFromServer(t *testing.T) {
 				w.Header().Set("Content-Type", "application/json")
 				body = json
 			}
-			_, _ = io.Copy(w, strings.NewReader(body))
+			if _, ok := w.(io.ReaderFrom); !ok {
+				t.Error("the hook's writer has no ReadFrom")
+			}
+			_, _ = io.Copy(w, struct{ io.Reader }{strings.NewReader(body)})
 		})))
 	defer srv.Close()
 	for path, want := range map[string]string{"/": html, "/json": json} {
