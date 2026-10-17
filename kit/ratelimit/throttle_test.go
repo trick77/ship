@@ -192,19 +192,23 @@ func TestThrottleWait(t *testing.T) {
 	}
 }
 
-// endsAfter is a context that ends once its Err has been asked n times, with a Done that never fires: a cancel that
-// lands as the timer fires, after select has already picked the timer.
-type endsAfter struct {
+// endsInWait is a context that ends once its Done has been asked for (by the wait's select), with a Done that never
+// fires: a cancel that lands as the timer fires, after select has already picked the timer.
+type endsInWait struct {
 	context.Context
-	n int
+	waited bool
 }
 
-func (c *endsAfter) Err() error {
-	if c.n > 0 {
-		c.n--
-		return nil
+func (c *endsInWait) Done() <-chan struct{} {
+	c.waited = true
+	return nil
+}
+
+func (c *endsInWait) Err() error {
+	if c.waited {
+		return context.Canceled
 	}
-	return context.Canceled
+	return nil
 }
 
 // A caller whose ctx ends as its slot comes due gave up: Wait reports ctx's error and gives the slot back.
@@ -215,7 +219,7 @@ func TestThrottleWait_whenContextEndsAsTheSlotComesDue_thenGivesUp(t *testing.T)
 	if err := th.Wait(context.Background(), "k"); err != nil {
 		t.Fatalf("first Wait = %v", err)
 	}
-	if err := th.Wait(&endsAfter{Context: context.Background(), n: 2}, "k"); !errors.Is(err, context.Canceled) {
+	if err := th.Wait(&endsInWait{Context: context.Background()}, "k"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Wait = %v, want context.Canceled", err)
 	}
 	if got, want := th.next["k"], now.Add(time.Millisecond); !got.Equal(want) {

@@ -114,10 +114,7 @@ func (t *Throttle) Wait(ctx context.Context, key string) error {
 	if !ok {
 		return &ThrottledError{RetryAfter: d}
 	}
-	if d <= 0 {
-		return nil
-	}
-	// run.Sleep lets an ended ctx win over a slot coming due at the same instant: a caller that gave up never runs.
+	// run.Sleep lets a ctx ended by the time the slot comes due (an immediate one included) win over the slot.
 	if !run.Sleep(ctx, d) {
 		t.release(key, at)
 		return ctx.Err()

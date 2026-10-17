@@ -26,9 +26,9 @@ func Context(parent context.Context) (ctx context.Context, stop context.CancelFu
 	return ctx, stop
 }
 
-// Sleep waits d or until ctx ends, whichever is first, and reports whether the full d passed: a loop's
-// `for run.Sleep(ctx, every) { … }` stops on shutdown instead of finishing its nap first. An ended ctx always wins,
-// even over a due timer, on entry and when the timer fires: select picks at random among ready cases, so a tiny d (an
+// Sleep waits d or until ctx ends, whichever is first, and reports whether the full d passed with ctx still live: a
+// loop's `for run.Sleep(ctx, every) { … }` stops on shutdown instead of finishing its nap first. A ctx ended on entry
+// or by the time the timer fires wins over the timer: select picks at random among ready cases, so a tiny d (an
 // already-due slot, a backoff near zero) after shutdown, or a cancel landing as the timer fires, would otherwise
 // report true about half the time and run the loop once more. Otherwise d <= 0 returns true at once.
 func Sleep(ctx context.Context, d time.Duration) bool {
