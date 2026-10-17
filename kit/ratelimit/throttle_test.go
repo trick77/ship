@@ -192,6 +192,41 @@ func TestThrottleWait(t *testing.T) {
 	}
 }
 
+// endsInWait is a context that ends once its Done has been asked for (by the wait's select), with a Done that never
+// fires: a cancel that lands as the timer fires, after select has already picked the timer.
+type endsInWait struct {
+	context.Context
+	waited bool
+}
+
+func (c *endsInWait) Done() <-chan struct{} {
+	c.waited = true
+	return nil
+}
+
+func (c *endsInWait) Err() error {
+	if c.waited {
+		return context.Canceled
+	}
+	return nil
+}
+
+// A caller whose ctx ends as its slot comes due gave up: Wait reports ctx's error and gives the slot back.
+func TestThrottleWait_whenContextEndsAsTheSlotComesDue_thenGivesUp(t *testing.T) {
+	th := NewThrottle(time.Millisecond, time.Second)
+	now := time.Unix(1000, 0)
+	th.now = func() time.Time { return now }
+	if err := th.Wait(context.Background(), "k"); err != nil {
+		t.Fatalf("first Wait = %v", err)
+	}
+	if err := th.Wait(&endsInWait{Context: context.Background()}, "k"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Wait = %v, want context.Canceled", err)
+	}
+	if got, want := th.next["k"], now.Add(time.Millisecond); !got.Equal(want) {
+		t.Errorf("next = %s, want %s: the abandoned slot was not given back", got, want)
+	}
+}
+
 // The refusal carries the wait decided under its lock: a later RetryAfter reads the queue anew.
 func TestThrottleWait_whenRefused_thenErrorCarriesWait(t *testing.T) {
 	th := NewThrottle(500*time.Millisecond, time.Second)

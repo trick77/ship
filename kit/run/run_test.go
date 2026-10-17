@@ -46,6 +46,31 @@ func TestSleep_whenContextAlreadyEnded_thenFalseOverADueTimer(t *testing.T) {
 	}
 }
 
+// endsInWait is a context that ends once its Done has been asked for (by the wait's select), with a Done that never
+// fires: a cancel that lands as the timer fires, after select has already picked the timer.
+type endsInWait struct {
+	context.Context
+	waited bool
+}
+
+func (c *endsInWait) Done() <-chan struct{} {
+	c.waited = true
+	return nil
+}
+
+func (c *endsInWait) Err() error {
+	if c.waited {
+		return context.Canceled
+	}
+	return nil
+}
+
+func TestSleep_whenContextEndsAsTheTimerFires_thenFalse(t *testing.T) {
+	if Sleep(&endsInWait{Context: context.Background()}, time.Millisecond) {
+		t.Fatal("Sleep = true, want false: ctx had ended when the timer fired")
+	}
+}
+
 func TestSleep_whenNoDuration_thenReportsTheContext(t *testing.T) {
 	if !Sleep(context.Background(), 0) {
 		t.Error("Sleep(live, 0) = false, want true")
