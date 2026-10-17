@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/trick77/ship/kit/run"
 )
 
 // ErrThrottled is what Throttle.Wait's refusal of a key with more queued than maxWait covers matches with errors.Is.
@@ -115,15 +117,12 @@ func (t *Throttle) Wait(ctx context.Context, key string) error {
 	if d <= 0 {
 		return nil
 	}
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-		return nil
-	case <-ctx.Done():
+	// run.Sleep lets an ended ctx win over a slot coming due at the same instant: a caller that gave up never runs.
+	if !run.Sleep(ctx, d) {
 		t.release(key, at)
 		return ctx.Err()
 	}
+	return nil
 }
 
 // RetryAfter is how long until key's next Wait would be queued rather than refused with ErrThrottled, 0 when it would

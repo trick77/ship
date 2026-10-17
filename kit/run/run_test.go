@@ -46,6 +46,27 @@ func TestSleep_whenContextAlreadyEnded_thenFalseOverADueTimer(t *testing.T) {
 	}
 }
 
+// endsAfter is a context that ends once its Err has been asked n times, with a Done that never fires: a cancel that
+// lands as the timer fires, after select has already picked the timer.
+type endsAfter struct {
+	context.Context
+	n int
+}
+
+func (c *endsAfter) Err() error {
+	if c.n > 0 {
+		c.n--
+		return nil
+	}
+	return context.Canceled
+}
+
+func TestSleep_whenContextEndsAsTheTimerFires_thenFalse(t *testing.T) {
+	if Sleep(&endsAfter{Context: context.Background(), n: 1}, time.Millisecond) {
+		t.Fatal("Sleep = true, want false: ctx had ended when the timer fired")
+	}
+}
+
 func TestSleep_whenNoDuration_thenReportsTheContext(t *testing.T) {
 	if !Sleep(context.Background(), 0) {
 		t.Error("Sleep(live, 0) = false, want true")
