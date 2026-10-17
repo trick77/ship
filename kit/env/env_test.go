@@ -121,3 +121,30 @@ func TestFaultsInOrder(t *testing.T) {
 		}
 	}
 }
+
+// Whole days: time.ParseDuration has no day unit, and 720h is no way to write a 30-day TTL.
+func TestDurationDays(t *testing.T) {
+	for _, tt := range []struct {
+		in   string
+		want time.Duration
+	}{
+		{"30d", 30 * 24 * time.Hour}, {"0d", 0}, {" 7d ", 7 * 24 * time.Hour}, {"12h", 12 * time.Hour},
+		{"-1d", -24 * time.Hour}, {"+2d", 48 * time.Hour}, {"-24h", -24 * time.Hour},
+	} {
+		r := New(lookup(map[string]string{"D": tt.in}))
+		if got := r.Duration("D", time.Minute); got != tt.want || r.Err() != nil {
+			t.Errorf("Duration(%q) = %v, err %v; want %v", tt.in, got, r.Err(), tt.want)
+		}
+	}
+	for in, fault := range map[string]string{
+		"1.5d": "not a duration", "1d12h": "not a duration", "d": "not a duration", "-d": "not a duration",
+		"--1d": "not a duration", "1D": "not a duration",
+		"999999999999d": "out of range", "-999999999999d": "out of range",
+	} {
+		r := New(lookup(map[string]string{"D": in}))
+		if got := r.Duration("D", time.Minute); got != time.Minute || r.Err() == nil ||
+			!strings.Contains(r.Err().Error(), fault) {
+			t.Errorf("Duration(%q) = %v, err %v; want the default and %q", in, got, r.Err(), fault)
+		}
+	}
+}

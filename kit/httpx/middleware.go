@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"io"
 	"log/slog"
 	"maps"
 	"math"
@@ -105,6 +106,53 @@ func (w *StatusWriter) Write(b []byte) (int, error) {
 		w.status = http.StatusOK
 	}
 	return w.ResponseWriter.Write(b)
+}
+
+// ReadFrom hands src to the wrapped writer's ReadFrom: net/http's is sendfile for an *os.File (http.ServeContent of
+// a video), lost to a plain copy behind a wrapper. Before a header, the first bytes go through Write, so 200 is
+// recorded only once something is sent.
+func (w *StatusWriter) ReadFrom(src io.Reader) (int64, error) {
+	return firstThenReadFrom(w, w.ResponseWriter, w.status != 0, src)
+}
+
+// sniffLen is what http.DetectContentType reads, and net/http sniffs from.
+const sniffLen = 512
+
+// firstThenReadFrom writes src's first read through w (a wrapper's Write: it records the status, fires its hook)
+// unless sent says the header is out, then hands the rest to inner's ReadFrom. One read, not a full sniffLen: a
+// slow stream is never held back. Sendfile survives only while every writer under inner forwards ReadFrom too.
+func firstThenReadFrom(w io.Writer, inner http.ResponseWriter, sent bool, src io.Reader) (int64, error) {
+	var n int64
+	if !sent {
+		buf := make([]byte, sniffLen)
+		m, err := src.Read(buf)
+		for m == 0 && err == nil {
+			m, err = src.Read(buf)
+		}
+		if m > 0 {
+			k, werr := w.Write(buf[:m])
+			n = int64(k)
+			if werr != nil {
+				return n, werr
+			}
+		}
+		if err == io.EOF {
+			return n, nil
+		}
+		if err != nil {
+			return n, err
+		}
+	}
+	rest, err := readFrom(inner, src)
+	return n + rest, err
+}
+
+// readFrom is w's own ReadFrom, else a copy through Write alone (never back through a wrapper's ReadFrom).
+func readFrom(w http.ResponseWriter, src io.Reader) (int64, error) {
+	if rf, ok := w.(io.ReaderFrom); ok {
+		return rf.ReadFrom(src)
+	}
+	return io.Copy(struct{ io.Writer }{w}, src)
 }
 
 // Unwrap is the wrapped writer, for http.ResponseController.
@@ -514,6 +562,12 @@ func (w *headerHook) Write(b []byte) (int, error) {
 	}
 	w.fire(b)
 	return w.ResponseWriter.Write(b)
+}
+
+// ReadFrom keeps the wrapped writer's ReadFrom (sendfile). Before the header, the first bytes go through Write, so
+// the hook sees what net/http would sniff.
+func (w *headerHook) ReadFrom(src io.Reader) (int64, error) {
+	return firstThenReadFrom(w, w.ResponseWriter, w.done, src)
 }
 
 // FlushError is what http.ResponseController.Flush calls.

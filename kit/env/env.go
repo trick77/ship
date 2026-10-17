@@ -107,19 +107,41 @@ func (r *Reader) Bool(name string, def bool) bool {
 	return def
 }
 
-// Duration is name parsed by time.ParseDuration ("90s", "15m"), or def when unset. A bare number is a fault: its
-// unit is a guess.
+// Duration is name parsed by time.ParseDuration ("90s", "-15m"), or whole days ("30d", "-1d"), or def when unset.
+// A bare number is a fault: its unit is a guess. Days stand alone ("1d12h" is a fault): a TTL or a retention is days.
 func (r *Reader) Duration(name string, def time.Duration) time.Duration {
 	v, ok := r.raw(name)
 	if !ok {
 		return def
 	}
+	if d, isDays, inRange := days(v); isDays {
+		if !inRange {
+			r.Fail("%s: %q is out of range", name, v)
+			return def
+		}
+		return d
+	}
 	d, err := time.ParseDuration(v)
 	if err != nil {
-		r.Fail("%s: %q is not a duration (e.g. 30s, 5m)", name, v)
+		r.Fail("%s: %q is not a duration (e.g. 30s, 5m, 7d)", name, v)
 		return def
 	}
 	return d
+}
+
+// days is v as whole days, "[+-]<digits>d"; isDays is false for any other form, inRange false past time.Duration's.
+func days(v string) (d time.Duration, isDays, inRange bool) {
+	n, ok := strings.CutSuffix(v, "d")
+	digits := strings.TrimLeft(n, "+-")
+	if !ok || digits == "" || len(n)-len(digits) > 1 || strings.Trim(digits, "0123456789") != "" {
+		return 0, false, false
+	}
+	const day = 24 * time.Hour
+	c, err := strconv.ParseInt(n, 10, 64)
+	if err != nil || c > int64(math.MaxInt64/day) || c < int64(math.MinInt64/day) {
+		return 0, true, false
+	}
+	return time.Duration(c) * day, true, true
 }
 
 // URL is name parsed as an absolute http(s) URL, or def when unset; nil when both are empty. A relative URL or
