@@ -16,11 +16,14 @@ import (
 // Claims is the identity a login yields and a session carries. Subject is the provider's stable id; the rest is
 // display material and may be empty.
 type Claims struct {
-	Subject           string   `json:"sub"`
-	PreferredUsername string   `json:"preferred_username,omitempty"`
-	Email             string   `json:"email,omitempty"`
-	Name              string   `json:"name,omitempty"`
-	Groups            []string `json:"groups,omitempty"`
+	Subject           string `json:"sub"`
+	PreferredUsername string `json:"preferred_username,omitempty"`
+	Email             string `json:"email,omitempty"`
+	// EmailVerified is the provider vouching for Email: only an explicit email_verified true sets it, an absent
+	// claim is "not stated". An app that matches accounts by email checks it first.
+	EmailVerified bool     `json:"email_verified,omitempty"`
+	Name          string   `json:"name,omitempty"`
+	Groups        []string `json:"groups,omitempty"`
 }
 
 // HasGroup reports whether the claims carry group, case-insensitively: IdPs disagree on case and an operator types
