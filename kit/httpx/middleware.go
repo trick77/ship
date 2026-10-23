@@ -79,7 +79,9 @@ func newRequestID() string {
 
 // StatusWriter records the status a handler sent, for a middleware that logs or counts it (AccessLog and Recover
 // here; a service's own). Flush and Hijack keep the http.Flusher and http.Hijacker assertions working through it;
-// Unwrap keeps the rest of http.ResponseController (deadlines).
+// Unwrap keeps the rest of http.ResponseController (deadlines); ReadFrom keeps sendfile. A type that embeds it and
+// overrides Write (a byte counter, gzip) inherits that ReadFrom, which never calls the outer Write: io.Copy would
+// go around it, so such a type overrides ReadFrom too, or wraps a StatusWriter in a field instead.
 type StatusWriter struct {
 	http.ResponseWriter
 	status int
@@ -113,7 +115,7 @@ func (w *StatusWriter) Write(b []byte) (int, error) {
 // recorded only once something is sent. Sendfile survives only while every writer between this one and net/http
 // forwards ReadFrom as well: a service's own wrapper that lacks it turns the copy back into a userspace one.
 func (w *StatusWriter) ReadFrom(src io.Reader) (int64, error) {
-	return firstThenReadFrom(w, w.ResponseWriter, w.status != 0, 1, src)
+	return firstThenReadFrom(w, w.ResponseWriter, w.status != 0, src)
 }
 
 // sniffLen is what http.DetectContentType reads, and net/http sniffs from.
@@ -122,16 +124,18 @@ const sniffLen = 512
 // maxEmptyReads bounds a reader that returns (0, nil) without end, as bufio does.
 const maxEmptyReads = 100
 
-// firstThenReadFrom hands src to inner's ReadFrom. Unless sent says the header is out, at least need bytes of src (all
-// of it when shorter) first go through w's Write (a wrapper's Write: it records the status, fires its hook). Without
-// a ReadFrom under it, the whole copy goes through w's Write: no sniff buffer, nothing to keep.
-func firstThenReadFrom(w io.Writer, inner http.ResponseWriter, sent bool, need int, src io.Reader) (int64, error) {
-	rf, ok := inner.(io.ReaderFrom)
-	if !ok {
-		return io.Copy(struct{ io.Writer }{w}, src)
-	}
+// firstThenReadFrom hands src to inner's ReadFrom, or copies it through w's Write when inner has none (HTTP/2's
+// writer). Unless sent says the header is out, the first bytes of src go through w's Write (a wrapper's Write: it
+// records the status, fires its hook): what net/http sniffs from, a full sniffLen (all of src when shorter), when no
+// Content-Type is set, so every wrapper on the way down hands a hook the same head whatever their order; one read
+// when the type is set and nothing is sniffed, so a stream is not held back.
+func firstThenReadFrom(w io.Writer, inner http.ResponseWriter, sent bool, src io.Reader) (int64, error) {
 	var n int64
 	if !sent {
+		need := 1
+		if inner.Header().Get("Content-Type") == "" {
+			need = sniffLen
+		}
 		buf := make([]byte, sniffLen)
 		m, err := readAtLeast(src, buf, need)
 		if m > 0 {
@@ -141,14 +145,18 @@ func firstThenReadFrom(w io.Writer, inner http.ResponseWriter, sent bool, need i
 				return n, werr
 			}
 		}
-		if errors.Is(err, io.EOF) {
+		if err == io.EOF { //nolint:errorlint // the clean end alone, as io.Copy: a wrapped io.EOF is a truncation
 			return n, nil
 		}
 		if err != nil {
 			return n, err
 		}
 	}
-	rest, err := rf.ReadFrom(src)
+	if rf, ok := inner.(io.ReaderFrom); ok {
+		rest, err := rf.ReadFrom(src)
+		return n + rest, err
+	}
+	rest, err := io.Copy(struct{ io.Writer }{w}, src)
 	return n + rest, err
 }
 
@@ -581,14 +589,9 @@ func (w *headerHook) Write(b []byte) (int, error) {
 }
 
 // ReadFrom keeps the wrapped writer's ReadFrom (sendfile). Before the header, the first bytes go through Write, so
-// the hook decides on what net/http sniffs: a full sniffLen when no Content-Type is set (net/http's ReadFrom reads
-// as much before it sniffs), one read when the type is set and nothing is sniffed, so a stream is not held back.
+// the hook decides on what net/http sniffs (firstThenReadFrom has the rule).
 func (w *headerHook) ReadFrom(src io.Reader) (int64, error) {
-	need := 1
-	if w.Header().Get("Content-Type") == "" {
-		need = sniffLen
-	}
-	return firstThenReadFrom(w, w.ResponseWriter, w.done, need, src)
+	return firstThenReadFrom(w, w.ResponseWriter, w.done, src)
 }
 
 // FlushError is what http.ResponseController.Flush calls.

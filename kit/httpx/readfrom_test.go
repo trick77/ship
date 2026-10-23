@@ -2,6 +2,7 @@ package httpx
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -27,6 +28,7 @@ type noReaderFrom struct{ http.ResponseWriter }
 
 func TestStatusWriterReadFrom(t *testing.T) {
 	base := &readerFromRecorder{ResponseRecorder: httptest.NewRecorder()}
+	base.Header().Set("Content-Type", "video/mp4")
 	sw := NewStatusWriter(base)
 	n, err := sw.ReadFrom(strings.NewReader("body"))
 	if err != nil || n != 4 {
@@ -37,6 +39,17 @@ func TestStatusWriterReadFrom(t *testing.T) {
 	}
 	if sw.Status() != http.StatusOK || base.Body.String() != "body" {
 		t.Errorf("status %d, body %q", sw.Status(), base.Body.String())
+	}
+
+	// No type: the sniffed head goes through Write, the rest still reaches the base's ReadFrom.
+	base = &readerFromRecorder{ResponseRecorder: httptest.NewRecorder()}
+	sw = NewStatusWriter(base)
+	long := strings.Repeat("b", 4096)
+	if n, err := sw.ReadFrom(strings.NewReader(long)); err != nil || n != 4096 || base.Body.String() != long {
+		t.Fatalf("untyped ReadFrom = %d, %v, body %d bytes", n, err, base.Body.Len())
+	}
+	if base.readFrom != 1 {
+		t.Errorf("untyped: base ReadFrom called %d times, want 1 (sendfile lost)", base.readFrom)
 	}
 
 	// A header written first stands.
@@ -186,5 +199,55 @@ func TestHeaderHookReadFromServer(t *testing.T) {
 		if csp := res.Header.Get("Content-Security-Policy"); (csp != "") != (path == "/") {
 			t.Errorf("%s: CSP %q", path, csp)
 		}
+	}
+}
+
+// Behind Recover's StatusWriter the hook still decides on what net/http sniffs: a short first read of an HTML body
+// with no Content-Type is not typed text/plain (and left without CSP) from its first byte.
+func TestChainReadFromSniffsShortFirstRead(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	h := Chain(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.Copy(w, &slowReader{chunks: []string{"<", "!doctype html>", "<p>page"}})
+	}),
+		AccessLog(log, AccessLogOptions{}),
+		SecurityHeadersWith(SecurityOptions{HTMLOnly: true}),
+		RecoverWith(log, RecoverOptions{}),
+	)
+	base := &readerFromRecorder{ResponseRecorder: httptest.NewRecorder()}
+	h.ServeHTTP(base, httptest.NewRequest(http.MethodGet, "/", nil))
+	if base.Header().Get("Content-Security-Policy") == "" {
+		t.Error("an HTML body whose first read is short got no CSP")
+	}
+	if base.Body.String() != "<!doctype html><p>page" {
+		t.Errorf("body = %q", base.Body.String())
+	}
+}
+
+// A writer with no ReadFrom under the hook (HTTP/2's) sniffs the same way: the copy fallback reads what net/http
+// sniffs before the first Write.
+func TestHeaderHookReadFromNoReaderFromSniffs(t *testing.T) {
+	var first string
+	hook := &headerHook{ResponseWriter: noReaderFrom{httptest.NewRecorder()}, hook: func(_ http.Header, body []byte) {
+		first = string(body)
+	}}
+	if _, err := hook.ReadFrom(&slowReader{chunks: []string{"<", "!doctype html>", "<p>page"}}); err != nil {
+		t.Fatal(err)
+	}
+	if first != "<!doctype html><p>page" {
+		t.Errorf("hook saw %q, want the whole sniffed head", first)
+	}
+}
+
+// wrappedEOFReader fails with an error that wraps io.EOF: a truncation, not the clean end io.Copy accepts.
+type wrappedEOFReader struct{}
+
+func (wrappedEOFReader) Read(p []byte) (int, error) {
+	return copy(p, "partial"), fmt.Errorf("upstream closed: %w", io.EOF)
+}
+
+func TestReadFromWrappedEOFIsAnError(t *testing.T) {
+	sw := NewStatusWriter(&readerFromRecorder{ResponseRecorder: httptest.NewRecorder()})
+	if _, err := sw.ReadFrom(wrappedEOFReader{}); err == nil {
+		t.Error("ReadFrom of a source failing with a wrapped io.EOF = nil error, want the truncation")
 	}
 }
