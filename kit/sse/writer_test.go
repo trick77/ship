@@ -100,6 +100,33 @@ func TestSendEventNewline(t *testing.T) {
 	}
 }
 
+func TestSendEvents(t *testing.T) {
+	d := &deadlineWriter{ResponseRecorder: httptest.NewRecorder()}
+	s, _ := Open(d)
+	defer s.Close()
+	opened := len(d.deadlines)
+	if err := s.SendEvents([]Event{{Name: "a", Data: "1"}, {Data: "x\ny"}, {Name: "b", Data: ""}}); err != nil {
+		t.Fatal(err)
+	}
+	if want := "event: a\ndata: 1\n\ndata: x\ndata: y\n\nevent: b\ndata: \n\n"; d.Body.String() != want {
+		t.Errorf("wire = %q, want %q", d.Body, want)
+	}
+	// One write, one deadline armed and cleared: the batch is a single write.
+	if got := len(d.deadlines) - opened; got != 2 {
+		t.Errorf("%d deadlines set for one batch, want 2 (arm, disarm)", got)
+	}
+	if err := s.SendEvents(nil); err != nil || len(d.deadlines)-opened != 2 {
+		t.Errorf("empty batch: err %v, %d deadlines", err, len(d.deadlines)-opened)
+	}
+	before := d.Body.Len()
+	if err := s.SendEvents([]Event{{Name: "ok", Data: "1"}, {Name: "a\nb"}}); !errors.Is(err, ErrEventName) {
+		t.Errorf("err = %v, want ErrEventName", err)
+	}
+	if d.Body.Len() != before {
+		t.Errorf("a refused batch wrote %q", d.Body.String()[before:])
+	}
+}
+
 // deadlineWriter records the write deadlines armed on it and fails writes once broken is set.
 type deadlineWriter struct {
 	*httptest.ResponseRecorder
