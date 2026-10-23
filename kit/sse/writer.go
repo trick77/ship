@@ -100,19 +100,38 @@ func (s *Writer) disarm() { _ = s.rc.SetWriteDeadline(time.Time{}) }
 // newlines: each line goes out as its own data: field, which the client joins back with "\n"; a bare newline in a
 // single field would end the event early. An event name with a newline is refused with ErrEventName.
 func (s *Writer) Send(event, data string) error {
-	if strings.ContainsAny(event, "\r\n") {
-		return ErrEventName
+	return s.SendEvents([]Event{{Name: event, Data: data}})
+}
+
+// Event is one event of SendEvents, framed as Send frames its arguments.
+type Event struct {
+	Name string
+	Data string
+}
+
+// SendEvents writes events in one write and one flush: a backlog (a client catching up on a stream it reattached to)
+// arrives at once instead of as one network write, and one client render, per event. The batch shares one
+// WriteTimeout, so a caller bounds its size for the slowest link it serves. An event name with a newline refuses the
+// whole batch with ErrEventName, nothing sent; an empty batch sends nothing.
+func (s *Writer) SendEvents(events []Event) error {
+	if len(events) == 0 {
+		return nil
 	}
 	var b strings.Builder
-	if event != "" {
-		b.WriteString("event: " + event + "\n")
+	for _, e := range events {
+		if strings.ContainsAny(e.Name, "\r\n") {
+			return ErrEventName
+		}
+		if e.Name != "" {
+			b.WriteString("event: " + e.Name + "\n")
+		}
+		data := strings.ReplaceAll(e.Data, "\r\n", "\n")
+		data = strings.ReplaceAll(data, "\r", "\n")
+		for line := range strings.SplitSeq(data, "\n") {
+			b.WriteString("data: " + line + "\n")
+		}
+		b.WriteString("\n")
 	}
-	data = strings.ReplaceAll(data, "\r\n", "\n")
-	data = strings.ReplaceAll(data, "\r", "\n")
-	for line := range strings.SplitSeq(data, "\n") {
-		b.WriteString("data: " + line + "\n")
-	}
-	b.WriteString("\n")
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.write(b.String())
