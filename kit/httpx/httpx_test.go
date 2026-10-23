@@ -378,7 +378,8 @@ func TestRecover(t *testing.T) {
 		t.Errorf("log = %s", logs.String())
 	}
 
-	// The handler wrote first: its status and body stand, nothing is appended, the panic is logged.
+	// The handler wrote first: nothing is appended, the panic is logged, and ErrAbortHandler aborts the cut-off
+	// response instead of net/http ending it as a complete one.
 	logs.Reset()
 	wrote := Recover(slog.New(slog.NewTextHandler(&logs, nil)))(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
@@ -386,7 +387,14 @@ func TestRecover(t *testing.T) {
 		panic("late")
 	}))
 	rec = httptest.NewRecorder()
-	wrote.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/x", nil))
+	func() {
+		defer func() {
+			if r := recover(); r != http.ErrAbortHandler { //nolint:errorlint // the exact sentinel raised
+				t.Errorf("a panic after the header = %v, want ErrAbortHandler", r)
+			}
+		}()
+		wrote.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/x", nil))
+	}()
 	if rec.Code != http.StatusAccepted || rec.Body.String() != "partial" {
 		t.Errorf("after write = %d %q", rec.Code, rec.Body.String())
 	}
@@ -785,5 +793,24 @@ func TestServeBindError(t *testing.T) {
 	defer l.Close()
 	if err := Serve(context.Background(), NewServer(l.Addr().String(), http.NotFoundHandler()), time.Second); err == nil {
 		t.Error("Serve on a taken port = nil")
+	}
+}
+
+// Behind a real server a panic after the header reaches the client as a broken response, never a complete 200.
+func TestRecoverAbortsAStartedResponse(t *testing.T) {
+	srv := httptest.NewServer(Recover(slog.New(slog.NewTextHandler(io.Discard, nil)))(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{"items":[1,`))
+			w.(http.Flusher).Flush()
+			panic("late")
+		})))
+	defer srv.Close()
+	res, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	if _, err := io.ReadAll(res.Body); err == nil {
+		t.Error("the cut-off body read as complete")
 	}
 }

@@ -427,13 +427,15 @@ func RecoverWith(log *slog.Logger, o RecoverOptions) func(http.Handler) http.Han
 				log.ErrorContext(r.Context(), "Panic recovered", "panic", rec, "path", path,
 					"stack", string(debug.Stack()))
 				// Headers already sent: a 500 now would be a superfluous WriteHeader and an error body glued to the
-				// handler's output. The log line is all there is.
-				if sw.status == 0 {
-					h := w.Header()
-					clear(h)
-					maps.Copy(h, snap)
-					WriteError(w, http.StatusInternalServerError, "internal server error")
+				// handler's output, and returning would let net/http end the cut-off body as a complete response.
+				// ErrAbortHandler aborts it (no closing chunk, an RST_STREAM) without net/http's own stack dump.
+				if sw.status != 0 {
+					panic(http.ErrAbortHandler)
 				}
+				h := w.Header()
+				clear(h)
+				maps.Copy(h, snap)
+				WriteError(w, http.StatusInternalServerError, "internal server error")
 			}()
 			next.ServeHTTP(sw, r)
 		})
