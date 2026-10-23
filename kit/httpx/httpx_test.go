@@ -378,7 +378,8 @@ func TestRecover(t *testing.T) {
 		t.Errorf("log = %s", logs.String())
 	}
 
-	// The handler wrote first: its status and body stand, nothing is appended, the panic is logged.
+	// The handler wrote first: nothing is appended, the panic is logged, and ErrAbortHandler aborts the cut-off
+	// response instead of net/http ending it as a complete one.
 	logs.Reset()
 	wrote := Recover(slog.New(slog.NewTextHandler(&logs, nil)))(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
@@ -386,7 +387,14 @@ func TestRecover(t *testing.T) {
 		panic("late")
 	}))
 	rec = httptest.NewRecorder()
-	wrote.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/x", nil))
+	func() {
+		defer func() {
+			if r := recover(); r != http.ErrAbortHandler { //nolint:errorlint // the exact sentinel raised
+				t.Errorf("a panic after the header = %v, want ErrAbortHandler", r)
+			}
+		}()
+		wrote.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/x", nil))
+	}()
 	if rec.Code != http.StatusAccepted || rec.Body.String() != "partial" {
 		t.Errorf("after write = %d %q", rec.Code, rec.Body.String())
 	}
@@ -460,6 +468,8 @@ func TestSecurityHeadersWith(t *testing.T) {
 		case "/sniffed":
 			_, _ = w.Write([]byte("<!doctype html><p>no type set"))
 		case "/sniffed-text":
+			_, _ = w.Write([]byte(strings.Repeat("plain words ", 50)))
+		case "/short-text":
 			_, _ = w.Write([]byte("plain words"))
 		case "/untyped":
 			w.WriteHeader(http.StatusTeapot)
@@ -501,9 +511,9 @@ func TestSecurityHeadersWith(t *testing.T) {
 	if got := get("/healthz").Get("X-Robots-Tag"); got != "noindex, nofollow" {
 		t.Errorf("probe X-Robots-Tag = %q", got)
 	}
-	// No Content-Type set: the sniffed type decides, and with nothing to sniff the page default holds.
+	// No Content-Type set: a full sniffed head decides; a short one, or nothing to sniff, keeps the page default.
 	// SVG and XHTML run script like HTML; a raster image does not.
-	for p, html := range map[string]bool{"/sniffed": true, "/sniffed-text": false, "/untyped": true,
+	for p, html := range map[string]bool{"/sniffed": true, "/sniffed-text": false, "/short-text": true, "/untyped": true,
 		"/icon.svg": true, "/page.xhtml": true, "/photo.png": false} {
 		if got := get(p).Get("Content-Security-Policy") != ""; got != html {
 			t.Errorf("%s: CSP sent %v, want %v", p, got, html)
@@ -539,7 +549,7 @@ func TestAccessLog_flushAndHijack(t *testing.T) {
 			_, _ = rw.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nhi")
 			_ = rw.Flush()
 		}
-	}), AccessLog(log, AccessLogOptions{}), Recover(log)))
+	}), AccessLog(log, AccessLogOptions{RoutineLevel: slog.LevelInfo}), Recover(log)))
 	defer srv.Close()
 	defer close(release)
 
@@ -785,5 +795,73 @@ func TestServeBindError(t *testing.T) {
 	defer l.Close()
 	if err := Serve(context.Background(), NewServer(l.Addr().String(), http.NotFoundHandler()), time.Second); err == nil {
 		t.Error("Serve on a taken port = nil")
+	}
+}
+
+// Behind a real server a panic after the header reaches the client as a broken response, never a complete 200.
+func TestRecoverAbortsAStartedResponse(t *testing.T) {
+	srv := httptest.NewServer(Recover(slog.New(slog.NewTextHandler(io.Discard, nil)))(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{"items":[1,`))
+			w.(http.Flusher).Flush()
+			panic("late")
+		})))
+	defer srv.Close()
+	res, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	if _, err := io.ReadAll(res.Body); err == nil {
+		t.Error("the cut-off body read as complete")
+	}
+}
+
+// AccessLog's line for a response Recover aborted says so, and the abort still reaches net/http.
+func TestAccessLogMarksAnAbortedResponse(t *testing.T) {
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	h := Chain(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("partial"))
+		panic("late")
+	}), AccessLog(log, AccessLogOptions{RoutineLevel: slog.LevelInfo}), Recover(log))
+	func() {
+		defer func() {
+			if r := recover(); r != http.ErrAbortHandler { //nolint:errorlint // the exact sentinel raised
+				t.Errorf("abort not passed on: %v", r)
+			}
+		}()
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/x", nil))
+	}()
+	if !strings.Contains(logs.String(), "msg=http_request") || !strings.Contains(logs.String(), "aborted=true") ||
+		!strings.Contains(logs.String(), "status=200") {
+		t.Errorf("access line = %s", logs.String())
+	}
+}
+
+// hijackRecorder is a writer whose connection can be taken.
+type hijackRecorder struct{ *httptest.ResponseRecorder }
+
+func (hijackRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) { return nil, nil, nil }
+
+// A panic after the handler took the connection aborts: no 500 goes on a connection that has left HTTP.
+func TestRecoverAfterHijackAborts(t *testing.T) {
+	rec := hijackRecorder{httptest.NewRecorder()}
+	h := Recover(slog.New(slog.NewTextHandler(io.Discard, nil)))(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if _, _, err := http.NewResponseController(w).Hijack(); err != nil {
+			t.Fatal(err)
+		}
+		panic("late")
+	}))
+	func() {
+		defer func() {
+			if r := recover(); r != http.ErrAbortHandler { //nolint:errorlint // the exact sentinel raised
+				t.Errorf("a panic after Hijack = %v, want ErrAbortHandler", r)
+			}
+		}()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	}()
+	if rec.Body.Len() != 0 {
+		t.Errorf("an answer went on the hijacked connection: %q", rec.Body.String())
 	}
 }
