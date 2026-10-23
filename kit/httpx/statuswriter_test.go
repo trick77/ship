@@ -1,8 +1,10 @@
 package httpx
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -39,5 +41,27 @@ func TestStatusWriter(t *testing.T) {
 	sw.WriteHeader(http.StatusOK)
 	if sw.Status() != http.StatusOK {
 		t.Errorf("status after 103 then 200 = %d, want 200", sw.Status())
+	}
+}
+
+// countingWriter is a service's own wrapper: it embeds StatusWriter and overrides Write.
+type countingWriter struct {
+	*StatusWriter
+	n int
+}
+
+func (w *countingWriter) Write(b []byte) (int, error) {
+	w.n += len(b)
+	return w.StatusWriter.Write(b)
+}
+
+// StatusWriter has no ReadFrom of its own, so io.Copy into an embedding wrapper still goes through its Write.
+func TestStatusWriterEmbeddingSeesEveryByte(t *testing.T) {
+	cw := &countingWriter{StatusWriter: NewStatusWriter(&readerFromRecorder{ResponseRecorder: httptest.NewRecorder()})}
+	if _, err := io.Copy(cw, struct{ io.Reader }{strings.NewReader("twelve bytes")}); err != nil {
+		t.Fatal(err)
+	}
+	if cw.n != 12 {
+		t.Errorf("the wrapper's Write counted %d of 12 bytes", cw.n)
 	}
 }

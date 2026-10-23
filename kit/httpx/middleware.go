@@ -79,9 +79,9 @@ func newRequestID() string {
 
 // StatusWriter records the status a handler sent, for a middleware that logs or counts it (AccessLog and Recover
 // here; a service's own). Flush and Hijack keep the http.Flusher and http.Hijacker assertions working through it;
-// Unwrap keeps the rest of http.ResponseController (deadlines); ReadFrom keeps sendfile. A type that embeds it and
-// overrides Write (a byte counter, gzip) inherits that ReadFrom, which never calls the outer Write: io.Copy would
-// go around it, so such a type overrides ReadFrom too, or wraps a StatusWriter in a field instead.
+// Unwrap keeps the rest of http.ResponseController (deadlines). It has no ReadFrom of its own, so a type that embeds
+// it and overrides Write (a byte counter, gzip) sees every byte; AccessLog and Recover hand on a statusReaderFrom,
+// which keeps sendfile.
 type StatusWriter struct {
 	http.ResponseWriter
 	status int
@@ -110,12 +110,49 @@ func (w *StatusWriter) Write(b []byte) (int, error) {
 	return w.ResponseWriter.Write(b)
 }
 
-// ReadFrom hands src to the wrapped writer's ReadFrom: net/http's is sendfile for an *os.File (http.ServeContent of
-// a video), lost to a plain copy behind a wrapper. Before a header, the first bytes go through Write, so 200 is
-// recorded only once something is sent. Sendfile survives only while every writer between this one and net/http
-// forwards ReadFrom as well: a service's own wrapper that lacks it turns the copy back into a userspace one.
-func (w *StatusWriter) ReadFrom(src io.Reader) (int64, error) {
-	return firstThenReadFrom(w, w.ResponseWriter, w.status != 0, src)
+// statusReaderFrom is the StatusWriter AccessLog and Recover hand on. Its ReadFrom hands src to the wrapped writer's
+// ReadFrom: net/http's is sendfile for an *os.File (http.ServeContent of a video), lost to a plain copy behind a
+// wrapper. Before a header, one read goes through Write, so 200 is recorded only once something is sent. Sendfile
+// survives only while every writer between this one and net/http forwards ReadFrom as well: a service's own wrapper
+// that lacks it turns the copy back into a userspace one. It stays off the exported StatusWriter: a type embedding
+// that would inherit a ReadFrom that goes around its own Write.
+type statusReaderFrom struct{ *StatusWriter }
+
+func (w statusReaderFrom) ReadFrom(src io.Reader) (int64, error) {
+	var n int64
+	if w.status == 0 {
+		var head [1]byte
+		m, err := readAtLeast(src, head[:], 1)
+		if m > 0 {
+			k, werr := w.Write(head[:m])
+			n = int64(k)
+			if werr != nil {
+				return n, werr
+			}
+		}
+		if done, err := headEnd(err); done {
+			return n, err
+		}
+	}
+	rest, err := readFromInner(w.ResponseWriter, src)
+	return n + rest, err
+}
+
+// headEnd reads a head read's error: the copy is over on any error, cleanly on io.EOF alone, as io.Copy has it (a
+// wrapped io.EOF is a truncation).
+func headEnd(err error) (bool, error) {
+	if err == io.EOF { //nolint:errorlint // the clean end alone, as io.Copy
+		return true, nil
+	}
+	return err != nil, err
+}
+
+// readFromInner copies src into inner by its ReadFrom (sendfile), or by its Write when it has none (HTTP/2's).
+func readFromInner(inner http.ResponseWriter, src io.Reader) (int64, error) {
+	if rf, ok := inner.(io.ReaderFrom); ok {
+		return rf.ReadFrom(src)
+	}
+	return io.Copy(struct{ io.Writer }{inner}, src)
 }
 
 // sniffLen is what http.DetectContentType reads, and net/http sniffs from.
@@ -123,42 +160,6 @@ const sniffLen = 512
 
 // maxEmptyReads bounds a reader that returns (0, nil) without end, as bufio does.
 const maxEmptyReads = 100
-
-// firstThenReadFrom hands src to inner's ReadFrom, or copies it through w's Write when inner has none (HTTP/2's
-// writer). Unless sent says the header is out, the first bytes of src go through w's Write (a wrapper's Write: it
-// records the status, fires its hook): what net/http sniffs from, a full sniffLen (all of src when shorter), when no
-// Content-Type is set, so every wrapper on the way down hands a hook the same head whatever their order; one read
-// when the type is set and nothing is sniffed, so a stream is not held back.
-func firstThenReadFrom(w io.Writer, inner http.ResponseWriter, sent bool, src io.Reader) (int64, error) {
-	var n int64
-	if !sent {
-		need := 1
-		if inner.Header().Get("Content-Type") == "" {
-			need = sniffLen
-		}
-		buf := make([]byte, sniffLen)
-		m, err := readAtLeast(src, buf, need)
-		if m > 0 {
-			k, werr := w.Write(buf[:m])
-			n = int64(k)
-			if werr != nil {
-				return n, werr
-			}
-		}
-		if err == io.EOF { //nolint:errorlint // the clean end alone, as io.Copy: a wrapped io.EOF is a truncation
-			return n, nil
-		}
-		if err != nil {
-			return n, err
-		}
-	}
-	if rf, ok := inner.(io.ReaderFrom); ok {
-		rest, err := rf.ReadFrom(src)
-		return n + rest, err
-	}
-	rest, err := io.Copy(struct{ io.Writer }{w}, src)
-	return n + rest, err
-}
 
 // readAtLeast reads into buf until need bytes, an error or io.EOF. io.ReadAtLeast spins on a reader that returns
 // (0, nil) for ever; this one gives up with io.ErrNoProgress.
@@ -371,7 +372,7 @@ func AccessLog(log *slog.Logger, opts AccessLogOptions) func(http.Handler) http.
 					opts.OnRecord(r, ip, status, dur)
 				}
 			}()
-			next.ServeHTTP(sw, r.WithContext(ctx))
+			next.ServeHTTP(statusReaderFrom{sw}, r.WithContext(ctx))
 		})
 	}
 }
@@ -437,7 +438,7 @@ func RecoverWith(log *slog.Logger, o RecoverOptions) func(http.Handler) http.Han
 				maps.Copy(h, snap)
 				WriteError(w, http.StatusInternalServerError, "internal server error")
 			}()
-			next.ServeHTTP(sw, r)
+			next.ServeHTTP(statusReaderFrom{sw}, r)
 		})
 	}
 }
@@ -531,13 +532,13 @@ func SecurityHeadersWith(o SecurityOptions) func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			next.ServeHTTP(&headerHook{ResponseWriter: w, hook: func(h http.Header, body []byte) {
+			hook := &headerHook{ResponseWriter: w, hook: func(h http.Header, body []byte) {
 				ct := h.Get("Content-Type")
 				switch {
-				// net/http sniffs an unset type from the first write; decide on the same bytes.
+				// net/http sniffs an unset type from the body's head; decide on the same bytes.
 				case ct == "" && body != nil:
 					ct = http.DetectContentType(body)
-				// Headers sent with nothing to sniff yet: the type is unknown, so assume a page.
+				// Nothing to sniff (no body, or an encoded one): the type is unknown, so assume a page.
 				case ct == "":
 					html(h)
 					return
@@ -545,7 +546,9 @@ func SecurityHeadersWith(o SecurityOptions) func(http.Handler) http.Handler {
 				if active(ct) {
 					html(h)
 				}
-			}}, r)
+			}}
+			next.ServeHTTP(hook, r)
+			hook.finish()
 		})
 	}
 }
@@ -560,45 +563,125 @@ func active(contentType string) bool {
 	return false
 }
 
-// headerHook runs hook once, just before the header is sent, with the first write's bytes when a write sends it.
-// Flush sends the header too, so it fires the hook first: http.ResponseController and an http.Flusher assertion
-// (server-sent events) both land there. Hijack passes through: the connection leaves HTTP, no header is sent.
-// Unwrap keeps the rest of http.ResponseController (deadlines) working.
+// headerHook runs hook once, just before the header is sent. While net/http would still type the response from its
+// body (sniffs), it holds a final status and the body's first sniffLen bytes, as net/http buffers them, and hands
+// the hook the same head net/http sniffs, however the handler cut its writes; a typed response goes on at once.
+// Flush sends the header too, so it releases first: http.ResponseController and an http.Flusher assertion
+// (server-sent events) both land there. An informational 1xx passes straight on: the decision waits for the
+// response. Hijack passes through: the connection leaves HTTP, no header is sent. Unwrap keeps the rest of
+// http.ResponseController (deadlines) working. finish releases what a handler that returned left held.
 type headerHook struct {
 	http.ResponseWriter
-	hook func(h http.Header, body []byte)
-	done bool
+	hook  func(h http.Header, body []byte)
+	done  bool   // the hook ran, the header went on
+	code  int    // a final status held until then
+	held  []byte // the body's head held until then
+	wrote bool   // a Write came, an empty one too
 }
 
-func (w *headerHook) fire(body []byte) {
-	if !w.done {
-		w.done = true
-		w.hook(w.Header(), body)
+// sniffs reports whether net/http types the response from its body: no Content-Type key (a nil value turns
+// sniffing off), no Content-Encoding, no Transfer-Encoding.
+func sniffs(h http.Header) bool {
+	_, typed := h["Content-Type"]
+	return !typed && h.Get("Content-Encoding") == "" && h.Get("Transfer-Encoding") == ""
+}
+
+// release runs the hook, on the held head when net/http sniffs it (nil when nothing was written or nothing is
+// sniffed), then sends the held status and head on.
+func (w *headerHook) release() error {
+	if w.done {
+		return nil
+	}
+	w.done = true
+	var body []byte
+	if w.wrote && sniffs(w.Header()) {
+		body = w.held
+		if body == nil {
+			body = []byte{}
+		}
+	}
+	w.hook(w.Header(), body)
+	if w.code != 0 {
+		w.ResponseWriter.WriteHeader(w.code)
+	}
+	held := w.held
+	w.held = nil
+	if !w.wrote {
+		return nil
+	}
+	_, err := w.ResponseWriter.Write(held)
+	return err
+}
+
+// finish releases what a handler left held when it returned.
+func (w *headerHook) finish() {
+	if w.wrote || w.code != 0 {
+		_ = w.release() // the client is gone: nothing left to tell
 	}
 }
 
 func (w *headerHook) WriteHeader(code int) {
-	w.fire(nil)
-	w.ResponseWriter.WriteHeader(code)
+	switch {
+	case w.done, code >= 100 && code <= 199:
+		w.ResponseWriter.WriteHeader(code)
+	case w.code == 0:
+		w.code = code
+		if code == http.StatusNoContent || code == http.StatusNotModified || !sniffs(w.Header()) {
+			_ = w.release() // a failed header write surfaces on the handler's next write
+		}
+	}
 }
 
 func (w *headerHook) Write(b []byte) (int, error) {
-	if b == nil {
-		b = []byte{}
+	if w.done {
+		return w.ResponseWriter.Write(b)
 	}
-	w.fire(b)
-	return w.ResponseWriter.Write(b)
+	w.wrote = true
+	if !sniffs(w.Header()) {
+		if err := w.release(); err != nil {
+			return 0, err
+		}
+		return w.ResponseWriter.Write(b)
+	}
+	w.held = append(w.held, b...)
+	if len(w.held) >= sniffLen {
+		if err := w.release(); err != nil {
+			return 0, err
+		}
+	}
+	return len(b), nil
 }
 
-// ReadFrom keeps the wrapped writer's ReadFrom (sendfile). Before the header, the first bytes go through Write, so
-// the hook decides on what net/http sniffs (firstThenReadFrom has the rule).
+// ReadFrom keeps the wrapped writer's ReadFrom (sendfile). While the response is sniffed, the head comes off src
+// first and goes through Write, so the hook decides on what net/http sniffs; a typed response goes straight on.
 func (w *headerHook) ReadFrom(src io.Reader) (int64, error) {
-	return firstThenReadFrom(w, w.ResponseWriter, w.done, src)
+	var n int64
+	if !w.done && sniffs(w.Header()) && len(w.held) < sniffLen {
+		head := make([]byte, sniffLen-len(w.held))
+		m, err := readAtLeast(src, head, len(head))
+		if m > 0 {
+			k, werr := w.Write(head[:m])
+			n = int64(k)
+			if werr != nil {
+				return n, werr
+			}
+		}
+		if done, err := headEnd(err); done {
+			return n, err
+		}
+	}
+	if err := w.release(); err != nil {
+		return n, err
+	}
+	rest, err := readFromInner(w.ResponseWriter, src)
+	return n + rest, err
 }
 
 // FlushError is what http.ResponseController.Flush calls.
 func (w *headerHook) FlushError() error {
-	w.fire(nil)
+	if err := w.release(); err != nil {
+		return err
+	}
 	return http.NewResponseController(w.ResponseWriter).Flush()
 }
 
