@@ -193,6 +193,7 @@ func (b providerBackend) Verify(ctx context.Context, tok *oauth2.Token) (Claims,
 	var c struct {
 		PreferredUsername string   `json:"preferred_username"`
 		Email             string   `json:"email"`
+		EmailVerified     *bool    `json:"email_verified"`
 		Name              string   `json:"name"`
 		GivenName         string   `json:"given_name"`
 		FamilyName        string   `json:"family_name"`
@@ -203,7 +204,8 @@ func (b providerBackend) Verify(ctx context.Context, tok *oauth2.Token) (Claims,
 	}
 	return Claims{
 		Subject: id.Subject, PreferredUsername: c.PreferredUsername, Email: c.Email,
-		Name: displayName(c.Name, c.GivenName, c.FamilyName), Groups: c.Groups,
+		EmailVerified: c.EmailVerified != nil && *c.EmailVerified,
+		Name:          displayName(c.Name, c.GivenName, c.FamilyName), Groups: c.Groups,
 	}, id.Nonce, nil
 }
 
