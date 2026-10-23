@@ -468,6 +468,8 @@ func TestSecurityHeadersWith(t *testing.T) {
 		case "/sniffed":
 			_, _ = w.Write([]byte("<!doctype html><p>no type set"))
 		case "/sniffed-text":
+			_, _ = w.Write([]byte(strings.Repeat("plain words ", 50)))
+		case "/short-text":
 			_, _ = w.Write([]byte("plain words"))
 		case "/untyped":
 			w.WriteHeader(http.StatusTeapot)
@@ -509,9 +511,9 @@ func TestSecurityHeadersWith(t *testing.T) {
 	if got := get("/healthz").Get("X-Robots-Tag"); got != "noindex, nofollow" {
 		t.Errorf("probe X-Robots-Tag = %q", got)
 	}
-	// No Content-Type set: the sniffed type decides, and with nothing to sniff the page default holds.
+	// No Content-Type set: a full sniffed head decides; a short one, or nothing to sniff, keeps the page default.
 	// SVG and XHTML run script like HTML; a raster image does not.
-	for p, html := range map[string]bool{"/sniffed": true, "/sniffed-text": false, "/untyped": true,
+	for p, html := range map[string]bool{"/sniffed": true, "/sniffed-text": false, "/short-text": true, "/untyped": true,
 		"/icon.svg": true, "/page.xhtml": true, "/photo.png": false} {
 		if got := get(p).Get("Content-Security-Policy") != ""; got != html {
 			t.Errorf("%s: CSP sent %v, want %v", p, got, html)

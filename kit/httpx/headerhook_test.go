@@ -56,33 +56,25 @@ func TestHeaderHookDecidesOnTheSniffedHead(t *testing.T) {
 	}
 }
 
-// What net/http does not sniff is not held: a nil Content-Type (sniffing off) or an encoded body goes on at the
-// first write, and an encoded one, whose type is unknown, is treated as a page.
-func TestHeaderHookHoldsOnlyWhatIsSniffed(t *testing.T) {
-	for name, set := range map[string]func(http.Header){
-		"sniffing off": func(h http.Header) { h["Content-Type"] = nil },
-		"encoded":      func(h http.Header) { h.Set("Content-Encoding", "gzip") },
+// What net/http does not sniff has no type to decide on, however long its head: an encoded body or one with
+// sniffing off is treated as a page. A long untyped head that sniffs as text is not.
+func TestHeaderHookUnsniffedIsAPage(t *testing.T) {
+	long := strings.Repeat("plain words ", 50)
+	for name, tt := range map[string]struct {
+		set  func(http.Header)
+		page bool
+	}{
+		"sniffing off": {func(h http.Header) { h["Content-Type"] = nil }, true},
+		"encoded":      {func(h http.Header) { h.Set("Content-Encoding", "identity") }, true},
+		"sniffed text": {func(http.Header) {}, false},
 	} {
-		var csp string
-		base := httptest.NewRecorder()
-		hook := &headerHook{ResponseWriter: base, hook: func(_ http.Header, body []byte) {
-			if body != nil {
-				t.Errorf("%s: hook sniffed %q", name, body)
-			}
-			csp = "decided"
-		}}
-		set(hook.Header())
-		_, _ = hook.Write([]byte("tick\n"))
-		if base.Body.String() != "tick\n" || csp == "" {
-			t.Errorf("%s: first write held back (body %q)", name, base.Body.String())
+		hdr, _ := htmlOnly(t, func(w http.ResponseWriter, _ *http.Request) {
+			tt.set(w.Header())
+			_, _ = io.WriteString(w, long)
+		})
+		if got := hdr.Get("Content-Security-Policy") != ""; got != tt.page {
+			t.Errorf("%s: CSP sent %v, want %v", name, got, tt.page)
 		}
-	}
-	hdr, _ := htmlOnly(t, func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Encoding", "identity")
-		_, _ = io.WriteString(w, "<!doctype html><p>page")
-	})
-	if hdr.Get("Content-Security-Policy") == "" {
-		t.Error("an encoded body of unknown type got no CSP")
 	}
 }
 
@@ -100,21 +92,6 @@ func TestHeaderHookDecidesAfterEarlyHints(t *testing.T) {
 	hook.WriteHeader(http.StatusOK)
 	if decided != "text/html" {
 		t.Errorf("hook decided on %q, want the final text/html", decided)
-	}
-}
-
-// Flush sends what is held, header first: a stream with no type is not stuck below 512 bytes.
-func TestHeaderHookFlushReleases(t *testing.T) {
-	base := httptest.NewRecorder()
-	ran := false
-	hook := &headerHook{ResponseWriter: base, hook: func(http.Header, []byte) { ran = true }}
-	_, _ = hook.Write([]byte("tick\n"))
-	if ran || base.Body.Len() != 0 {
-		t.Fatal("an untyped short write went on before the sniff")
-	}
-	hook.Flush()
-	if !ran || base.Body.String() != "tick\n" || !base.Flushed {
-		t.Errorf("after Flush: ran %v, body %q, flushed %v", ran, base.Body.String(), base.Flushed)
 	}
 }
 

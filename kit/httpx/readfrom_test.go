@@ -140,7 +140,7 @@ func TestHeaderHookReadFromFirstChunk(t *testing.T) {
 		chunks []string
 		want   []byte
 	}{
-		{"text/event-stream", []string{"tick\n", "tock\n"}, nil},
+		{"text/event-stream", []string{"tick\n", "tock\n"}, []byte("tick\n")},
 		{"", []string{"<", "!doctype html>", "<p>page"}, []byte("<!doctype html><p>page")},
 	} {
 		var first []byte
@@ -152,7 +152,6 @@ func TestHeaderHookReadFromFirstChunk(t *testing.T) {
 		if _, err := hook.ReadFrom(&slowReader{chunks: tt.chunks}); err != nil {
 			t.Fatal(err)
 		}
-		hook.finish()
 		if string(first) != string(tt.want) || (first == nil) != (tt.want == nil) {
 			t.Errorf("type %q: hook saw %q, want %q", tt.ct, first, tt.want)
 		}
@@ -242,7 +241,6 @@ func TestHeaderHookReadFromNoReaderFromSniffs(t *testing.T) {
 	if _, err := hook.ReadFrom(&slowReader{chunks: []string{"<", "!doctype html>", "<p>page"}}); err != nil {
 		t.Fatal(err)
 	}
-	hook.finish()
 	if first != "<!doctype html><p>page" {
 		t.Errorf("hook saw %q, want the whole sniffed head", first)
 	}
