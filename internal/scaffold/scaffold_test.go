@@ -98,11 +98,11 @@ jobs:
     uses: trick77/ship/.github/workflows/check.yaml@master
 `
 
-// Weekly on public and private alike: a PR's govulncheck runs in check already.
+// Weekly on public repos (free minutes); private ones by hand only: every push runs govulncheck already.
 const publicLibVuln = `name: Vuln
 
-# Weekly govulncheck: a vulnerability published since the last push fails here, not on the next one. By hand: gh
-# workflow run Vuln
+# Weekly govulncheck: a vulnerability published since the last push fails here, not on the next one.
+# By hand: gh workflow run Vuln
 on:
   schedule:
     - cron: "17 5 * * 1"
@@ -110,6 +110,11 @@ on:
 
 permissions:
   contents: read
+
+# One scan per ref: a newer run cancels the one in progress (read-only, nothing to finish).
+concurrency:
+  group: vuln-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   vuln:
@@ -138,7 +143,8 @@ func TestFiles_whenApp_thenEveryOwnedFile(t *testing.T) {
 		}
 	}
 	if v := string(byPath(t, files, Vuln).Want); !strings.Contains(v, "    with:\n      go-dir: backend\n") ||
-		strings.Contains(v, "pull_request") {
+		strings.Contains(v, "pull_request") || strings.Contains(v, "schedule:") ||
+		!strings.Contains(v, "on:\n  workflow_dispatch:\n") || !strings.Contains(v, "group: vuln-${{ github.ref }}") {
 		t.Errorf("vuln.yaml:\n%s", v)
 	}
 	if cl := string(byPath(t, files, Cleanup).Want); !strings.Contains(cl, `packages: '["core", "core-ui"]'`) {
@@ -282,6 +288,9 @@ func TestFiles_whenFactsMissing_thenManual(t *testing.T) {
 	}
 	if f := byPath(t, files, CI); !strings.Contains(f.Manual, "visibility unknown") || !f.Differs() {
 		t.Errorf("ci: %+v", f)
+	}
+	if f := byPath(t, files, Vuln); !strings.Contains(f.Manual, "visibility unknown") || !f.Differs() {
+		t.Errorf("vuln: %+v", f)
 	}
 	if f := byPath(t, files, Cleanup); !strings.Contains(f.Manual, "origin") {
 		t.Errorf("cleanup: %+v", f)

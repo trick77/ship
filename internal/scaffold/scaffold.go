@@ -154,7 +154,8 @@ func Files(root string, c *config.Config, f Facts) ([]File, error) {
 	}
 	visibility := ""
 	if f.Visibility == "" {
-		visibility = "repo visibility unknown (set ship.yaml visibility: or fix the lookup), ci.yaml cannot be rendered"
+		visibility = "repo visibility unknown (set ship.yaml visibility: or fix the lookup), ci.yaml and vuln.yaml " +
+			"cannot be rendered"
 	}
 	if err := add(CI, "ci.yaml", visibility, nil); err != nil {
 		return nil, err
@@ -162,7 +163,7 @@ func Files(root string, c *config.Config, f Facts) ([]File, error) {
 	if err := add(Release, "release.yaml", "", nil); err != nil {
 		return nil, err
 	}
-	if err := add(Vuln, "vuln.yaml", "", nil); err != nil {
+	if err := add(Vuln, "vuln.yaml", visibility, nil); err != nil {
 		return nil, err
 	}
 	if d.Images {

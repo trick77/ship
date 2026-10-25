@@ -1,17 +1,20 @@
 name: Vuln
 
-# Reusable: `ship vuln` (govulncheck alone, at check's version) on a GitHub runner, weekly. ship check runs
-# govulncheck on every push (hook) and CI run, but a vulnerability published after the last one fails nothing until
-# the next: this scan catches it. A failed scheduled run mails whoever last changed the caller's cron line, not the
-# repo; a public repo without activity for 60 days has its schedule disabled by GitHub (re-enable it by hand). A
-# caller's vuln.yaml (ship init writes it):
+# Reusable: `ship vuln` (govulncheck alone, at check's version) on a GitHub runner, weekly in public repos, by hand
+# in private ones (Actions minutes). ship check runs govulncheck on every push (hook) and CI run, but a vulnerability
+# published after the last one fails nothing until the next: this scan catches it. A failed scheduled run mails
+# whoever last changed the caller's cron line, not the repo; a public repo without activity for 60 days has its
+# schedule disabled by GitHub (re-enable it by hand). A caller's vuln.yaml (ship init writes it):
 #
 #   on:
-#     schedule:
+#     schedule:                     # public only
 #       - cron: "17 5 * * 1"
 #     workflow_dispatch:
 #   permissions:
 #     contents: read
+#   concurrency:
+#     group: vuln-${{ github.ref }}
+#     cancel-in-progress: true
 #   jobs:
 #     vuln:
 #       uses: trick77/ship/.github/workflows/vuln.yaml@master
@@ -51,7 +54,9 @@ jobs:
         with:
           go-version: ${{ steps.go.outputs.version }}
           check-latest: true
-          cache-dependency-path: ${{ inputs.go-dir }}/go.sum
+          # Same key as check.yaml's cache: a scan saving it first would leave check a cache without its builds. The
+          # scan gains nothing from one.
+          cache: false
       # Default: master's sha on GitHub, as check.yaml runs it (the why there).
       - working-directory: ${{ inputs.go-dir }}
         env:

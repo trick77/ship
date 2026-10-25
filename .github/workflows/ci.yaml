@@ -8,7 +8,7 @@ on:
     branches: [master]
   push:
     branches: [master]
-  # The weekly govulncheck consumers' vuln.yaml runs: the vuln job alone.
+  # The weekly govulncheck public consumers' vuln.yaml runs: the vuln job alone.
   schedule:
     - cron: "17 5 * * 1"
   workflow_dispatch:
