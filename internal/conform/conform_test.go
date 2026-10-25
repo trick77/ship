@@ -604,7 +604,7 @@ func TestRun_whenLibrary_thenAppRulesSkipped(t *testing.T) {
 	if err := Init(r.dir, r.config(""), r.opts, false); err != nil {
 		t.Fatal(err)
 	}
-	if r.out.String() != "ship: wrote .github/workflows/ci.yaml\nship: wrote .github/workflows/release.yaml\n"+
+	if r.out.String() != "ship: wrote .github/workflows/ci.yaml\nship: wrote .github/workflows/release.yaml\nship: wrote .github/workflows/vuln.yaml\n"+
 		"ship: wrote .github/dependabot.yaml\n" {
 		t.Errorf("init:\n%s", r.out.String())
 	}

@@ -99,6 +99,12 @@ func Lint(root string, c *config.Config) error {
 	return runner{root: root, c: c}.lint()
 }
 
+// Vuln runs govulncheck alone, at the version check runs, on every module: the Vuln workflow's weekly scan, a
+// vulnerability published after the last push failing without a push.
+func Vuln(root string, c *config.Config) error {
+	return runner{root: root, c: c}.vuln()
+}
+
 type runner struct {
 	root string
 	c    *config.Config

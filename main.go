@@ -4,6 +4,7 @@
 //
 //	ship check                     everything CI checks, locally
 //	ship lint                      golangci-lint alone, at the version check runs
+//	ship vuln                      govulncheck alone, at the version check runs
 //	ship conform [-fix]            the repo against ship's canon
 //	ship init [-diff]              write the files ship owns
 //	ship hooks                     install the pre-push hook
@@ -28,6 +29,7 @@ const usage = `usage: ship <command>
 
   check                                       run the gate: everything CI checks, locally
   lint                                        golangci-lint alone, at the version check runs
+  vuln                                        govulncheck alone, at the version check runs
   conform [-fix]                              the repo against ship's canon (check's first step); -fix: init first
   init [-diff]                                write the files ship owns; -diff: print, write nothing, exit 1 if any
                                               (kept files listed by name, never counted)
@@ -79,6 +81,12 @@ func run(args []string) error {
 			return err
 		}
 		return check.Lint(root, c)
+	case "vuln":
+		c, err := config.Load(root)
+		if err != nil {
+			return err
+		}
+		return check.Vuln(root, c)
 	case "conform", "init":
 		return conformCmd(root, args[0], args[1:])
 	case "hooks":

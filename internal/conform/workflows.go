@@ -62,7 +62,8 @@ func (w *workflow) caller(name string) (job, bool) {
 // workflows: ship's callers @master, release's grants and auto; no image cleanup but ship's caller, in any workflow.
 func (e *env) workflows() result {
 	var fs []finding
-	callers := []struct{ file, name string }{{scaffold.CI, "check.yaml"}, {scaffold.Release, "release.yaml"}}
+	callers := []struct{ file, name string }{{scaffold.CI, "check.yaml"}, {scaffold.Release, "release.yaml"},
+		{scaffold.Vuln, "vuln.yaml"}}
 	if len(e.c.Images) > 0 {
 		callers = append(callers, struct{ file, name string }{scaffold.Cleanup, "cleanup-images.yaml"})
 	}

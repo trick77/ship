@@ -38,6 +38,7 @@ const (
 const (
 	CI         = ".github/workflows/ci.yaml"
 	Release    = ".github/workflows/release.yaml"
+	Vuln       = ".github/workflows/vuln.yaml"
 	Cleanup    = ".github/workflows/cleanup-images.yaml"
 	Dependabot = ".github/dependabot.yaml"
 	Ignore     = ".dockerignore"
@@ -159,6 +160,9 @@ func Files(root string, c *config.Config, f Facts) ([]File, error) {
 		return nil, err
 	}
 	if err := add(Release, "release.yaml", "", nil); err != nil {
+		return nil, err
+	}
+	if err := add(Vuln, "vuln.yaml", "", nil); err != nil {
 		return nil, err
 	}
 	if d.Images {

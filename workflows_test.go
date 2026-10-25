@@ -76,7 +76,7 @@ func TestCIRelease_whenMaster_thenEveryModuleReleased(t *testing.T) {
 }
 
 // CI's Go is go.mod's major.minor at its newest patch, never setup-go's exact go.mod version: a pinned 1.x.0 misses the
-// stdlib fixes govulncheck demands. check.yaml and release.yaml each carry the step; this keeps them one.
+// stdlib fixes govulncheck demands. check.yaml, release.yaml and vuln.yaml each carry the step; this keeps them one.
 // Each workflow's step is run as the runner does (bash -e) on go.mod shapes: the higher of go and toolchain lines.
 func TestSetupGo_whenRun_thenNewestPatchOfGoMod(t *testing.T) {
 	type step struct {
@@ -87,7 +87,8 @@ func TestSetupGo_whenRun_thenNewestPatchOfGoMod(t *testing.T) {
 		With map[string]string `yaml:"with"`
 	}
 	var scripts []string
-	for _, f := range []string{".github/workflows/check.yaml", ".github/workflows/release.yaml"} {
+	files := []string{".github/workflows/check.yaml", ".github/workflows/release.yaml", ".github/workflows/vuln.yaml"}
+	for _, f := range files {
 		b, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)
@@ -125,8 +126,10 @@ func TestSetupGo_whenRun_thenNewestPatchOfGoMod(t *testing.T) {
 			t.Fatalf("%s: no step id go", f)
 		}
 	}
-	if scripts[0] != scripts[1] {
-		t.Errorf("step go differs:\ncheck.yaml:\n%s\nrelease.yaml:\n%s", scripts[0], scripts[1])
+	for i := 1; i < len(scripts); i++ {
+		if scripts[i] != scripts[0] {
+			t.Errorf("step go differs:\n%s:\n%s\n%s:\n%s", files[0], scripts[0], files[i], scripts[i])
+		}
 	}
 	for _, tc := range []struct{ mod, want string }{
 		{"module x\n\ngo 1.27.0\n", "1.27"},
@@ -178,6 +181,7 @@ func TestMasterResolver_whenCopied_thenSame(t *testing.T) {
 	for f, want := range map[string]string{
 		".github/workflows/check.yaml":   workflow,
 		".github/workflows/release.yaml": workflow,
+		".github/workflows/vuln.yaml":    workflow,
 		"internal/hook/hook.go": `sha="$(` + resolve + `)" printf '%s\n' "$sha" ` + hexSh + ` { echo "pre-push: ` + fail +
 			` (git ls-remote, error above)"; exit 1; } printf '%s\n' "$refs" | go run "github.com/trick77/ship@$sha" pre-push "$@"`,
 		"internal/scaffold/templates/Makefile": `sha=$(` + resolve + `); echo "$sha" ` + hexSh + ` { echo "` + fail +

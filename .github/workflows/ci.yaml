@@ -8,6 +8,9 @@ on:
     branches: [master]
   push:
     branches: [master]
+  # The weekly govulncheck consumers' vuln.yaml runs: the vuln job alone.
+  schedule:
+    - cron: "17 5 * * 1"
   workflow_dispatch:
 
 permissions:
@@ -20,12 +23,19 @@ concurrency:
 
 jobs:
   check:
+    if: github.event_name != 'schedule'
     uses: ./.github/workflows/check.yaml
     with:
       ship: go run .
       # Node for the UI end-to-end test (internal/check/ui_test.go) on testdata/ui.
       node-version: "22"
       ui-dir: testdata/ui
+
+  vuln:
+    if: github.event_name == 'schedule'
+    uses: ./.github/workflows/vuln.yaml
+    with:
+      ship: go run .
 
   # A merge is already live for every consumer (they run master's sha): tag it, with notes, once the gate passes.
   # auto: patch, or a `Release: minor|major` + `Release-note:` line in a commit; docs/tests only → no release.
