@@ -146,11 +146,42 @@ func newOIDC(t *testing.T, p *provider, group string) *OIDC {
 	return o
 }
 
+// Only an explicit true vouches for the email: absent, false or a string "true" (a provider bug) are not stated.
+func TestOIDCEmailVerifiedOnlyExplicitTrue(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		claim any
+	}{{"absent", nil}, {"false", false}, {"string", "true"}} {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newProvider(t)
+			p.claims = map[string]any{"email": "jan@example.com"}
+			if tt.claim != nil {
+				p.claims["email_verified"] = tt.claim
+			}
+			o := newOIDC(t, p, "")
+			c, err := o.Callback(httptest.NewRecorder(), p.login(t, o, nil))
+			if tt.name == "string" {
+				// A wrong type fails the claims decode: the token is malformed, not unverified.
+				if err == nil {
+					t.Fatalf("Callback accepted email_verified %q", tt.claim)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Callback: %v", err)
+			}
+			if c.EmailVerified {
+				t.Errorf("EmailVerified with email_verified %v", tt.claim)
+			}
+		})
+	}
+}
+
 func TestOIDCEndToEnd(t *testing.T) {
 	p := newProvider(t)
 	p.claims = map[string]any{
 		"preferred_username": "jan", "email": "jan@example.com", "given_name": "Jan", "family_name": "Mueller",
-		"name": "J", "groups": []string{"Admins", "users"},
+		"email_verified": true, "name": "J", "groups": []string{"Admins", "users"},
 	}
 	o := newOIDC(t, p, "admins")
 	rec := httptest.NewRecorder()
@@ -158,7 +189,8 @@ func TestOIDCEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Callback: %v", err)
 	}
-	if c.Subject != "user-1" || c.Name != "Jan Mueller" || c.Email != "jan@example.com" || c.Username() != "jan" {
+	if c.Subject != "user-1" || c.Name != "Jan Mueller" || c.Email != "jan@example.com" || c.Username() != "jan" ||
+		!c.EmailVerified {
 		t.Errorf("claims = %+v", c)
 	}
 	// Transient cookies are cleared, with the attributes they were set with.
