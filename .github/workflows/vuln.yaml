@@ -2,7 +2,9 @@ name: Vuln
 
 # Reusable: `ship vuln` (govulncheck alone, at check's version) on a GitHub runner, weekly. ship check runs
 # govulncheck on every push (hook) and CI run, but a vulnerability published after the last one fails nothing until
-# the next: this scan catches it, a failed scheduled run mails the repo. A caller's vuln.yaml (ship init writes it):
+# the next: this scan catches it. A failed scheduled run mails whoever last changed the caller's cron line, not the
+# repo; a public repo without activity for 60 days has its schedule disabled by GitHub (re-enable it by hand). A
+# caller's vuln.yaml (ship init writes it):
 #
 #   on:
 #     schedule:
