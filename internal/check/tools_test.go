@@ -90,6 +90,10 @@ func TestVuln(t *testing.T) {
 	if err := r.vuln(); err == nil {
 		t.Fatal("a reported vulnerability passed")
 	}
+	// ship vuln: the same step, alone.
+	if err := Vuln(dir, c); err == nil {
+		t.Fatal("ship vuln: a reported vulnerability passed")
+	}
 }
 
 func TestWithPathMode_whenNoRunSection_thenError(t *testing.T) {

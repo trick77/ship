@@ -84,6 +84,7 @@ ship block, written by `ship init`.
 | `ship check` | conform, fetch, commit subjects, secret scan, ui embed, ui build, npm audit, go modules, gofmt, go mod verify, go mod tidy, build, govulncheck, golangci-lint (incl. govet), ui lint, shellcheck, steps, postgres, go test (-race, coverage), ui test, floors, patch gate |
 | `ship conform [-fix]` / `ship init [-diff]` | the repo against ship's canon / write the files ship owns (see Conform) |
 | `ship lint` | golangci-lint alone, at the version `ship check` runs: a Makefile's quick lint, no version of its own |
+| `ship vuln` | govulncheck alone, at the version `ship check` runs, every module: the Vuln workflow's scan (weekly in public repos) |
 | `ship hooks` | install the pre-push hook (respects core.hooksPath, never overwrites a foreign or symlinked hook) |
 | `ship release [patch\|minor\|major\|auto] [-cache gha] [-dry-run] [-dir <module>]` | next version from tags, notes from the subjects since the last tag (grouped by area), tag (API), images pushed (version + sha), scanned and signed, GitHub release, then :MAJOR.MINOR, :MAJOR, :latest. No `images:` and no `ui:`: `go build ./...` before the tag (in `-dry-run` too). With `images:` only on a GitHub-hosted runner (the Release workflow); elsewhere `-dry-run` only. The Release workflow inherits the caller's permissions: `packages: write` and `id-token: write` only with `images:`. `-dir`: a nested Go module, below |
 
@@ -93,7 +94,9 @@ Gates beyond the build and tests, all hard failures:
   `.golangci.{yml,yaml,toml,json}` between `go.dir` and the root.
 - govulncheck (pinned, `go run`): a known vulnerability the module's code reaches. The Check and Release workflows
   run the newest patch of go.mod's major.minor (the higher of its `go` and `toolchain` lines), not the exact
-  version: a pinned `go 1.x.0` would fail CI on stdlib fixes a newer local Go already has.
+  version: a pinned `go 1.x.0` would fail CI on stdlib fixes a newer local Go already has. A vulnerability published
+  after the last push: the Vuln workflow (`vuln.yaml`: public weekly + by hand, private by hand only, Actions
+  minutes) runs `ship vuln`.
 - npm audit (with `ui:`, in `ui.dir`, after ui build): `npm audit --audit-level=high --omit=dev`, a high or
   critical advisory in what the UI ships; dev dependencies only build it.
 - `go mod tidy -diff`: go.mod/go.sum as tidy leaves them.
@@ -165,6 +168,8 @@ jobs:
     uses: trick77/ship/.github/workflows/check.yaml@master      # inputs: go-dir, node-version, ui-dir, postgres (deprecated: ship.yaml postgres:)
   release:
     uses: trick77/ship/.github/workflows/release.yaml@master    # inputs: bump, go-dir, dir
+  vuln:
+    uses: trick77/ship/.github/workflows/vuln.yaml@master       # inputs: go-dir
   cleanup:
     uses: trick77/ship/.github/workflows/cleanup-images.yaml@master   # inputs: packages (JSON), keep, dry-run
 ```
@@ -178,7 +183,7 @@ library without images or UI skips what does not apply). `ship conform -fix` run
 what is left is by hand.
 
 `ship init` writes the files ship owns, rendered from `ship.yaml` and the repo (origin, visibility, Containerfiles):
-`.github/workflows/ci.yaml`, `release.yaml`, `cleanup-images.yaml` (images), `.github/dependabot.yaml`,
+`.github/workflows/ci.yaml`, `release.yaml`, `vuln.yaml`, `cleanup-images.yaml` (images), `.github/dependabot.yaml`,
 `<ui.dir>/eslint.config.js`, `tsconfig.node.json` and `.npmrc` (UI), and in `.dockerignore` (images), `.gitignore`
 (UI) and `Makefile` (apps, or one that exists) only the block between `# ship:begin` and `# ship:end`; the rest of
 those three is the repo's. Owned means byte-equal. With `ui.embed` the `.dockerignore` block keeps the host's build

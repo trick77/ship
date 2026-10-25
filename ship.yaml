@@ -13,6 +13,9 @@ allow:
     path: .github/workflows/release.yaml
     why: release.yaml here is the reusable workflow consumers call, not a caller
   - rule: scaffold
+    path: .github/workflows/vuln.yaml
+    why: vuln.yaml here is the reusable workflow consumers call, not a caller; ship's CI schedules it
+  - rule: scaffold
     path: .github/dependabot.yaml
     why: ship's dependabot also bumps the testdata/ui fixture
   - rule: workflows

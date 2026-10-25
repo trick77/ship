@@ -70,7 +70,7 @@ jobs:
       # Go: the newest patch of go.mod's major.minor, not its exact version: setup-go given go.mod installs a pinned
       # 1.x.0 as is, and govulncheck fails on stdlib fixes a dev's newer local Go has. The higher of the go and
       # toolchain lines: below either, go (GOTOOLCHAIN=auto) switches to that exact, unpatched version. Copied in
-      # release.yaml, a test keeps them one.
+      # release.yaml and vuln.yaml, a test keeps them one.
       - id: go
         env:
           MOD: ${{ inputs.go-dir }}/go.mod

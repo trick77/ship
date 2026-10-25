@@ -1,0 +1,71 @@
+name: Vuln
+
+# Reusable: `ship vuln` (govulncheck alone, at check's version) on a GitHub runner, weekly in public repos, by hand
+# in private ones (Actions minutes). ship check runs govulncheck on every push (hook) and CI run, but a vulnerability
+# published after the last one fails nothing until the next: this scan catches it. A failed scheduled run mails
+# whoever last changed the caller's cron line, not the repo; a public repo without activity for 60 days has its
+# schedule disabled by GitHub (re-enable it by hand). A caller's vuln.yaml (ship init writes it):
+#
+#   on:
+#     schedule:                     # public only
+#       - cron: "17 5 * * 1"
+#     workflow_dispatch:
+#   permissions:
+#     contents: read
+#   concurrency:
+#     group: vuln-${{ github.ref }}
+#     cancel-in-progress: true
+#   jobs:
+#     vuln:
+#       uses: trick77/ship/.github/workflows/vuln.yaml@master
+#       with: { go-dir: backend }   # only when go.dir is not the root
+on:
+  workflow_call:
+    inputs:
+      go-dir:
+        description: Go module directory.
+        type: string
+        default: "."
+      ship:
+        description: How to run ship; empty = ship at master's sha on GitHub. ship's own repo uses "go run .".
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  vuln:
+    name: ship vuln
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      # Go: the newest patch of go.mod's major.minor, as check.yaml (the why there; a test keeps them one).
+      - id: go
+        env:
+          MOD: ${{ inputs.go-dir }}/go.mod
+        run: |
+          [ -f "$MOD" ] || { echo "::error::$MOD: no such file (go-dir)"; exit 1; }
+          v="$(awk '$1 == "go" || ($1 == "toolchain" && sub(/^go/, "", $2)) { split($2, p, "."); if (p[1] ~ /^[0-9]+$/ && (p[1] > a + 0 || (p[1] == a + 0 && p[2] + 0 > b))) { a = p[1] + 0; b = p[2] + 0 } } END { if (a != "") print a "." b }' "$MOD")"
+          [[ "$v" =~ ^[0-9]+\.[0-9]+$ ]] || { echo "::error::$MOD: no go version"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ steps.go.outputs.version }}
+          check-latest: true
+          # Same key as check.yaml's cache: a scan saving it first would leave check a cache without its builds. The
+          # scan gains nothing from one.
+          cache: false
+      # Default: master's sha on GitHub, as check.yaml runs it (the why there).
+      - working-directory: ${{ inputs.go-dir }}
+        env:
+          SHIP: ${{ inputs.ship }}
+        run: |
+          if [ -z "$SHIP" ]; then
+            # Exactly refs/heads/master: ls-remote matches by suffix, so x/refs/heads/master would match too.
+            sha="$(git ls-remote https://github.com/trick77/ship refs/heads/master | awk '$2 == "refs/heads/master" { print $1 }')"
+            [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::cannot resolve ship's master on GitHub: '$sha'"; exit 1; }
+            SHIP="go run github.com/trick77/ship@$sha"
+          fi
+          $SHIP vuln

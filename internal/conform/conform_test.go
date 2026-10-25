@@ -271,6 +271,9 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 			[]string{"FAIL scaffold: differs from ship's template (ship init -diff) (.github/workflows/ci.yaml)"}},
 		{"private without if allowed", appShip + allowScaffold(scaffold.CI), func(r *repo) { r.edit(scaffold.CI, "    if: github", "    x-if: github") },
 			[]string{"FAIL visibility: private repo: the check job needs if:"}},
+		{"private vuln scheduled allowed", appShip + allowScaffold(scaffold.Vuln), func(r *repo) {
+			r.edit(scaffold.Vuln, "on:\n  workflow_dispatch:", "on:\n  schedule:\n    - cron: \"17 5 * * 1\"\n  workflow_dispatch:")
+		}, []string{"FAIL visibility: private repo: no schedule (Actions minutes), workflow_dispatch only (.github/workflows/vuln.yaml)"}},
 		{"private ungrouped", appShip, func(r *repo) {
 			r.edit(scaffold.Dependabot, "open-pull-requests-limit: 5", "open-pull-requests-limit: 10")
 		}, []string{"FAIL scaffold: differs from ship's template (ship init -diff) (.github/dependabot.yaml)"}},
@@ -604,7 +607,7 @@ func TestRun_whenLibrary_thenAppRulesSkipped(t *testing.T) {
 	if err := Init(r.dir, r.config(""), r.opts, false); err != nil {
 		t.Fatal(err)
 	}
-	if r.out.String() != "ship: wrote .github/workflows/ci.yaml\nship: wrote .github/workflows/release.yaml\n"+
+	if r.out.String() != "ship: wrote .github/workflows/ci.yaml\nship: wrote .github/workflows/release.yaml\nship: wrote .github/workflows/vuln.yaml\n"+
 		"ship: wrote .github/dependabot.yaml\n" {
 		t.Errorf("init:\n%s", r.out.String())
 	}

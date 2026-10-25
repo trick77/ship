@@ -14,8 +14,8 @@ deliberately.
   ship.yaml `go.modules` (Parse cleans entries, `./kit/auth/` is `kit/auth`): CI's release matrix and
   ship-release's dispatch options are literals, a test keeps both equal to the cleaned list.
 - Master-sha resolver (`git ls-remote … refs/heads/master | awk …`) runs before ship, so it is copied (check.yaml,
-  release.yaml, hook.go, Makefile template, README); a test keeps the copies one. Hook script bytes changed = every
-  clone's hook rewritten on its next push.
+  release.yaml, vuln.yaml, hook.go, Makefile template, README); a test keeps the copies one. Hook script bytes
+  changed = every clone's hook rewritten on its next push.
 - master is live: the reusable workflows are consumed `@master`. Merge to master only what is releasable; keep
   workflow inputs and ship.yaml backward compatible.
 - Dependencies stay minimal (stdlib + yaml): `go run ...@master` builds them on every machine. `go 1.24` floor.

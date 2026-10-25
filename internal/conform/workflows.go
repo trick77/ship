@@ -62,7 +62,8 @@ func (w *workflow) caller(name string) (job, bool) {
 // workflows: ship's callers @master, release's grants and auto; no image cleanup but ship's caller, in any workflow.
 func (e *env) workflows() result {
 	var fs []finding
-	callers := []struct{ file, name string }{{scaffold.CI, "check.yaml"}, {scaffold.Release, "release.yaml"}}
+	callers := []struct{ file, name string }{{scaffold.CI, "check.yaml"}, {scaffold.Release, "release.yaml"},
+		{scaffold.Vuln, "vuln.yaml"}}
 	if len(e.c.Images) > 0 {
 		callers = append(callers, struct{ file, name string }{scaffold.Cleanup, "cleanup-images.yaml"})
 	}
@@ -165,7 +166,8 @@ func (e *env) workflowFiles() []string {
 
 // visibilityRule: ship.yaml's visibility agrees with GitHub's, and CI and dependabot fit it. Public: every PR runs
 // CI (forks and Dependabot have no hook). Private: Dependabot PRs only, every npm and docker bump grouped and few
-// PRs open (each runs billed CI), and old images cleaned up (storage is billed).
+// PRs open (each runs billed CI), no scheduled vuln scan (billed minutes), and old images cleaned up (storage is
+// billed).
 func (e *env) visibilityRule() result {
 	if e.visErr != nil {
 		return result{findings: []finding{{what: e.visErr.Error(), file: "GitHub"}}}
@@ -204,6 +206,17 @@ func (e *env) visibilityRule() result {
 			if (u.Ecosystem == "npm" || u.Ecosystem == "docker" || u.Ecosystem == "docker-compose") && !u.groupsAll() {
 				fs = append(fs, finding{what: fmt.Sprintf("%s %s: not every update grouped (a \"*\" group per "+
 					"update type)", u.Ecosystem, u.Directory), file: scaffold.Dependabot})
+			}
+		}
+	}
+	if w, err := e.loadWorkflow(scaffold.Vuln); err != nil {
+		fs = append(fs, finding{what: err.Error(), file: scaffold.Vuln})
+	} else if w != nil {
+		var on map[string]yaml.Node
+		if w.On.Decode(&on) == nil {
+			if _, ok := on["schedule"]; ok {
+				fs = append(fs, finding{what: "private repo: no schedule (Actions minutes), workflow_dispatch only",
+					file: scaffold.Vuln})
 			}
 		}
 	}

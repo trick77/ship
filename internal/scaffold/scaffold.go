@@ -38,6 +38,7 @@ const (
 const (
 	CI         = ".github/workflows/ci.yaml"
 	Release    = ".github/workflows/release.yaml"
+	Vuln       = ".github/workflows/vuln.yaml"
 	Cleanup    = ".github/workflows/cleanup-images.yaml"
 	Dependabot = ".github/dependabot.yaml"
 	Ignore     = ".dockerignore"
@@ -153,12 +154,16 @@ func Files(root string, c *config.Config, f Facts) ([]File, error) {
 	}
 	visibility := ""
 	if f.Visibility == "" {
-		visibility = "repo visibility unknown (set ship.yaml visibility: or fix the lookup), ci.yaml cannot be rendered"
+		visibility = "repo visibility unknown (set ship.yaml visibility: or fix the lookup), ci.yaml and vuln.yaml " +
+			"cannot be rendered"
 	}
 	if err := add(CI, "ci.yaml", visibility, nil); err != nil {
 		return nil, err
 	}
 	if err := add(Release, "release.yaml", "", nil); err != nil {
+		return nil, err
+	}
+	if err := add(Vuln, "vuln.yaml", visibility, nil); err != nil {
 		return nil, err
 	}
 	if d.Images {

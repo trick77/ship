@@ -98,6 +98,29 @@ jobs:
     uses: trick77/ship/.github/workflows/check.yaml@master
 `
 
+// Weekly on public repos (free minutes); private ones by hand only: every push runs govulncheck already.
+const publicLibVuln = `name: Vuln
+
+# Weekly govulncheck: a vulnerability published since the last push fails here, not on the next one.
+# By hand: gh workflow run Vuln
+on:
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One scan per ref: a newer run cancels the one in progress (read-only, nothing to finish).
+concurrency:
+  group: vuln-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  vuln:
+    uses: trick77/ship/.github/workflows/vuln.yaml@master
+`
+
 func TestFiles_whenApp_thenEveryOwnedFile(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, "Containerfile", "FROM scratch\n")
@@ -105,7 +128,7 @@ func TestFiles_whenApp_thenEveryOwnedFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{CI, Release, Cleanup, Dependabot, Ignore, "ui/" + ESLint, "ui/" + TSConfigNode, "ui/" + NPMRC,
+	want := []string{CI, Release, Vuln, Cleanup, Dependabot, Ignore, "ui/" + ESLint, "ui/" + TSConfigNode, "ui/" + NPMRC,
 		GitIgnore, Makefile}
 	if got := paths(files); strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Fatalf("files %v", got)
@@ -118,6 +141,11 @@ func TestFiles_whenApp_thenEveryOwnedFile(t *testing.T) {
 		if !strings.Contains(rel, s) {
 			t.Errorf("release.yaml lacks %q:\n%s", s, rel)
 		}
+	}
+	if v := string(byPath(t, files, Vuln).Want); !strings.Contains(v, "    with:\n      go-dir: backend\n") ||
+		strings.Contains(v, "pull_request") || strings.Contains(v, "schedule:") ||
+		!strings.Contains(v, "on:\n  workflow_dispatch:\n") || !strings.Contains(v, "group: vuln-${{ github.ref }}") {
+		t.Errorf("vuln.yaml:\n%s", v)
 	}
 	if cl := string(byPath(t, files, Cleanup).Want); !strings.Contains(cl, `packages: '["core", "core-ui"]'`) {
 		t.Errorf("cleanup:\n%s", cl)
@@ -153,7 +181,7 @@ func TestFiles_whenPublicLibrary_thenCallersOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := paths(files); strings.Join(got, " ") != strings.Join([]string{CI, Release, Dependabot}, " ") {
+	if got := paths(files); strings.Join(got, " ") != strings.Join([]string{CI, Release, Vuln, Dependabot}, " ") {
 		t.Fatalf("files %v", got)
 	}
 	if ci := byPath(t, files, CI); string(ci.Want) != publicLibCI {
@@ -162,6 +190,9 @@ func TestFiles_whenPublicLibrary_thenCallersOnly(t *testing.T) {
 	rel := string(byPath(t, files, Release).Want)
 	if strings.Contains(rel, "packages:") || strings.Contains(rel, "go-dir") {
 		t.Errorf("library release.yaml:\n%s", rel)
+	}
+	if v := byPath(t, files, Vuln); string(v.Want) != publicLibVuln {
+		t.Errorf("vuln.yaml:\n%s", v.Want)
 	}
 	if dep := string(byPath(t, files, Dependabot).Want); strings.Contains(dep, "npm") || strings.Contains(dep, "docker") ||
 		!strings.Contains(dep, "directory: /\n") {
@@ -258,6 +289,9 @@ func TestFiles_whenFactsMissing_thenManual(t *testing.T) {
 	if f := byPath(t, files, CI); !strings.Contains(f.Manual, "visibility unknown") || !f.Differs() {
 		t.Errorf("ci: %+v", f)
 	}
+	if f := byPath(t, files, Vuln); !strings.Contains(f.Manual, "visibility unknown") || !f.Differs() {
+		t.Errorf("vuln: %+v", f)
+	}
 	if f := byPath(t, files, Cleanup); !strings.Contains(f.Manual, "origin") {
 		t.Errorf("cleanup: %+v", f)
 	}
@@ -312,7 +346,7 @@ func TestFiles_whenOwnTargetsOutsideBlock_thenManual(t *testing.T) {
 		t.Errorf("Makefile: %+v", mk)
 	}
 	wrote, err := Write(dir, files)
-	if err != nil || strings.Join(wrote, " ") != strings.Join([]string{CI, Release, Dependabot}, " ") {
+	if err != nil || strings.Join(wrote, " ") != strings.Join([]string{CI, Release, Vuln, Dependabot}, " ") {
 		t.Fatalf("wrote %v %v", wrote, err)
 	}
 }
