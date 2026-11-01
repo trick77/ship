@@ -57,6 +57,53 @@ func TestRun_whenNoShipYaml_thenCheckAndReleaseRefuse(t *testing.T) {
 	}
 }
 
+func TestEnsureHook(t *testing.T) {
+	hookIn := func(dir string) bool {
+		_, err := os.Stat(filepath.Join(dir, ".git", "hooks", "pre-push"))
+		return err == nil
+	}
+	repo := func(files map[string]string) string {
+		dir := t.TempDir()
+		if out, err := gitInit(dir); err != nil {
+			t.Fatalf("%v %s", err, out)
+		}
+		for name, s := range files {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(s), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return dir
+	}
+	t.Setenv("CI", "")
+	for name, tc := range map[string]struct {
+		files map[string]string
+		ci    string
+		want  bool
+	}{
+		"consumer":    {map[string]string{"ship.yaml": "", "go.mod": "module example.com/x\n"}, "", true},
+		"in CI":       {map[string]string{"ship.yaml": ""}, "true", false},
+		"no ship":     {map[string]string{"go.mod": "module example.com/x\n"}, "", false},
+		"ship itself": {map[string]string{"ship.yaml": "", "go.mod": "module github.com/trick77/ship\n"}, "", false},
+	} {
+		dir := repo(tc.files)
+		t.Setenv("CI", tc.ci)
+		ensureHook(dir)
+		if got := hookIn(dir); got != tc.want {
+			t.Errorf("%s: hook %v, want %v", name, got, tc.want)
+		}
+	}
+	// One it cannot install warns, never fails the command.
+	t.Setenv("CI", "")
+	dir := repo(map[string]string{"ship.yaml": ""})
+	if err := os.MkdirAll(filepath.Join(dir, ".git", "hooks"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".git", "hooks", "pre-push"), []byte("#!/bin/sh\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ensureHook(dir)
+}
+
 func TestReleaseOptions(t *testing.T) {
 	for _, tc := range []struct {
 		args []string

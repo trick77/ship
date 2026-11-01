@@ -114,6 +114,28 @@ func Install(root string) (string, error) {
 	return p, os.Rename(tmp.Name(), p)
 }
 
+// Ensure installs the hook in a clone that has none, and reports whether it did: `ship hooks` once per clone is easy
+// to miss, and a clone without it pushes ungated. A hook already there is left as it is (ship's, stale ones included:
+// Refresh brings those up on the next push); one ship did not install is an error, unless it runs ship pre-push.
+func Ensure(root string) (string, bool, error) {
+	p, err := path(root)
+	if err != nil {
+		return "", false, err
+	}
+	b, err := os.ReadFile(p) //nolint:gosec // the hook path git reports
+	switch {
+	case err == nil && (ours(string(b)) || strings.Contains(string(b), "ship pre-push")):
+		return p, false, nil
+	case err == nil:
+		return p, false, fmt.Errorf("%s is not ship's and never runs ship pre-push: pushes skip the gate; merge "+
+			"ship's in by hand (README)", p)
+	case !errors.Is(err, os.ErrNotExist):
+		return "", false, err
+	}
+	p, err = Install(root)
+	return p, err == nil, err
+}
+
 // Backup suffixes the previous hook Refresh keeps (pre-push.ship-old), one copy, the last one replaced.
 const Backup = ".ship-old"
 

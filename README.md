@@ -234,5 +234,8 @@ A repo moving to ship, in one PR (its own subject already Go style: the new gate
 3. `ship conform`: what init cannot write (Containerfile, package.json scripts and devDependencies, vite config, kit, AGENTS.md)
    by hand, or an `allow` entry with its why. AGENTS.md, verbatim with the repo's own areas:
    ``- Commit subjects + PR titles: Go style `area: what` (`<area>: …`, `<area>: …`), gated by ship; release notes list them by area.``
-4. `ship hooks` in every clone.
+   ``- Fresh clone: `ship hooks` before the first push (check, conform and init install it too); without the pre-push hook a push skips the gate.``
+4. `ship hooks` in every clone. `.git/hooks` is in no commit, so conform cannot see it: `ship check`, `conform` and
+   `init` run by hand (not in CI, not in ship itself) install it in a clone that has none, a hook ship cannot write
+   (core.hooksPath elsewhere, a foreign pre-push) is a warning.
 5. `ship check` green locally, then push: the hook runs it.

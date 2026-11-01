@@ -24,6 +24,11 @@ const KitModule = "github.com/trick77/ship/kit"
 // AgentsLine is the start of AGENTS.md's commit-subject line (README, Adopting ship); the areas are the repo's.
 const AgentsLine = "Commit subjects + PR titles: Go style `area: what`"
 
+// HooksLine is AGENTS.md's hook line, verbatim (README, Adopting ship): .git/hooks is in no commit, so the clone's
+// hook is the one gate step conform cannot see; every agent is told instead.
+const HooksLine = "Fresh clone: `ship hooks` before the first push (check, conform and init install it too); " +
+	"without the pre-push hook a push skips the gate."
+
 // listed is git's view of the tree (tracked and untracked, not ignored), read once.
 func (e *env) listed() map[string]bool {
 	if e.git == nil {
@@ -463,7 +468,7 @@ func (e *env) inModule(f string, listed map[string]bool) bool {
 	return true
 }
 
-// agents: AGENTS.md tells every agent the subject style the gate enforces.
+// agents: AGENTS.md tells every agent the subject style the gate enforces and the hook a fresh clone needs.
 func (e *env) agents() result {
 	b, err := e.read("AGENTS.md")
 	switch {
@@ -471,11 +476,17 @@ func (e *env) agents() result {
 		return result{findings: []finding{{what: err.Error(), file: "AGENTS.md"}}}
 	case b == nil:
 		return result{findings: []finding{{what: "missing", file: "AGENTS.md"}}}
-	case !bytes.Contains(b, []byte(AgentsLine)):
-		return result{findings: []finding{{what: "no commit-subject line (README, Adopting ship: `- " + AgentsLine +
-			" (…), gated by ship; …`)", file: "AGENTS.md"}}}
 	}
-	return result{}
+	var fs []finding
+	if !bytes.Contains(b, []byte(AgentsLine)) {
+		fs = append(fs, finding{what: "no commit-subject line (README, Adopting ship: `- " + AgentsLine +
+			" (…), gated by ship; …`)", file: "AGENTS.md"})
+	}
+	// ship itself has no hook: its gate is the branch's own ship, run by hand (its AGENTS.md says so).
+	if !config.Self(e.root) && !bytes.Contains(b, []byte(HooksLine)) {
+		fs = append(fs, finding{what: "no hooks line (README, Adopting ship: `- " + HooksLine + "`)", file: "AGENTS.md"})
+	}
+	return result{findings: fs}
 }
 
 // postgres: the test DB image is pinned once. compose:<service> must resolve; a literal image (or version) of a
