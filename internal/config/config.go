@@ -147,6 +147,13 @@ func (g Go) CoverpkgArg() string {
 	return *g.Coverpkg
 }
 
+// Self reports whether root is ship's own repo (its root go.mod is ship's module): gated by hand with the branch's
+// own ship, never by the pre-push hook consumers run master's ship in.
+func Self(root string) bool {
+	b, err := os.ReadFile(filepath.Join(root, "go.mod")) //nolint:gosec // the repo's own go.mod
+	return err == nil && strings.HasPrefix(string(b), "module github.com/trick77/ship\n")
+}
+
 // Load reads root/ship.yaml and fills the defaults. A missing file is an error: a repo without one has no gate.
 func Load(root string) (*Config, error) {
 	b, err := os.ReadFile(filepath.Join(root, File)) //nolint:gosec // the repo's own ship.yaml

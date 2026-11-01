@@ -16,6 +16,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/trick77/ship/internal/check"
 	"github.com/trick77/ship/internal/config"
@@ -67,6 +68,10 @@ func run(args []string) error {
 	root, err := gitx.Root(wd)
 	if err != nil {
 		return err
+	}
+	switch args[0] {
+	case "check", "conform", "init":
+		ensureHook(root)
 	}
 	switch args[0] {
 	case "check":
@@ -133,6 +138,28 @@ func run(args []string) error {
 	}
 	fmt.Fprint(os.Stderr, usage)
 	return fmt.Errorf("unknown command %q", args[0])
+}
+
+// ensureHook gives a ship repo's clone its pre-push hook when check, conform or init runs there by hand: a clone
+// without one pushes ungated, and `ship hooks` once per clone is the step that gets skipped. Never in CI (no pushes
+// from there), never in ship itself (gated by hand, its own branch's ship, AGENTS.md), never without ship.yaml. A
+// hook it cannot install is a warning: the command still runs.
+func ensureHook(root string) {
+	if os.Getenv("CI") != "" {
+		return
+	}
+	if _, err := os.Stat(filepath.Join(root, config.File)); err != nil {
+		return
+	}
+	if config.Self(root) {
+		return
+	}
+	switch p, ok, err := hook.Ensure(root); {
+	case err != nil:
+		fmt.Fprintln(os.Stderr, "ship: warning: no ship pre-push hook in this clone, pushes skip the gate:", err)
+	case ok:
+		fmt.Fprintln(os.Stderr, "ship: pre-push hook installed at", p, "(this clone had none: pushes now run the gate)")
+	}
 }
 
 // conformCmd runs `conform [-fix]` or `init [-diff]`.

@@ -103,7 +103,7 @@ globalThis.ResizeObserver = class {} as never;
 `
 
 const agentsMD = "# AGENTS.md\n\n- Commit subjects + PR titles: Go style `area: what` (`api: …`), gated by ship; release notes list them " +
-	"by area.\n"
+	"by area.\n- " + HooksLine + "\n"
 
 // repo is a fixture: a git repo with a GitHub origin and the given files.
 type repo struct {
@@ -489,7 +489,10 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 			"FAIL handrolled: own shutdown signal handling: use kit's (run.Context, httpx.Serve) (backend/cmd/app/main.go)",
 			"FAIL handrolled: own OIDC: use github.com/trick77/ship/kit/auth (backend/internal/auth/oidc.go)"}},
 		{"agents", appShip, func(r *repo) { r.write("AGENTS.md", "# AGENTS.md\n") },
-			[]string{"FAIL agents: no commit-subject line"}},
+			[]string{"FAIL agents: no commit-subject line", "FAIL agents: no hooks line"}},
+		{"agents without hooks line", appShip, func(r *repo) {
+			r.write("AGENTS.md", strings.Replace(agentsMD, "- "+HooksLine+"\n", "", 1))
+		}, []string{"FAIL agents: no hooks line"}},
 		{"agents missing", appShip, func(r *repo) { r.remove("AGENTS.md") },
 			[]string{"FAIL agents: missing (AGENTS.md)"}},
 		{"unknown allow", appShip + "allow:\n  - { rule: scafold, why: typo }\n", func(*repo) {},
@@ -517,6 +520,17 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// ship itself has no pre-push hook (its gate is the branch's own ship, by hand): no hooks line wanted there.
+func TestRun_whenShipItself_thenNoHooksLine(t *testing.T) {
+	r := app(t)
+	r.write("AGENTS.md", strings.Replace(agentsMD, "- "+HooksLine+"\n", "", 1))
+	r.write("go.mod", "module github.com/trick77/ship\n\ngo 1.27.0\n")
+	out, _ := r.run(appShip)
+	if strings.Contains(out, "no hooks line") || strings.Contains(out, "no commit-subject line") {
+		t.Fatalf("agents in ship itself:\n%s", out)
 	}
 }
 

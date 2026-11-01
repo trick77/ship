@@ -117,6 +117,48 @@ func TestInstall(t *testing.T) {
 }
 
 // Only ship's own hook with another script is stale: none, the current one or a foreign hook is not.
+func TestEnsure(t *testing.T) {
+	dir := repo(t)
+	p, ok, err := Ensure(dir)
+	if err != nil || !ok {
+		t.Fatalf("first: %s %v %v", p, ok, err)
+	}
+	if b, err := os.ReadFile(p); err != nil || string(b) != script { //nolint:gosec // test temp dir
+		t.Fatalf("hook: %v", err)
+	}
+	if _, ok, err := Ensure(dir); err != nil || ok {
+		t.Fatalf("second: %v %v", ok, err)
+	}
+	// A stale copy of ship's is left for Refresh, a hand-merged one that runs ship pre-push is the user's.
+	for _, s := range []string{"#!/bin/sh\n# " + marker + " (old)\n", "#!/bin/sh\nnpx lint-staged\nship pre-push \"$@\"\n"} {
+		if err := os.WriteFile(p, []byte(s), 0o700); err != nil { //nolint:gosec // test temp dir
+			t.Fatal(err)
+		}
+		if _, ok, err := Ensure(dir); err != nil || ok {
+			t.Fatalf("%q: %v %v", s, ok, err)
+		}
+		if b, _ := os.ReadFile(p); string(b) != s { //nolint:gosec // test temp dir
+			t.Fatalf("%q overwritten: %s", s, b)
+		}
+	}
+	if err := os.WriteFile(p, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil { //nolint:gosec // test temp dir
+		t.Fatal(err)
+	}
+	if _, ok, err := Ensure(dir); err == nil || ok || !strings.Contains(err.Error(), "skip the gate") {
+		t.Fatalf("foreign hook: %v %v", ok, err)
+	}
+}
+
+func TestEnsure_whenHooksPathOutsideRepo_thenError(t *testing.T) {
+	dir := repo(t)
+	if _, err := gitx.Git(dir, "config", "core.hooksPath", t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := Ensure(dir); err == nil || ok || !strings.Contains(err.Error(), "outside this repo") {
+		t.Fatalf("%v %v", ok, err)
+	}
+}
+
 func TestStale(t *testing.T) {
 	if Stale(t.TempDir()) {
 		t.Fatal("no repo reported stale")
