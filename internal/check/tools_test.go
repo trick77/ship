@@ -83,7 +83,7 @@ func TestVuln(t *testing.T) {
 	if err := r.vuln(); err != nil {
 		t.Fatal(err)
 	}
-	if args := readLog(t, log); args != "run golang.org/x/vuln/cmd/govulncheck@"+pins.Govulncheck+" ./...\n" {
+	if args := readLog(t, log); args != "run golang.org/x/vuln/cmd/govulncheck@"+pins.Govulncheck+" -show verbose ./...\n" {
 		t.Fatalf("args: %q", args)
 	}
 	fakeBin(t, "go", "exit 3")

@@ -418,10 +418,11 @@ func (r runner) modTidy() error {
 }
 
 // vuln fails on a known vulnerability the module's code reaches (govulncheck's call-graph mode: an unreached one in
-// a dependency is reported, never fatal).
+// a dependency is reported, never fatal). -show verbose names the unreached ones (module, found in, fixed in): the
+// release's image scan refuses a HIGH one with a fix, reached or not, so the push is where it shows first.
 func (r runner) vuln() error {
 	return r.eachModule(func(dir string) error {
-		return r.goIn(dir, "run", "golang.org/x/vuln/cmd/govulncheck@"+pins.Govulncheck, "./...")
+		return r.goIn(dir, "run", "golang.org/x/vuln/cmd/govulncheck@"+pins.Govulncheck, "-show", "verbose", "./...")
 	})
 }
 

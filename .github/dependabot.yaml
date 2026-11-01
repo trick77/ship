@@ -5,6 +5,10 @@ updates:
     commit-message: { prefix: deps }   # Go style: "deps: bump …"
     schedule:
       interval: weekly
+    # `// indirect` too: by default Dependabot bumps only direct requirements, and a consumer inherits every
+    # indirect floor kit sets (go-jose v4.1.4 behind go-oidc reached their images that way).
+    allow:
+      - dependency-type: all
     groups:
       go-minor-and-patch:
         patterns: ["*"]
@@ -16,6 +20,8 @@ updates:
     commit-message: { prefix: deps }   # Go style: "deps: bump …"
     schedule:
       interval: weekly
+    allow:
+      - dependency-type: all
     groups:
       go-minor-and-patch:
         patterns: ["*"]
@@ -26,6 +32,8 @@ updates:
     commit-message: { prefix: deps }   # Go style: "deps: bump …"
     schedule:
       interval: weekly
+    allow:
+      - dependency-type: all
     groups:
       go-minor-and-patch:
         patterns: ["*"]
