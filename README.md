@@ -92,7 +92,9 @@ Gates beyond the build and tests, all hard failures:
 
 - golangci-lint: the family config embedded in ship (`internal/check/golangci.yaml`), unless the repo keeps its own
   `.golangci.{yml,yaml,toml,json}` between `go.dir` and the root.
-- govulncheck (pinned, `go run`): a known vulnerability the module's code reaches. The Check and Release workflows
+- govulncheck (pinned, `go run`, `-show verbose`): a known vulnerability the module's code reaches fails; an
+  unreached one in a required module is listed, never fatal (the release's image scan refuses a HIGH one with a fix:
+  read the list before a release). The Check and Release workflows
   run the newest patch of go.mod's major.minor (the higher of its `go` and `toolchain` lines), not the exact
   version: a pinned `go 1.x.0` would fail CI on stdlib fixes a newer local Go already has. A vulnerability published
   after the last push: the Vuln workflow (`vuln.yaml`: public weekly + by hand, private by hand only, Actions

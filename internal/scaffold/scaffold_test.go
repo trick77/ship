@@ -157,6 +157,10 @@ func TestFiles_whenApp_thenEveryOwnedFile(t *testing.T) {
 			t.Errorf("dependabot lacks %q:\n%s", s, dep)
 		}
 	}
+	// gomod only: npm's "all" would open a PR for every transitive lockfile entry.
+	if n := strings.Count(dep, "dependency-type: all"); n != 1 {
+		t.Errorf("dependabot: %d allow-all, want 1 (gomod):\n%s", n, dep)
+	}
 	if ig := string(byPath(t, files, Ignore).Want); !strings.Contains(ig, "*\n!backend\n!ui\n") ||
 		!strings.Contains(ig, "ui/node_modules\nui/dist\n") {
 		t.Errorf(".dockerignore:\n%s", ig)
@@ -210,6 +214,10 @@ func TestFiles_whenGoModules_thenGomodEntryEach(t *testing.T) {
 		if !strings.Contains(dep, s) {
 			t.Errorf("dependabot lacks %q:\n%s", s, dep)
 		}
+	}
+	// Every gomod entry bumps `// indirect` requirements too, github-actions keeps Dependabot's default.
+	if n := strings.Count(dep, "    allow:\n      - dependency-type: all\n    groups:\n"); n != 3 {
+		t.Errorf("dependabot: %d allow-all entries, want 3 (one per gomod):\n%s", n, dep)
 	}
 }
 
