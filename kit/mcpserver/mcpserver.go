@@ -280,9 +280,9 @@ func (h *handler) callTool(w http.ResponseWriter, r *http.Request, req request, 
 	if len(dropped) > 0 {
 		// Capped first, so the note survives a long text: without it the model would ask for a file it never got.
 		note := "\n(not attached, too large: " + strings.Join(dropped, ", ") + ")"
-		text = capText(text, h.maxText-len(note)) + note
+		text = CapText(text, h.maxText-len(note)) + note
 	} else {
-		text = capText(text, h.maxText)
+		text = CapText(text, h.maxText)
 	}
 	content := []map[string]any{{"type": "text", "text": text}}
 	result := map[string]any{"content": append(content, files...)}

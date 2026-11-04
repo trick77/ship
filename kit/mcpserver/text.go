@@ -21,9 +21,10 @@ func OneLine(s string, n int) string {
 	return strings.TrimSpace(string(r[:n-1])) + "…"
 }
 
-// capText trims s to at most max bytes on a line boundary when it can, a rune boundary otherwise, and says so.
-// A max with no room for the note gives "" (a long list of dropped files can eat the whole cap).
-func capText(s string, max int) string {
+// CapText trims s to at most max bytes on a line boundary when it can, a rune boundary otherwise, and says so: the
+// cut the handler makes at Server.MaxTextBytes, for a tool that cuts part of its text itself. A max with no room
+// for the note gives "".
+func CapText(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}

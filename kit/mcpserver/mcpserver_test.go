@@ -323,10 +323,10 @@ func TestHandler_longTextIsCappedAtALine(t *testing.T) {
 	if len(text) > defaultMaxTextBytes || !strings.HasSuffix(text, "line of text"+truncatedNote) {
 		t.Errorf("len %d, tail %q", len(text), text[len(text)-40:])
 	}
-	if capText("short", 10) != "short" || capText("much too long", 5) != "" {
+	if CapText("short", 10) != "short" || CapText("much too long", 5) != "" {
 		t.Error("capText edges")
 	}
-	if got := capText(strings.Repeat("ä", 30), 30); len(got) > 30 || !strings.HasSuffix(got, truncatedNote) || !strings.HasPrefix(got, "ä") {
+	if got := CapText(strings.Repeat("ä", 30), 30); len(got) > 30 || !strings.HasSuffix(got, truncatedNote) || !strings.HasPrefix(got, "ä") {
 		t.Errorf("rune cut %q", got)
 	}
 }
