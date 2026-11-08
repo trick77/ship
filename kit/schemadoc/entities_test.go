@@ -18,7 +18,7 @@ func TestEntities(t *testing.T) {
 			Doc: "Channel is one row of the channels table.\nSubscribers is 0 when the count is hidden.\n\nThe second paragraph is not part of the summary.",
 			Fields: []Field{
 				{Name: "ID", Type: "string"},
-				{Name: "Name", Type: "string", Doc: "Name is the display name."},
+				{Name: "Name", Type: "string", Doc: "Name is the display name. A second doc line is kept."},
 				{Name: "Subscribers", Type: "int64", Doc: "trailing comment, used when there is no doc"},
 				{Name: "AddedAt", Type: "*time.Time"},
 				{Name: "Tags", Type: "[]string"},
@@ -27,7 +27,10 @@ func TestEntities(t *testing.T) {
 				{Name: "Duration", Type: "time.Duration", Embedded: true},
 			}},
 		{Package: "channels", Dir: "channels", Name: "Stats", Table: "-",
-			Doc: "Stats is computed per request, never stored.", Fields: []Field{{Name: "Count", Type: "int"}}},
+			Doc: "Stats is computed per request, never stored.", Fields: []Field{
+				{Name: "Count", Type: "int", Doc: "Count is the number of videos, hidden ones included."},
+				{Name: "Since", Type: "string", Doc: "trailing comment"},
+			}},
 		{Package: "channels", Dir: "channels", Name: "Untagged", Doc: "Untagged has no Table line."},
 		{Package: "channels", Dir: "channels", Name: "Video", Table: "videos",
 			Doc: "Video is one row of videos, declared in a group.",

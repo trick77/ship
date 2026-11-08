@@ -40,7 +40,7 @@ func TestGoldenStale(t *testing.T) {
 	}
 	r := &recorder{TB: t}
 	Golden(r, []byte("a\nB\nc\n"), path)
-	for _, want := range []string{path, "line 2", UpdateEnv + "=1"} {
+	for _, want := range []string{path, "line 2", UpdateEnv + "=1", RegenerateWhere} {
 		if !strings.Contains(r.failed, want) {
 			t.Errorf("failure %q lacks %q", r.failed, want)
 		}
@@ -52,7 +52,7 @@ func TestGoldenMissingFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "schema.md")
 	r := &recorder{TB: t}
 	Golden(r, []byte("a\n"), path)
-	if !strings.Contains(r.failed, UpdateEnv+"=1") {
+	if !strings.Contains(r.failed, UpdateEnv+"=1") || !strings.Contains(r.failed, RegenerateWhere) {
 		t.Errorf("failure %q does not say how to create it", r.failed)
 	}
 }

@@ -32,8 +32,8 @@ type Entity struct {
 	Fields []Field
 }
 
-// Field is one field, exported or not (a scanned column may be unexported); blank fields are left out. Doc is the
-// first line of its doc comment, else of its trailing comment.
+// Field is one field, exported or not (a scanned column may be unexported); blank fields are left out. Doc is its
+// doc comment, else its trailing comment, whole and on one line.
 type Field struct {
 	Name     string
 	Type     string
@@ -47,7 +47,7 @@ const NoTable = "-"
 var tableLine = regexp.MustCompile(`^Table:\s*(\S+)\s*$`)
 
 // Entities reads every model.go below dir, skipping testdata, vendor and directories starting with "." or "_" (as
-// the go tool does), ordered by directory, then type name.
+// the go tool does) and node_modules (a UI's packages, no Go of the module's), ordered by directory, then type name.
 func Entities(dir string) ([]Entity, error) {
 	var out []Entity
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
@@ -56,7 +56,8 @@ func Entities(dir string) ([]Entity, error) {
 		}
 		if d.IsDir() {
 			n := d.Name()
-			if path != dir && (n == "testdata" || n == "vendor" || strings.HasPrefix(n, ".") || strings.HasPrefix(n, "_")) {
+			skip := n == "testdata" || n == "vendor" || n == "node_modules" || strings.HasPrefix(n, ".") || strings.HasPrefix(n, "_")
+			if path != dir && skip {
 				return filepath.SkipDir
 			}
 			return nil
@@ -126,9 +127,9 @@ func fields(st *ast.StructType) []Field {
 	var out []Field
 	for _, f := range st.Fields.List {
 		typ := types.ExprString(f.Type)
-		doc := firstLine(f.Doc.Text())
+		doc := oneLine(f.Doc.Text())
 		if doc == "" {
-			doc = firstLine(f.Comment.Text())
+			doc = oneLine(f.Comment.Text())
 		}
 		if len(f.Names) == 0 {
 			name := typ[strings.LastIndex(typ, ".")+1:]
@@ -145,15 +146,10 @@ func fields(st *ast.StructType) []Field {
 	return out
 }
 
-func firstLine(s string) string {
-	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
-	return strings.TrimSpace(line)
-}
-
 // Summary is the doc's first paragraph on one line.
 func (e Entity) Summary() string {
 	para, _, _ := strings.Cut(e.Doc, "\n\n")
-	return strings.Join(strings.Fields(para), " ")
+	return oneLine(para)
 }
 
 // QualifiedName is package.Type.

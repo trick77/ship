@@ -11,7 +11,7 @@ import "time"
 type Channel struct {
 	ID string
 	// Name is the display name.
-	// A second doc line is dropped.
+	// A second doc line is kept.
 	Name        string
 	Subscribers int64 // trailing comment, used when there is no doc
 	AddedAt     *time.Time
@@ -25,7 +25,10 @@ type Channel struct {
 //
 // Table: -
 type Stats struct {
+	// Count is the number of videos,
+	// hidden ones included.
 	Count int
+	Since string // trailing comment
 }
 
 type (

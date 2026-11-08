@@ -15,6 +15,10 @@ const UpdateEnv = "SCHEMADOC_UPDATE"
 // Regenerate is the command that rewrites a consumer's doc, by the convention that its test is named TestSchemaDoc.
 const Regenerate = UpdateEnv + "=1 go test ./... -run TestSchemaDoc"
 
+// RegenerateWhere is where Regenerate runs: a repo's Go module is often a subdirectory (backend/), and go test from
+// the repo root above it finds no module.
+const RegenerateWhere = "in the Go module directory"
+
 // Golden fails t when the file at path does not hold got, naming the first differing line; with UpdateEnv set it
 // writes got there instead, creating the directory.
 func Golden(t testing.TB, got []byte, path string) {
@@ -31,11 +35,12 @@ func Golden(t testing.TB, got []byte, path string) {
 	}
 	want, err := os.ReadFile(path) //nolint:gosec // the caller's own doc path
 	if err != nil {
-		t.Fatalf("schemadoc: %v; write it with %s", err, Regenerate)
+		t.Fatalf("schemadoc: %v; write it %s with %s", err, RegenerateWhere, Regenerate)
 		return
 	}
 	if !bytes.Equal(want, got) {
-		t.Fatalf("schemadoc: %s is stale, first difference at line %d; regenerate with %s", path, firstDiff(want, got), Regenerate)
+		t.Fatalf("schemadoc: %s is stale, first difference at line %d; regenerate %s with %s", path, firstDiff(want, got),
+			RegenerateWhere, Regenerate)
 	}
 }
 
