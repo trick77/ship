@@ -53,6 +53,10 @@ on:
         description: How to run ship; empty = ship at master's sha on GitHub. ship's own repo uses "go run .".
         type: string
         default: ""
+      ref:
+        description: The commit to check; empty = the event's. ship's Pins workflow gates its bump before master has it.
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -67,6 +71,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          ref: ${{ inputs.ref }}
       # Go: the newest patch of go.mod's major.minor, not its exact version: setup-go given go.mod installs a pinned
       # 1.x.0 as is, and govulncheck fails on stdlib fixes a dev's newer local Go has. The higher of the go and
       # toolchain lines: below either, go (GOTOOLCHAIN=auto) switches to that exact, unpatched version. Copied in

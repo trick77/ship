@@ -1,0 +1,72 @@
+name: Pins
+
+# Daily: internal/pins' tool versions (golangci-lint, govulncheck, trivy), Go consts Dependabot cannot read, move to
+# their newest releases by themselves. The bump runs the full gate (check.yaml) and, green, lands on master and is
+# released (patch), as a merged PR would be. A push with the GITHUB_TOKEN starts no workflow: hence the gate here
+# and the release dispatched (workflow_dispatch is the one event that token may start).
+on:
+  schedule:
+    - cron: "41 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pins
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.bump.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - id: bump
+        run: |
+          subject="$(go run ./internal/pins/update)"
+          [ -n "$subject" ] || { echo "every pin is current"; exit 0; }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -q -am "$subject"
+          git push -f origin HEAD:refs/heads/pins/latest
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  check:
+    needs: [bump]
+    if: needs.bump.outputs.sha != ''
+    uses: ./.github/workflows/check.yaml
+    with:
+      ref: ${{ needs.bump.outputs.sha }}
+      ship: go run .
+      node-version: "22"
+      ui-dir: testdata/ui
+
+  # Fast-forward only: master moved since the bump → no push, tomorrow's run bumps on top of it.
+  land:
+    needs: [bump, check]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - env:
+          SHA: ${{ needs.bump.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch -q origin pins/latest
+          git merge -q --ff-only "$SHA"
+          git push origin HEAD:refs/heads/master
+          git push -q origin :refs/heads/pins/latest
+          gh workflow run ship-release.yaml --ref master -f bump=auto -f dir=ship
