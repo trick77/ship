@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -31,7 +32,7 @@ type pin struct {
 
 const pinsGo = "internal/pins/pins.go"
 
-// errNotYet: the newest release is not usable yet (trivy's image not pushed): no change, no failure.
+// errNotYet: no release usable yet (all within the cooldown, or no trivy image): no change, no failure.
 var errNotYet = errors.New("not usable yet")
 
 var tracked = []pin{
@@ -124,54 +125,113 @@ func newer(to, cur, prefix string) bool {
 	return to != cur && prefix+release.Latest([]string{cur, to}, prefix).String() == to
 }
 
-// proxyLatest: the module proxy's @latest, the newest release go get would take (no pre-release).
-func proxyLatest(module string) func(Get) (string, error) {
-	return func(get Get) (string, error) {
-		b, err := get("https://proxy.golang.org/"+module+"/@latest", nil)
+// cooldown: a release is taken once this old, time for a hijacked or broken one to be pulled (Dependabot's 3 days).
+const cooldown = 72 * time.Hour
+
+// walk caps the releases newest looks at below the highest: one lookup each.
+const walk = 10
+
+// newest is the highest of versions (prefix + X.Y.Z; others ignored) ok accepts, walking down from the highest:
+// a project releasing faster than the cooldown still moves, to its newest release old enough. errNotYet when none.
+func newest(versions []string, prefix string, ok func(v string) (bool, error)) (string, error) {
+	var cands []string
+	for _, v := range versions {
+		if valid(v, prefix) {
+			cands = append(cands, v)
+		}
+	}
+	for i := 0; i < walk && len(cands) > 0; i++ {
+		v := prefix + release.Latest(cands, prefix).String()
+		good, err := ok(v)
 		if err != nil {
 			return "", err
 		}
-		var v struct{ Version string }
-		if err := json.Unmarshal(b, &v); err != nil {
+		if good {
+			return v, nil
+		}
+		cands = slices.DeleteFunc(cands, func(c string) bool { return c == v })
+	}
+	return "", errNotYet
+}
+
+// aged: t is past the cooldown.
+func aged(t time.Time) bool { return !t.IsZero() && time.Since(t) >= cooldown }
+
+// proxyLatest: the newest release on the module proxy past the cooldown (its .info Time: when the proxy first saw it).
+func proxyLatest(module string) func(Get) (string, error) {
+	base := "https://proxy.golang.org/" + module + "/@v/"
+	return func(get Get) (string, error) {
+		b, err := get(base+"list", nil)
+		if err != nil {
 			return "", err
 		}
-		return v.Version, nil
+		return newest(strings.Fields(string(b)), "v", func(v string) (bool, error) {
+			b, err := get(base+v+".info", nil)
+			if err != nil {
+				return false, err
+			}
+			var info struct{ Time time.Time }
+			if err := json.Unmarshal(b, &info); err != nil {
+				return false, err
+			}
+			return aged(info.Time), nil
+		})
 	}
 }
 
-// trivyLatest: the newest GitHub release whose image is on ghcr already (the release can precede its push). With
-// GITHUB_TOKEN (the workflow's) the API call is authenticated: unauthenticated, a shared runner IP may be out of its
-// 60 an hour.
+// trivyLatest: the newest GitHub release past the cooldown whose image is on ghcr (the release can precede its push).
+// With GITHUB_TOKEN (the workflow's) the API call is authenticated: unauthenticated, a shared runner IP may be out of
+// its 60 an hour.
 func trivyLatest(get Get) (string, error) {
 	h := map[string]string{"Accept": "application/vnd.github+json"}
 	if t := os.Getenv("GITHUB_TOKEN"); t != "" {
 		h["Authorization"] = "Bearer " + t
 	}
-	b, err := get("https://api.github.com/repos/aquasecurity/trivy/releases/latest", h)
+	// 10: past walk nothing is looked at; each release carries its assets (~100 KB), a page of 30 is MBs.
+	b, err := get("https://api.github.com/repos/aquasecurity/trivy/releases?per_page=10", h)
 	if err != nil {
 		return "", err
 	}
-	var rel struct {
-		Tag string `json:"tag_name"`
+	var rels []struct {
+		Tag        string    `json:"tag_name"`
+		Published  time.Time `json:"published_at"`
+		Draft      bool      `json:"draft"`
+		Prerelease bool      `json:"prerelease"`
 	}
-	if err := json.Unmarshal(b, &rel); err != nil {
+	if err := json.Unmarshal(b, &rels); err != nil {
 		return "", err
 	}
-	tag := strings.TrimPrefix(rel.Tag, "v")
-	if b, err = get("https://ghcr.io/token?scope=repository:aquasecurity/trivy:pull", nil); err != nil {
-		return "", err
+	published := map[string]time.Time{}
+	var tags []string
+	for _, r := range rels {
+		if !r.Draft && !r.Prerelease {
+			tag := strings.TrimPrefix(r.Tag, "v")
+			published[tag] = r.Published
+			tags = append(tags, tag)
+		}
 	}
-	var tok struct{ Token string }
-	if err := json.Unmarshal(b, &tok); err != nil {
-		return "", err
-	}
-	if _, err := get("https://ghcr.io/v2/aquasecurity/trivy/manifests/"+tag, map[string]string{
-		"Authorization": "Bearer " + tok.Token,
-		"Accept":        "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json",
-	}); err != nil {
-		return "", fmt.Errorf("image %s not on ghcr (%w): %w", tag, err, errNotYet)
-	}
-	return tag, nil
+	var token string
+	return newest(tags, "", func(tag string) (bool, error) {
+		if !aged(published[tag]) {
+			return false, nil
+		}
+		if token == "" {
+			b, err := get("https://ghcr.io/token?scope=repository:aquasecurity/trivy:pull", nil)
+			if err != nil {
+				return false, err
+			}
+			var tok struct{ Token string }
+			if err := json.Unmarshal(b, &tok); err != nil {
+				return false, err
+			}
+			token = tok.Token
+		}
+		_, err := get("https://ghcr.io/v2/aquasecurity/trivy/manifests/"+tag, map[string]string{
+			"Authorization": "Bearer " + token,
+			"Accept":        "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json",
+		})
+		return err == nil, nil // no image (yet): the next older release
+	})
 }
 
 // httpGet is Get over the network.
@@ -188,9 +248,13 @@ func httpGet(url string, header map[string]string) ([]byte, error) {
 		return nil, err
 	}
 	defer func() { _ = res.Body.Close() }()
-	b, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	const limit = 8 << 20
+	b, err := io.ReadAll(io.LimitReader(res.Body, limit+1))
 	if err != nil {
 		return nil, err
+	}
+	if len(b) > limit {
+		return nil, fmt.Errorf("GET %s: body over %d bytes", url, limit)
 	}
 	if res.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GET %s: %s", url, res.Status)
