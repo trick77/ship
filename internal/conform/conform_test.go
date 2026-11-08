@@ -1157,10 +1157,15 @@ func TestModel_whenRowTypes_thenFindingsByDeclaringFile(t *testing.T) {
 		"imports database/sql: model.go declares the rows, the store scans them (bad/model.go)",
 		"calls Scan (line 10): model.go declares the rows, the store scans them (bad/model.go)",
 		"User is a row type (scanned at api/api.go:13), declare it in model.go (domain/user.go)",
+		"P is a row type (scanned at plain/plain.go:9), declare it in model.go (plain/plain.go)",
+		"V is a row type (scanned at plain/wrap.go:23), declare it in model.go (plain/wrap.go)",
+		"W is a row type (scanned at plain/wrap.go:20), declare it in model.go (plain/wrap.go)",
 		"appended is a row type (scanned at store/legacy.go:26), declare it in model.go (store/legacy.go)",
 		"legacy is a row type (scanned at store/legacy.go:12), declare it in model.go (store/legacy.go)",
 		`row type Note: no "Table: <name>" doc line (- when it maps no one table) (store/model.go)`,
 		`row type Tag: no "Table: <name>" doc line (- when it maps no one table) (store/model.go)`,
+		"H is a row type (scanned at store/named.go:16), declare it in model.go (store/named.go)",
+		"M is a row type (scanned at store/named.go:19), declare it in model.go (store/named.go)",
 		"Anon is a row type (scanned at store/nested.go:29), declare it in model.go (store/nested.go)",
 		"Base is a row type (scanned at store/nested.go:19), declare it in model.go (store/nested.go)",
 		"Inner is a row type (scanned at store/nested.go:19), declare it in model.go (store/nested.go)",
@@ -1187,7 +1192,8 @@ func TestModel_whenLoadFails_thenOneFinding(t *testing.T) {
 // Golden through an alias, in a module of go.modules, is the test; a repo of it all conforms.
 func TestModel_whenSchemaDocAliasedInModule_thenOK(t *testing.T) {
 	r := fixture(t, "model/rows")
-	for _, f := range []string{"store/legacy.go", "store/nested.go", "store/rec.go", "api/api.go", "bad/model.go"} {
+	for _, f := range []string{"store/legacy.go", "store/nested.go", "store/rec.go", "api/api.go", "bad/model.go",
+		"plain/plain.go", "plain/wrap.go", "store/named.go"} {
 		r.remove(f)
 	}
 	r.edit("store/model.go", "Table: Tags", "Table: tags")
