@@ -26,53 +26,6 @@ import (
 	"github.com/trick77/ship/kit/migrate"
 )
 
-// Schema is the tables of a database, ordered by name.
-type Schema struct {
-	Tables []Table
-}
-
-// Table is one table. Module names a virtual table's module (vec0, fts5), empty for a plain table; ModuleArgs is
-// what its CREATE statement passed the module, on one line. A module may declare its columns untyped (vec0 does), so
-// the arguments are where a vector's width shows.
-type Table struct {
-	Name        string
-	Module      string
-	ModuleArgs  string
-	Columns     []Column
-	ForeignKeys []ForeignKey
-	Indexes     []Index
-}
-
-// Column is one column. PK is its 1-based position in the primary key, 0 when not part of it. Default is the
-// default's SQL text, meaningful only when HasDefault.
-type Column struct {
-	Name       string
-	Type       string
-	NotNull    bool
-	Default    string
-	HasDefault bool
-	PK         int
-}
-
-// ForeignKey is one, possibly composite, foreign key. OnUpdate and OnDelete are spelled as in SQL (NO ACTION,
-// CASCADE, SET NULL, SET DEFAULT, RESTRICT).
-type ForeignKey struct {
-	Columns    []string
-	RefTable   string
-	RefColumns []string
-	OnUpdate   string
-	OnDelete   string
-}
-
-// Index is one secondary index. A primary key's own index is left out; a UNIQUE constraint's is kept. Columns are
-// key columns in order, with " DESC" appended where descending; Where is a partial index's predicate.
-type Index struct {
-	Name    string
-	Columns []string
-	Unique  bool
-	Where   string
-}
-
 // Dialect reads one engine's catalog.
 type Dialect struct {
 	describe func(ctx context.Context, db *sql.DB) ([]Table, error)
@@ -96,32 +49,6 @@ func Describe(ctx context.Context, db *sql.DB, d Dialect) (Schema, error) {
 	}
 	slices.SortFunc(tables, func(a, b Table) int { return strings.Compare(a.Name, b.Name) })
 	return Schema{Tables: tables}, nil
-}
-
-// table is the table named name, nil when there is none.
-func (s Schema) table(name string) *Table {
-	for i := range s.Tables {
-		if s.Tables[i].Name == name {
-			return &s.Tables[i]
-		}
-	}
-	return nil
-}
-
-// pkColumns is t's primary key columns in key order.
-func (t Table) pkColumns() []string {
-	var pk []Column
-	for _, c := range t.Columns {
-		if c.PK > 0 {
-			pk = append(pk, c)
-		}
-	}
-	slices.SortFunc(pk, func(a, b Column) int { return a.PK - b.PK })
-	var out []string
-	for _, c := range pk {
-		out = append(out, c.Name)
-	}
-	return out
 }
 
 // queryRows runs q and calls scan for each row.
