@@ -10,13 +10,20 @@ import (
 
 // The catalog queries, all on current_schema(). A table is $1, its regclass built with quote_ident so mixed-case
 // names resolve. Column lists come back as one string joined by U+001F (no array support needed from the driver;
-// an index expression may hold commas, never that).
+// an index expression may hold commas, never that). A relation an extension owns (PostGIS' spatial_ref_sys and
+// geometry_columns, pg_stat_statements' views, in the schema it was created in) is the extension's, not the schema's:
+// left out, or the doc would change with the extension's version.
 const (
 	qPostgresTables = `SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-		WHERE n.nspname = current_schema() AND c.relkind IN ('r', 'p') AND NOT c.relispartition
+		WHERE n.nspname = current_schema() AND c.relkind IN ('r', 'p') AND NOT c.relispartition AND ` + pgNotExtension + `
 		ORDER BY c.relname`
+	qPostgresViews = `SELECT c.relname, c.relkind::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE n.nspname = current_schema() AND c.relkind IN ('v', 'm') AND ` + pgNotExtension + `
+		ORDER BY c.relname`
+	pgNotExtension = `NOT EXISTS (SELECT 1 FROM pg_depend dep
+			WHERE dep.classid = 'pg_class'::regclass AND dep.objid = c.oid AND dep.deptype = 'e')`
 	qPostgresColumns = `SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull,
-			pg_get_expr(d.adbin, d.adrelid),
+			pg_get_expr(d.adbin, d.adrelid), a.attidentity::text, a.attgenerated::text,
 			COALESCE((SELECT k.ordinal_position FROM information_schema.table_constraints tc
 				JOIN information_schema.key_column_usage k
 					ON k.constraint_schema = tc.constraint_schema AND k.constraint_name = tc.constraint_name
@@ -43,11 +50,14 @@ const (
 		WHERE ix.indrelid = to_regclass(quote_ident(current_schema()) || '.' || quote_ident($1))
 			AND NOT ix.indisprimary
 		ORDER BY ic.relname`
+	qPostgresChecks = `SELECT pg_get_constraintdef(con.oid, true) FROM pg_constraint con
+		WHERE con.contype = 'c' AND con.conrelid = to_regclass(quote_ident(current_schema()) || '.' || quote_ident($1))
+		ORDER BY con.conname`
 )
 
 const pgSep = "\x1f"
 
-func describePostgres(ctx context.Context, db *sql.DB) ([]Table, error) {
+func describePostgres(ctx context.Context, db *sql.DB) (Schema, error) {
 	var names []string
 	err := queryRows(ctx, db, qPostgresTables, func(r *sql.Rows) error {
 		var n string
@@ -58,20 +68,36 @@ func describePostgres(ctx context.Context, db *sql.DB) ([]Table, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("list tables: %w", err)
+		return Schema{}, fmt.Errorf("list tables: %w", err)
 	}
-	var tables []Table
+	var s Schema
 	for _, n := range names {
 		if slices.Contains(skipped, n) {
 			continue
 		}
 		t, err := describePostgresTable(ctx, db, n)
 		if err != nil {
-			return nil, fmt.Errorf("describe %s: %w", n, err)
+			return Schema{}, fmt.Errorf("describe %s: %w", n, err)
 		}
-		tables = append(tables, t)
+		s.Tables = append(s.Tables, t)
 	}
-	return tables, nil
+	err = queryRows(ctx, db, qPostgresViews, func(r *sql.Rows) error {
+		var v View
+		if err := r.Scan(&v.Name, &v.Kind); err != nil {
+			return err
+		}
+		if v.Kind == "m" {
+			v.Kind = "materialized view"
+		} else {
+			v.Kind = "view"
+		}
+		s.Views = append(s.Views, v)
+		return nil
+	})
+	if err != nil {
+		return Schema{}, fmt.Errorf("list views: %w", err)
+	}
+	return s, nil
 }
 
 func describePostgresTable(ctx context.Context, db *sql.DB, name string) (Table, error) {
@@ -79,10 +105,11 @@ func describePostgresTable(ctx context.Context, db *sql.DB, name string) (Table,
 	err := queryRows(ctx, db, qPostgresColumns, func(r *sql.Rows) error {
 		var c Column
 		var def sql.NullString
-		if err := r.Scan(&c.Name, &c.Type, &c.NotNull, &def, &c.PK); err != nil {
+		var identity, generated string
+		if err := r.Scan(&c.Name, &c.Type, &c.NotNull, &def, &identity, &generated, &c.PK); err != nil {
 			return err
 		}
-		c.Default, c.HasDefault = def.String, def.Valid
+		c.Default, c.HasDefault = pgDefault(def, identity, generated)
 		t.Columns = append(t.Columns, c)
 		return nil
 	}, name)
@@ -113,7 +140,32 @@ func describePostgresTable(ctx context.Context, db *sql.DB, name string) (Table,
 		t.Indexes = append(t.Indexes, i)
 		return nil
 	}, name)
+	if err != nil {
+		return t, err
+	}
+	err = queryRows(ctx, db, qPostgresChecks, func(r *sql.Rows) error {
+		var check string
+		if err := r.Scan(&check); err != nil {
+			return err
+		}
+		t.Checks = append(t.Checks, check)
+		return nil
+	}, name)
 	return t, err
+}
+
+// pgDefault is a column's Default and HasDefault. An identity column has no default expression, its sequence fills
+// it; a generated column's expression sits where a default's would (pg_attrdef) and is no default.
+func pgDefault(def sql.NullString, identity, generated string) (string, bool) {
+	switch {
+	case identity == "a":
+		return "identity always", true
+	case identity == "d":
+		return "identity by default", true
+	case generated != "":
+		return "generated: " + def.String, true
+	}
+	return def.String, def.Valid
 }
 
 // pgAction spells pg_constraint's one-letter referential action as SQL does.

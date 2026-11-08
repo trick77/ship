@@ -4,11 +4,21 @@ import (
 	"slices"
 )
 
-// Schema is the tables of a database, ordered by name.
+// Schema is the tables and views of a database, each ordered by name.
 //
 // Table: -
 type Schema struct {
 	Tables []Table
+	Views  []View
+}
+
+// View is a view, by name and Kind ("view", "materialized view") only: its definition is the engine's rewrite of
+// the query, which changes with the engine's version. A TimescaleDB continuous aggregate is a view.
+//
+// Table: -
+type View struct {
+	Name string
+	Kind string
 }
 
 // table is the table named name, nil when there is none.
@@ -23,7 +33,8 @@ func (s Schema) table(name string) *Table {
 
 // Table is one table. Module names a virtual table's module (vec0, fts5), empty for a plain table; ModuleArgs is
 // what its CREATE statement passed the module, on one line. A module may declare its columns untyped (vec0 does), so
-// the arguments are where a vector's width shows.
+// the arguments are where a vector's width shows. Checks is the CHECK constraints, each CHECK (<expression>) as the
+// engine spells it: SQLite as written, Postgres as pg_get_constraintdef rewrites it.
 //
 // Table: -
 type Table struct {
@@ -33,6 +44,7 @@ type Table struct {
 	Columns     []Column
 	ForeignKeys []ForeignKey
 	Indexes     []Index
+	Checks      []string
 }
 
 // pkColumns is t's primary key columns in key order.
@@ -52,7 +64,8 @@ func (t Table) pkColumns() []string {
 }
 
 // Column is one column. PK is its 1-based position in the primary key, 0 when not part of it. Default is the
-// default's SQL text, meaningful only when HasDefault.
+// default's SQL text, meaningful only when HasDefault; a Postgres identity column's is "identity always" or
+// "identity by default", a generated column's "generated: <expression>".
 //
 // Table: -
 type Column struct {
@@ -77,7 +90,8 @@ type ForeignKey struct {
 }
 
 // Index is one secondary index. A primary key's own index is left out; a UNIQUE constraint's is kept. Columns are
-// key columns in order, with " DESC" appended where descending; Where is a partial index's predicate.
+// key columns in order, an expression as its text; SQLite appends " COLLATE <name>" where not BINARY, both engines
+// " DESC" where descending. Where is a partial index's predicate.
 //
 // Table: -
 type Index struct {
