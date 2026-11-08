@@ -6,25 +6,53 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/trick77/ship/internal/pins"
 )
 
-// fakeGet answers the upstream lookups with the given versions; a missing trivy image is a 404.
+var (
+	old   = time.Now().Add(-10 * 24 * time.Hour).UTC().Format(time.RFC3339)
+	young = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+)
+
+// fakeGet answers the upstream lookups: each tool has the given version (past the cooldown), an older v0.0.1 and a
+// v99.0.0 within it. trivy's image for the given version is on ghcr only with image; 0.0.1's and 99.0.0's always.
 func fakeGet(golangci, vuln, trivy string, image bool) Get {
+	proxy := func(url, module, v string) ([]byte, bool) {
+		base := "https://proxy.golang.org/" + module + "/@v/"
+		switch url {
+		case base + "list":
+			return []byte("v0.0.1\n" + v + "\nv99.0.0\nv100.0.0-rc.1\n"), true
+		case base + "v99.0.0.info":
+			return []byte(`{"Version":"v99.0.0","Time":"` + young + `"}`), true
+		case base + v + ".info", base + "v0.0.1.info":
+			return []byte(`{"Time":"` + old + `"}`), true
+		}
+		return nil, false
+	}
 	return func(url string, h map[string]string) ([]byte, error) {
+		if b, ok := proxy(url, "github.com/golangci/golangci-lint/v2", golangci); ok {
+			return b, nil
+		}
+		if b, ok := proxy(url, "golang.org/x/vuln", vuln); ok {
+			return b, nil
+		}
 		switch {
-		case strings.Contains(url, "golangci-lint/v2/@latest"):
-			return []byte(`{"Version":"` + golangci + `"}`), nil
-		case strings.Contains(url, "x/vuln/@latest"):
-			return []byte(`{"Version":"` + vuln + `"}`), nil
-		case strings.Contains(url, "trivy/releases/latest"):
-			return []byte(`{"tag_name":"v` + trivy + `"}`), nil
+		case strings.Contains(url, "trivy/releases?"):
+			return []byte(`[{"tag_name":"v99.0.0","published_at":"` + young + `"},` +
+				`{"tag_name":"v98.0.0","published_at":"` + old + `","draft":true},` +
+				`{"tag_name":"v97.0.0","published_at":"` + old + `","prerelease":true},` +
+				`{"tag_name":"v` + trivy + `","published_at":"` + old + `"},` +
+				`{"tag_name":"v0.0.1","published_at":"` + old + `"}]`), nil
 		case strings.Contains(url, "ghcr.io/token"):
 			return []byte(`{"token":"t"}`), nil
-		case strings.HasSuffix(url, "/manifests/"+trivy) && image && h["Authorization"] == "Bearer t":
+		case h["Authorization"] == "Bearer t" && (strings.HasSuffix(url, "/manifests/"+trivy) && image ||
+			strings.HasSuffix(url, "/manifests/0.0.1") || strings.HasSuffix(url, "/manifests/99.0.0") ||
+			strings.HasSuffix(url, "/manifests/98.0.0") || strings.HasSuffix(url, "/manifests/97.0.0")):
 			return []byte(`{}`), nil
 		}
 		return nil, errors.New("404 " + url)
@@ -140,7 +168,8 @@ func TestUpdate_whenOneUpstreamBroken_thenOthersMove(t *testing.T) {
 	}
 }
 
-// A trivy release whose image is not on ghcr yet is no change and no failure: the next run takes it.
+// A trivy release whose image is not on ghcr yet is skipped for the next older one (here below the pin): no change, no
+// failure, the next run takes it.
 func TestUpdate_whenTrivyImageMissing_thenNotYet(t *testing.T) {
 	root := repo(t, pins.Golangci)
 	cs, err := Update(root, fakeGet(pins.Golangci, pins.Govulncheck, "9.1.0", false))
@@ -165,15 +194,55 @@ func TestUpdate_whenSecondFileBroken_thenNothingWritten(t *testing.T) {
 }
 
 func TestUpdate_whenUpstreamBroken_thenError(t *testing.T) {
+	fine := fakeGet(pins.Golangci, pins.Govulncheck, pins.Trivy, true)
 	for name, get := range map[string]Get{
-		"not a version": fakeGet("latest", pins.Govulncheck, pins.Trivy, true),
-		"no prefix":     fakeGet("2.99.0", pins.Govulncheck, pins.Trivy, true),
-		"bad json":      func(string, map[string]string) ([]byte, error) { return []byte("<html>"), nil },
-		"down":          func(u string, _ map[string]string) ([]byte, error) { return nil, errors.New("503 " + u) },
+		"info down": down(fine, "golangci-lint/v2/@v/v99.0.0.info"),
+		"bad info": func(u string, h map[string]string) ([]byte, error) {
+			if strings.HasSuffix(u, ".info") {
+				return []byte("<html>"), nil
+			}
+			return fine(u, h)
+		},
+		"ghcr token down": down(fine, "ghcr.io/token"),
+		"bad json":        func(string, map[string]string) ([]byte, error) { return []byte("<html>"), nil },
+		"down":            func(u string, _ map[string]string) ([]byte, error) { return nil, errors.New("503 " + u) },
 	} {
 		if _, err := Update(repo(t, pins.Golangci), get); err == nil {
 			t.Errorf("%s: no error", name)
 		}
+	}
+}
+
+// Within the cooldown nothing lands: v99.0.0 (an hour old) is never taken, the newest release past it is.
+func TestUpdate_whenWithinCooldown_thenNewestAged(t *testing.T) {
+	cs, err := Update(repo(t, pins.Golangci), fakeGet("v9.0.0", pins.Govulncheck, "9.1.0", true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range cs {
+		if strings.Contains(c.To, "99.0.0") || strings.Contains(c.To, "98.") || strings.Contains(c.To, "97.") {
+			t.Errorf("took %+v: within the cooldown, a draft or a pre-release", c)
+		}
+	}
+}
+
+func TestNewest_whenNoneAccepted_thenNotYet(t *testing.T) {
+	calls := 0
+	_, err := newest([]string{"v1.0.0", "v2.0.0", "latest", "v3.0.0-rc.1"}, "v", func(string) (bool, error) {
+		calls++
+		return false, nil
+	})
+	if !errors.Is(err, errNotYet) || calls != 2 {
+		t.Errorf("%v after %d lookups, want errNotYet after 2 (only versions)", err, calls)
+	}
+	vs := make([]string, 30)
+	for i := range vs {
+		vs[i] = "v1.0." + strconv.Itoa(i)
+	}
+	calls = 0
+	_, _ = newest(vs, "v", func(string) (bool, error) { calls++; return false, nil })
+	if calls != walk {
+		t.Errorf("%d lookups, want the cap %d", calls, walk)
 	}
 }
 
@@ -245,6 +314,10 @@ func TestHTTPGet_whenServed_thenBodyOrStatusError(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
+		if r.URL.Path == "/huge" {
+			_, _ = w.Write(make([]byte, 8<<20+1))
+			return
+		}
 		_, _ = w.Write([]byte(r.Header.Get("X-Pin")))
 	}))
 	if b, err := httpGet(srv.URL+"/ok", map[string]string{"X-Pin": "v1"}); err != nil || string(b) != "v1" {
@@ -252,6 +325,9 @@ func TestHTTPGet_whenServed_thenBodyOrStatusError(t *testing.T) {
 	}
 	if _, err := httpGet(srv.URL+"/missing", nil); err == nil || !strings.Contains(err.Error(), "404") {
 		t.Errorf("missing: %v", err)
+	}
+	if _, err := httpGet(srv.URL+"/huge", nil); err == nil || !strings.Contains(err.Error(), "body over") {
+		t.Errorf("huge: %v", err)
 	}
 	if _, err := httpGet("http://\x7f", nil); err == nil {
 		t.Error("bad url: no error")
