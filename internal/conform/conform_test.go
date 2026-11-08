@@ -147,6 +147,12 @@ import (
 func TestSchemaDoc(t *testing.T) { schemadoc.Golden(t, nil) }
 `
 
+// The headers kit/schemadoc wrote: up to v0.19.x, and since.
+const (
+	schemaDocHeaderOld = SchemaDocPrefix + " Regenerate: SCHEMADOC_UPDATE=1 go test ./... -run TestSchemaDoc -->"
+	schemaDocHeader    = SchemaDocPrefix + " Regenerate in the Go module directory: SCHEMADOC_UPDATE=1 go test ./... -run TestSchemaDoc -->"
+)
+
 const agentsMD = "# AGENTS.md\n\n- Commit subjects + PR titles: Go style `area: what` (`api: …`), gated by ship; release notes list them " +
 	"by area.\n- " + HooksLine + "\n- Schema: `docs/schema.md`, generated.\n"
 
@@ -248,7 +254,7 @@ func app(t *testing.T) *repo {
 		"backend/internal/store/model.go":       appModel,
 		"backend/internal/store/store.go":       appStore,
 		"backend/internal/store/schema_test.go": appSchemaTest,
-		SchemaDoc:                               SchemaDocHeader + "\n\n## videos\n",
+		SchemaDoc:                               schemaDocHeader + "\n\n## videos\n",
 		"AGENTS.md":                             agentsMD,
 		"Makefile":                              "build:\n\tgo build ./...\n",
 	})
@@ -585,6 +591,31 @@ func TestRun_whenOneThingDrifts_thenThatRuleFails(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Only the header's prefix counts: a doc an older kit wrote, its regenerate hint worded otherwise, conforms while
+// its repo moves to the new kit.
+func TestModel_whenSchemaDocHeaderOldOrNew_thenOK(t *testing.T) {
+	for _, h := range []string{schemaDocHeaderOld, schemaDocHeader, schemaDocHeader + "\r"} {
+		r := app(t)
+		r.write(SchemaDoc, h+"\n\n## videos\n")
+		if out, err := r.run(appShip); err != nil || !strings.Contains(out, "ok model\n") {
+			t.Errorf("header %q: %v\n%s", h, err, out)
+		}
+	}
+}
+
+// SchemaDocPrefix is a copy (ship's root module does not import kit): kit's own golden doc, written from its
+// Header, keeps the two one, and the newest header the tests use is that Header.
+func TestSchemaDocPrefix_whenKitHeader_thenMatches(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "kit", "schemadoc", "testdata", "fixture.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _, _ := strings.Cut(string(b), "\n")
+	if !strings.HasPrefix(first, SchemaDocPrefix) || first != schemaDocHeader {
+		t.Errorf("kit's header %q: want prefix %q and the tests' header %q", first, SchemaDocPrefix, schemaDocHeader)
 	}
 }
 
@@ -1162,7 +1193,7 @@ func TestModel_whenSchemaDocAliasedInModule_thenOK(t *testing.T) {
 	r.edit("lib/rows.go", "// Row lives in a go.modules module: read like go.dir.\ntype Row struct{ ID int64 }\n", "")
 	r.write("lib/schema_test.go", "package lib\n\nimport (\n\t\"testing\"\n\n\tsd \""+SchemadocImport+"\"\n)\n\n"+
 		"func TestSchemaDoc(t *testing.T) { sd.Golden(t, nil) }\n")
-	r.write(SchemaDoc, SchemaDocHeader+"\n")
+	r.write(SchemaDoc, schemaDocHeader+"\n")
 	r.write("AGENTS.md", agentsMD)
 	res := (&env{root: r.dir, c: r.config("go:\n  modules: [lib]\n")}).model()
 	if res.skip != "" || len(res.findings) != 0 {
