@@ -25,8 +25,8 @@ deliberately.
   else. ship must never go stale, every repo runs it: a version Dependabot cannot read (a `with:` string, a Go
   const) needs an updater. GitHub's releases/download 504s intermittently, any version, unannounced (2026-11): stale
   cosign-installer v4.1.2 had no retry (v4.1.3 has), every image release failed. New pin → `tracked` in
-  internal/pins/update. Dependabot PRs auto-merge on a green gate (ci.yaml). Auto-landed bumps reach every consumer
-  the same day, unchecked against their code (lint findings, trivy CVEs): wanted, a stale pin broke them all at once.
+  internal/pins/update. Auto-landed bumps (Pins, Dependabot) reach every consumer the same day, unchecked against
+  their code (lint findings, trivy CVEs): wanted, a stale pin broke them all at once.
   npm versions never: Dependabot moves them per repo, an equality pin turns every bump PR red. conform wants the
   UI tools present at an exact version (save-exact), typescript < `pins.TypescriptCap` (typescript-eslint; dependabot's
   ignore renders from it). kit's version is never conform's: Dependabot moves it. Go and Node are floors

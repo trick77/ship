@@ -75,6 +75,55 @@ func TestCIRelease_whenMaster_thenEveryModuleReleased(t *testing.T) {
 	}
 }
 
+// The dependabot job merges to master with no human: only after the gate, only Dependabot's own pushes, only the head
+// and the master the gate checked. A broader if or a lost guard merges a human's or a fork's PR, or an unchecked tree.
+func TestCIDependabot_whenAutoMerge_thenGatedAndGuarded(t *testing.T) {
+	b, err := os.ReadFile(".github/workflows/ci.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var w struct {
+		Jobs struct {
+			Dependabot struct {
+				Needs []string `yaml:"needs"`
+				If    string   `yaml:"if"`
+				Steps []struct {
+					Run string `yaml:"run"`
+				} `yaml:"steps"`
+			} `yaml:"dependabot"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(b, &w); err != nil {
+		t.Fatal(err)
+	}
+	j := w.Jobs.Dependabot
+	if !slices.Equal(j.Needs, []string{"check"}) {
+		t.Errorf("needs %v, want [check]", j.Needs)
+	}
+	for _, want := range []string{"github.event_name == 'pull_request'", "github.actor == 'dependabot[bot]'",
+		"github.event.pull_request.user.login == 'dependabot[bot]'"} {
+		if !strings.Contains(j.If, want+" ") && !strings.HasSuffix(j.If, want) {
+			t.Errorf("if %q lacks %s", j.If, want)
+		}
+	}
+	if strings.Contains(j.If, "||") {
+		t.Errorf("if %q: an || widens it", j.If)
+	}
+	var run string
+	for _, s := range j.Steps {
+		run += s.Run + "\n"
+	}
+	for _, want := range []string{`--match-head-commit "$SHA"`, `commits/$GITHUB_SHA" --jq '.parents[0].sha'`,
+		`[ "$gated" != "$master" ]`, "@dependabot rebase"} {
+		if !strings.Contains(run, want) {
+			t.Errorf("steps lack %s", want)
+		}
+	}
+	if m, g := strings.Index(run, "gh pr merge"), strings.Index(run, `[ "$gated" != "$master" ]`); g < 0 || m < g {
+		t.Error("gh pr merge runs before the master guard")
+	}
+}
+
 // CI's Go is go.mod's major.minor at its newest patch, never setup-go's exact go.mod version: a pinned 1.x.0 misses the
 // stdlib fixes govulncheck demands. check.yaml, release.yaml and vuln.yaml each carry the step; this keeps them one.
 // Each workflow's step is run as the runner does (bash -e) on go.mod shapes: the higher of go and toolchain lines.
