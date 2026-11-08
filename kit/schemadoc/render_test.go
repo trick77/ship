@@ -1,0 +1,75 @@
+package schemadoc
+
+import (
+	"bytes"
+	"slices"
+	"strings"
+	"testing"
+)
+
+func fixtureEntities(t *testing.T) []Entity {
+	t.Helper()
+	es, err := Entities("testdata/module")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return slices.DeleteFunc(es, func(e Entity) bool { return e.Table == "" })
+}
+
+func TestRenderGolden(t *testing.T) {
+	out, err := Render(describeFixture(t), fixtureEntities(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	Golden(t, out, "testdata/fixture.md")
+}
+
+func TestRenderIsDeterministic(t *testing.T) {
+	s := describeFixture(t)
+	es := fixtureEntities(t)
+	first, err := Render(s, es)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.Reverse(s.Tables)
+	slices.Reverse(es)
+	second, err := Render(s, es)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(first, second) {
+		t.Error("output depends on input order")
+	}
+}
+
+func TestRenderUnknownTable(t *testing.T) {
+	es := append(fixtureEntities(t),
+		Entity{Package: "ghosts", Name: "Ghost", Table: "ghosts"},
+		Entity{Package: "ghosts", Name: "Spirit", Table: "spirits"})
+	_, err := Render(describeFixture(t), es)
+	if err == nil || !strings.Contains(err.Error(), "ghosts.Ghost: table ghosts") || !strings.Contains(err.Error(), "ghosts.Spirit: table spirits") {
+		t.Errorf("err = %v, want both unknown tables named", err)
+	}
+}
+
+func TestRenderMissingTableLine(t *testing.T) {
+	es, err := Entities("testdata/module")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Render(describeFixture(t), es)
+	if err == nil || !strings.Contains(err.Error(), "channels.Untagged: no Table: line") {
+		t.Errorf("err = %v, want the untagged type named", err)
+	}
+}
+
+func TestMermaidIdent(t *testing.T) {
+	for in, want := range map[string]string{
+		"TEXT": "TEXT", "float[768]": "float_768_", "varchar(255)": "varchar_255_",
+		"timestamp with time zone": "timestamp_with_time_zone", "": "ANY", "2col": "_2col",
+	} {
+		if got := mermaidIdent(in); got != want {
+			t.Errorf("mermaidIdent(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
