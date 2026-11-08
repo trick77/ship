@@ -23,6 +23,15 @@ allow:
   - rule: handrolled
     path: internal/check/postgres.go
     why: check removes its test container on ctrl-c, a CLI's cleanup, not a service's shutdown
+  - rule: model
+    path: docs/schema.md
+    why: kit's migrate and sqlitex run consumers' databases, ship has no tables of its own
+  - rule: model
+    path: kit/go.mod
+    why: kit's migrate and sqlitex run consumers' databases, ship has no tables of its own
+  - rule: model
+    path: AGENTS.md
+    why: kit's migrate and sqlitex run consumers' databases, ship has no tables of its own
   - rule: gomod
     path: go.mod
-    why: go 1.24 is ship's floor for every consumer's go run, not a toolchain pin
+    why: go 1.26 is ship's floor for every consumer's go run (x/tools'), not a toolchain pin

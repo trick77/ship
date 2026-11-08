@@ -38,6 +38,7 @@ const (
 	Gomod         = "gomod"
 	Kit           = "kit"
 	Handrolled    = "handrolled"
+	Model         = "model"
 	Agents        = "agents"
 	Postgres      = "postgres"
 )
@@ -106,6 +107,7 @@ func rules() []rule {
 		{Gomod, (*env).gomod},
 		{Kit, (*env).kit},
 		{Handrolled, (*env).handrolled},
+		{Model, (*env).model},
 		{Agents, (*env).agents},
 		{Postgres, (*env).postgres},
 	}

@@ -18,7 +18,8 @@ deliberately.
   changed = every clone's hook rewritten on its next push.
 - master is live: the reusable workflows are consumed `@master`. Merge to master only what is releasable; keep
   workflow inputs and ship.yaml backward compatible.
-- Dependencies stay minimal (stdlib + yaml): `go run ...@master` builds them on every machine. `go 1.24` floor.
+- Dependencies stay minimal (stdlib, yaml, x/tools for conform's `model` type check): `go run ...@master` builds
+  them on every machine. `go 1.26` floor (x/tools' own; consumers are at `pins.GoMin` anyway).
 - golangci-lint runs via `go run ...@<ship.yaml lint>`, never the action's release binary (built with an older Go
   than consumers' go.mod: v2.14.0 binary = go1.27.0).
 - Tool versions ship runs or demands (golangci-lint default, govulncheck, trivy) live in `internal/pins`, nowhere

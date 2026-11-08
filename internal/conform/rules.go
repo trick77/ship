@@ -449,8 +449,14 @@ func (e *env) handrolled() result {
 
 // inModule: f belongs to the go.dir module, not to a nested one (kit in ship's repo) or a dir the go tool skips.
 func (e *env) inModule(f string, listed map[string]bool) bool {
+	return inModuleAt(e.c.Go.Dir, f, listed)
+}
+
+// inModuleAt: f belongs to the module at dir (repo-relative, slash form), not to one nested below it or a dir the go
+// tool skips.
+func inModuleAt(dir, f string, listed map[string]bool) bool {
 	rel := f
-	if dir := e.c.Go.Dir; dir != "." {
+	if dir != "." {
 		var ok bool
 		if rel, ok = strings.CutPrefix(f, dir+"/"); !ok {
 			return false
@@ -461,7 +467,7 @@ func (e *env) inModule(f string, listed map[string]bool) bool {
 		if d == "testdata" || d == "vendor" || strings.HasPrefix(d, "_") || strings.HasPrefix(d, ".") {
 			return false
 		}
-		if listed[e.goPath(strings.Join(parts[:i+1], "/")+"/go.mod")] {
+		if listed[path.Join(dir, strings.Join(parts[:i+1], "/"), "go.mod")] {
 			return false
 		}
 	}
