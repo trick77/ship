@@ -18,6 +18,8 @@ concurrency:
 
 jobs:
   bump:
+    # master only, checkouts pinned to it: dispatched on a branch, land would push that branch to master.
+    if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -26,10 +28,14 @@ jobs:
       sha: ${{ steps.bump.outputs.sha }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: master
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - id: bump
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           subject="$(go run ./internal/pins/update)"
           [ -n "$subject" ] || { echo "every pin is current"; exit 0; }
@@ -49,7 +55,7 @@ jobs:
       node-version: "22"
       ui-dir: testdata/ui
 
-  # Fast-forward only: master moved since the bump → no push, tomorrow's run bumps on top of it.
+  # Master moved since the bump → no push (the gate passed on an older base), tomorrow's run bumps on top of it.
   land:
     needs: [bump, check]
     runs-on: ubuntu-latest
@@ -58,15 +64,20 @@ jobs:
       contents: write
       actions: write
     steps:
+      # Full history: a shallow clone cannot tell whether master is the bump's ancestor.
       - uses: actions/checkout@v7
         with:
+          ref: master
           fetch-depth: 0
       - env:
           SHA: ${{ needs.bump.outputs.sha }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          git fetch -q origin pins/latest
-          git merge -q --ff-only "$SHA"
-          git push origin HEAD:refs/heads/master
+          git fetch -q origin master pins/latest
+          if ! git merge-base --is-ancestor origin/master "$SHA"; then
+            echo "::notice::master moved since the bump: not landed, the next run bumps on top of it"
+            exit 0
+          fi
+          git push origin "$SHA:refs/heads/master"
           git push -q origin :refs/heads/pins/latest
           gh workflow run ship-release.yaml --ref master -f bump=auto -f dir=ship
