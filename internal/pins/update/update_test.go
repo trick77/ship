@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -19,43 +20,44 @@ var (
 	young = time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
 )
 
-// fakeGet answers the upstream lookups: each tool has the given version (past the cooldown), an older v0.0.1 and a
-// v99.0.0 within it. trivy's image for the given version is on ghcr only with image; 0.0.1's and 99.0.0's always.
+// releases is a GitHub releases page: tag (past the cooldown), v0.0.1 (older, past it) and, never to be taken,
+// recent (within the cooldown), skip (past it, but excluded: golangci-lint's next major), a draft and a pre-release.
+func releases(tag, recent, skip string) []byte {
+	return []byte(`[{"tag_name":"` + recent + `","published_at":"` + young + `"},` +
+		`{"tag_name":"` + skip + `","published_at":"` + old + `"},` +
+		`{"tag_name":"v98.0.0","published_at":"` + old + `","draft":true},` +
+		`{"tag_name":"v97.0.0","published_at":"` + old + `","prerelease":true},` +
+		`{"tag_name":"` + tag + `","published_at":"` + old + `"},` +
+		`{"tag_name":"v0.0.1","published_at":"` + old + `"}]`)
+}
+
+// golangciMod is golangci-lint's latest go.mod: v2.98.0 and v2.80.0 to v2.85.0 retracted.
+const golangciMod = "module github.com/golangci/golangci-lint/v2\n\ngo 1.25\n\nretract v2.98.0 // broken\n\n" +
+	"retract (\n\t[v2.80.0, v2.85.0] // a range\n)\n"
+
+// fakeGet answers the upstream lookups: golangci-lint and trivy from releases (golangci's given version, trivy's),
+// govulncheck's @latest. Every trivy image is on ghcr but the given version's without image.
 func fakeGet(golangci, vuln, trivy string, image bool) Get {
-	proxy := func(url, module, v string) ([]byte, bool) {
-		base := "https://proxy.golang.org/" + module + "/@v/"
-		switch url {
-		case base + "list":
-			return []byte("v0.0.1\n" + v + "\nv99.0.0\nv100.0.0-rc.1\n"), true
-		case base + "v99.0.0.info":
-			return []byte(`{"Version":"v99.0.0","Time":"` + young + `"}`), true
-		case base + v + ".info", base + "v0.0.1.info":
-			return []byte(`{"Time":"` + old + `"}`), true
-		}
-		return nil, false
-	}
+	const proxy = "https://proxy.golang.org/"
 	return func(url string, h map[string]string) ([]byte, error) {
-		if b, ok := proxy(url, "github.com/golangci/golangci-lint/v2", golangci); ok {
-			return b, nil
-		}
-		if b, ok := proxy(url, "golang.org/x/vuln", vuln); ok {
-			return b, nil
-		}
 		switch {
-		case strings.Contains(url, "trivy/releases?"):
-			return []byte(`[{"tag_name":"v99.0.0","published_at":"` + young + `"},` +
-				`{"tag_name":"v98.0.0","published_at":"` + old + `","draft":true},` +
-				`{"tag_name":"v97.0.0","published_at":"` + old + `","prerelease":true},` +
-				`{"tag_name":"v` + trivy + `","published_at":"` + old + `"},` +
-				`{"tag_name":"v0.0.1","published_at":"` + old + `"}]`), nil
+		case url == proxy+"github.com/golangci/golangci-lint/v2/@latest":
+			return []byte(`{"Version":"v2.100.0"}`), nil
+		case url == proxy+"github.com/golangci/golangci-lint/v2/@v/v2.100.0.mod":
+			return []byte(golangciMod), nil
+		case strings.Contains(url, "/golangci/golangci-lint/releases?"):
+			return releases(golangci, "v2.100.0", "v3.0.0"), nil
+		case url == proxy+"golang.org/x/vuln/@latest":
+			return []byte(`{"Version":"` + vuln + `"}`), nil
+		case strings.Contains(url, "/aquasecurity/trivy/releases?"):
+			return releases("v"+trivy, "v99.0.0", ""), nil
 		case strings.Contains(url, "ghcr.io/token"):
 			return []byte(`{"token":"t"}`), nil
-		case h["Authorization"] == "Bearer t" && (strings.HasSuffix(url, "/manifests/"+trivy) && image ||
-			strings.HasSuffix(url, "/manifests/0.0.1") || strings.HasSuffix(url, "/manifests/99.0.0") ||
-			strings.HasSuffix(url, "/manifests/98.0.0") || strings.HasSuffix(url, "/manifests/97.0.0")):
+		case strings.Contains(url, "/manifests/") && h["Authorization"] == "Bearer t" &&
+			(image || !strings.HasSuffix(url, "/manifests/"+trivy)):
 			return []byte(`{}`), nil
 		}
-		return nil, errors.New("404 " + url)
+		return nil, &statusError{url, "404 Not Found", http.StatusNotFound}
 	}
 }
 
@@ -100,26 +102,28 @@ func read(t *testing.T, root, f string) string {
 	return string(b)
 }
 
+// Offered newer releases within the cooldown (v2.100.0, trivy 99.0.0), a next major, a draft and a pre-release, the
+// newest release past the cooldown is taken: exactly that.
 func TestUpdate_whenNewer_thenRewritten(t *testing.T) {
 	root := repo(t, pins.Golangci)
-	cs, err := Update(root, fakeGet("v9.0.0", pins.Govulncheck, "9.1.0", true))
+	cs, err := Update(root, fakeGet("v2.99.0", pins.Govulncheck, "9.1.0", true))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := Subject(cs); got != "pins: golangci-lint v9.0.0, trivy 9.1.0" {
+	if got := Subject(cs); got != "pins: golangci-lint v2.99.0, trivy 9.1.0" {
 		t.Errorf("subject %q", got)
 	}
 	if cs[0].From != pins.Golangci || cs[1].From != pins.Trivy {
 		t.Errorf("from: %+v", cs)
 	}
 	src := read(t, root, pinsGo)
-	for _, want := range []string{"\tGolangci = \"v9.0.0\"\n", "\tTrivy = \"9.1.0\"\n",
+	for _, want := range []string{"\tGolangci = \"v2.99.0\"\n", "\tTrivy = \"9.1.0\"\n",
 		"\tGovulncheck = \"" + pins.Govulncheck + "\"\n"} {
 		if !strings.Contains(src, want) {
 			t.Errorf("pins.go lacks %q", want)
 		}
 	}
-	if got := read(t, root, "README.md"); !strings.Contains(got, "\nlint: v9.0.0         # golangci-lint\n") {
+	if got := read(t, root, "README.md"); !strings.Contains(got, "\nlint: v2.99.0         # golangci-lint\n") {
 		t.Errorf("README:\n%s", got)
 	}
 }
@@ -150,8 +154,8 @@ func TestUpdate_whenOnlyReadmeBehind_thenChange(t *testing.T) {
 
 // README behind pins.go: From is the oldest version moved, not pins.go's current one.
 func TestUpdate_whenFilesDiffer_thenFromOldest(t *testing.T) {
-	cs, err := Update(repo(t, "v0.1.0"), fakeGet("v9.0.0", pins.Govulncheck, pins.Trivy, true))
-	if err != nil || len(cs) != 1 || cs[0].From != "v0.1.0" || cs[0].To != "v9.0.0" {
+	cs, err := Update(repo(t, "v0.1.0"), fakeGet("v2.99.0", pins.Govulncheck, pins.Trivy, true))
+	if err != nil || len(cs) != 1 || cs[0].From != "v0.1.0" || cs[0].To != "v2.99.0" {
 		t.Fatalf("%v %+v", err, cs)
 	}
 }
@@ -159,11 +163,11 @@ func TestUpdate_whenFilesDiffer_thenFromOldest(t *testing.T) {
 // One upstream failing never holds the others back.
 func TestUpdate_whenOneUpstreamBroken_thenOthersMove(t *testing.T) {
 	root := repo(t, pins.Golangci)
-	cs, err := Update(root, down(fakeGet("v9.0.0", pins.Govulncheck, "9.1.0", true), "trivy/releases"))
+	cs, err := Update(root, down(fakeGet("v2.99.0", pins.Govulncheck, "9.1.0", true), "trivy/releases"))
 	if err == nil || !strings.Contains(err.Error(), "trivy: 503") {
 		t.Errorf("err %v", err)
 	}
-	if len(cs) != 1 || cs[0].Name != "golangci-lint" || !strings.Contains(read(t, root, pinsGo), `"v9.0.0"`) {
+	if len(cs) != 1 || cs[0].Name != "golangci-lint" || !strings.Contains(read(t, root, pinsGo), `"v2.99.0"`) {
 		t.Errorf("changes %+v", cs)
 	}
 }
@@ -185,7 +189,7 @@ func TestUpdate_whenSecondFileBroken_thenNothingWritten(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := read(t, root, pinsGo)
-	if _, err := Update(root, fakeGet("v9.0.0", pins.Govulncheck, pins.Trivy, true)); err == nil {
+	if _, err := Update(root, fakeGet("v2.99.0", pins.Govulncheck, pins.Trivy, true)); err == nil {
 		t.Fatal("no error")
 	}
 	if read(t, root, pinsGo) != before {
@@ -194,35 +198,76 @@ func TestUpdate_whenSecondFileBroken_thenNothingWritten(t *testing.T) {
 }
 
 func TestUpdate_whenUpstreamBroken_thenError(t *testing.T) {
-	fine := fakeGet(pins.Golangci, pins.Govulncheck, pins.Trivy, true)
-	for name, get := range map[string]Get{
-		"info down": down(fine, "golangci-lint/v2/@v/v99.0.0.info"),
-		"bad info": func(u string, h map[string]string) ([]byte, error) {
-			if strings.HasSuffix(u, ".info") {
-				return []byte("<html>"), nil
+	fine := fakeGet(pins.Golangci, pins.Govulncheck, "9.1.0", true)
+	answer := func(part, body string) Get {
+		return func(u string, h map[string]string) ([]byte, error) {
+			if strings.Contains(u, part) {
+				return []byte(body), nil
 			}
 			return fine(u, h)
-		},
-		"ghcr token down": down(fine, "ghcr.io/token"),
-		"bad json":        func(string, map[string]string) ([]byte, error) { return []byte("<html>"), nil },
-		"down":            func(u string, _ map[string]string) ([]byte, error) { return nil, errors.New("503 " + u) },
+		}
+	}
+	for name, tc := range map[string]struct {
+		get  Get
+		want string
+	}{
+		"go.mod down":       {down(fine, "@v/v2.100.0.mod"), "golangci-lint: 503"},
+		"releases bad json": {answer("golangci-lint/releases?", "<html>"), "golangci-lint: invalid"},
+		"vuln not version":  {answer("x/vuln/@latest", `{"Version":"latest"}`), `govulncheck: latest "latest" is not`},
+		"ghcr token down":   {down(fine, "ghcr.io/token"), "trivy: 503"},
+		"ghcr empty token":  {answer("ghcr.io/token", `{"token":""}`), "trivy: ghcr: empty pull token"},
+		// A ghcr failure is no 404: never a reason to pin an older trivy.
+		"ghcr 500": {func(u string, h map[string]string) ([]byte, error) {
+			if strings.Contains(u, "/manifests/") {
+				return nil, &statusError{u, "500 Internal Server Error", http.StatusInternalServerError}
+			}
+			return fine(u, h)
+		}, "trivy: GET"},
 	} {
-		if _, err := Update(repo(t, pins.Golangci), get); err == nil {
-			t.Errorf("%s: no error", name)
+		cs, err := Update(repo(t, pins.Golangci), tc.get)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err %v, want %q", name, err, tc.want)
+		}
+		for _, c := range cs {
+			if c.Name == "trivy" && strings.HasPrefix(name, "ghcr") {
+				t.Errorf("%s: trivy moved to %s", name, c.To)
+			}
 		}
 	}
 }
 
-// Within the cooldown nothing lands: v99.0.0 (an hour old) is never taken, the newest release past it is.
-func TestUpdate_whenWithinCooldown_thenNewestAged(t *testing.T) {
-	cs, err := Update(repo(t, pins.Golangci), fakeGet("v9.0.0", pins.Govulncheck, "9.1.0", true))
+// A retracted golangci-lint release is never taken, single or in a range: the cooldown may age it while the release
+// retracting it is still within.
+func TestUpdate_whenRetracted_thenSkipped(t *testing.T) {
+	for _, v := range []string{"v2.98.0", "v2.80.0", "v2.83.1", "v2.85.0"} {
+		cs, err := Update(repo(t, pins.Golangci), fakeGet(v, pins.Govulncheck, pins.Trivy, true))
+		if err != nil || len(cs) != 0 {
+			t.Errorf("%s: %v %+v", v, err, cs)
+		}
+	}
+	if cs, err := Update(repo(t, pins.Golangci), fakeGet("v2.86.0", pins.Govulncheck, pins.Trivy, true)); err != nil ||
+		len(cs) != 1 || cs[0].To != "v2.86.0" {
+		t.Errorf("v2.86.0 (past the range): %v %+v", err, cs)
+	}
+}
+
+// Dependabot and Pins wait alike: dependabot.yaml's every default-days is cooldown.
+func TestCooldown_whenDependabot_thenSame(t *testing.T) {
+	b, err := os.ReadFile("../../../.github/dependabot.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range cs {
-		if strings.Contains(c.To, "99.0.0") || strings.Contains(c.To, "98.") || strings.Contains(c.To, "97.") {
-			t.Errorf("took %+v: within the cooldown, a draft or a pre-release", c)
+	days := regexp.MustCompile(`(?m)^\s*default-days:\s*(\d+)`).FindAllSubmatch(b, -1)
+	if len(days) == 0 {
+		t.Fatal("dependabot.yaml has no cooldown default-days")
+	}
+	for _, d := range days {
+		if n, _ := strconv.Atoi(string(d[1])); time.Duration(n)*24*time.Hour != cooldown {
+			t.Errorf("dependabot.yaml default-days %d, cooldown %v", n, cooldown)
 		}
+	}
+	if n := strings.Count(string(b), "package-ecosystem:"); n != len(days) {
+		t.Errorf("%d ecosystems, %d cooldowns: every entry waits", n, len(days))
 	}
 }
 
@@ -251,7 +296,7 @@ func TestUpdate_whenPinMissing_thenError(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("no lint key\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Update(root, fakeGet("v9.0.0", pins.Govulncheck, pins.Trivy, true)); err == nil ||
+	if _, err := Update(root, fakeGet("v2.99.0", pins.Govulncheck, pins.Trivy, true)); err == nil ||
 		!strings.Contains(err.Error(), "README.md") {
 		t.Errorf("err %v", err)
 	}
@@ -295,8 +340,8 @@ func TestRun_whenChangesOrErrors_thenSubjectAndExit(t *testing.T) {
 		out, inErr string
 	}{
 		{"current", fakeGet(pins.Golangci, pins.Govulncheck, pins.Trivy, true), 0, "", ""},
-		{"moved, one broken", down(fakeGet("v9.0.0", pins.Govulncheck, pins.Trivy, true), "trivy/releases"), 0,
-			"pins: golangci-lint v9.0.0\n", "::warning::pins: trivy"},
+		{"moved, one broken", down(fakeGet("v2.99.0", pins.Govulncheck, pins.Trivy, true), "trivy/releases"), 0,
+			"pins: golangci-lint v2.99.0\n", "::warning::pins: trivy"},
 		{"none moved, broken", down(fakeGet(pins.Golangci, pins.Govulncheck, pins.Trivy, true), "trivy/releases"), 1,
 			"", "::error::pins: trivy"},
 	} {
