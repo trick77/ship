@@ -38,6 +38,29 @@ jobs:
     with:
       ship: go run .
 
+  # Dependabot's PRs land by themselves once the gate passed: an unmerged bump is a stale ship all the same. Its own
+  # pushes only (a human commit on its branch merges by hand), the head the gate checked. The merge (GITHUB_TOKEN)
+  # starts no push run: CI is dispatched on master, whose release job runs on that too.
+  dependabot:
+    needs: [check]
+    if: >-
+      github.event_name == 'pull_request' && github.actor == 'dependabot[bot]' &&
+      github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --squash --match-head-commit "$SHA"
+          gh workflow run ci.yaml --repo "$GITHUB_REPOSITORY" --ref master
+
   # A merge is already live for every consumer (they run master's sha): tag it, with notes, once the gate passes.
   # auto: patch, or a `Release: minor|major` + `Release-note:` line in a commit; docs/tests only → no release.
   # Each module on its own (tags v…, kit/v…, kit/auth/v…), only its own changes count; one not merged yet skips.
