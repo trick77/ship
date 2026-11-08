@@ -39,8 +39,10 @@ jobs:
       ship: go run .
 
   # Dependabot's PRs land by themselves once the gate passed: an unmerged bump is a stale ship all the same. Its own
-  # pushes only (a human commit on its branch merges by hand), the head the gate checked. The merge (GITHUB_TOKEN)
-  # starts no push run: CI is dispatched on master, whose release job runs on that too.
+  # pushes only (a human commit on its branch merges by hand), the head the gate checked, on the master it was gated
+  # against: master moved since → `@dependabot rebase`, its push gates again (master is unprotected, nothing else
+  # demands an up-to-date branch). The merge (GITHUB_TOKEN) starts no push run: CI is dispatched on master, whose
+  # release job runs on that too. A re-run after a failed dispatch finds the PR merged and dispatches only.
   dependabot:
     needs: [check]
     if: >-
@@ -53,13 +55,28 @@ jobs:
       pull-requests: write
       actions: write
     steps:
-      - env:
+      # GITHUB_SHA is the merge commit the gate checked: its first parent is the master it was gated against.
+      - id: merge
+        env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
           SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --squash --match-head-commit "$SHA"
-          gh workflow run ci.yaml --repo "$GITHUB_REPOSITORY" --ref master
+          if [ "$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json state --jq .state)" != MERGED ]; then
+            gated="$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA" --jq '.parents[0].sha')"
+            master="$(gh api "repos/$GITHUB_REPOSITORY/commits/master" --jq .sha)"
+            if [ "$gated" != "$master" ]; then
+              echo "::notice::master moved since the gate ($gated → $master): rebase, the new push gates again"
+              gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body "@dependabot rebase"
+              exit 0
+            fi
+            gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --squash --match-head-commit "$SHA"
+          fi
+          echo "merged=true" >> "$GITHUB_OUTPUT"
+      - if: steps.merge.outputs.merged == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run ci.yaml --repo "$GITHUB_REPOSITORY" --ref master
 
   # A merge is already live for every consumer (they run master's sha): tag it, with notes, once the gate passes.
   # auto: patch, or a `Release: minor|major` + `Release-note:` line in a commit; docs/tests only → no release.
