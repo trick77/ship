@@ -1,0 +1,85 @@
+name: Pins
+
+# Daily: internal/pins' tool versions (golangci-lint, govulncheck, trivy), Go consts Dependabot cannot read, move to
+# their newest releases by themselves. The bump runs the full gate (check.yaml) and, green, lands on master and is
+# released (patch), as a merged PR would be. A push with the GITHUB_TOKEN starts no workflow: hence the gate here
+# and CI dispatched on master (workflow_dispatch is the one event that token may start), which releases.
+on:
+  schedule:
+    - cron: "41 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pins
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    # master only, checkouts pinned to it: dispatched on a branch, land would push that branch to master.
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.bump.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: master
+      # Any Go runs the updater; the gate (check.yaml) picks go.mod's newest patch itself.
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      - id: bump
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          subject="$(go run ./internal/pins/update)"
+          [ -n "$subject" ] || { echo "every pin is current"; exit 0; }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -q -am "$subject"
+          git push -f origin HEAD:refs/heads/pins/latest
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  check:
+    needs: [bump]
+    if: needs.bump.outputs.sha != ''
+    uses: ./.github/workflows/check.yaml
+    with:
+      ref: ${{ needs.bump.outputs.sha }}
+      ship: go run .
+      node-version: "22"
+      ui-dir: testdata/ui
+
+  # Master moved since the bump → no push (the gate passed on an older base), tomorrow's run bumps on top of it.
+  land:
+    needs: [bump, check]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      # Full history: a shallow clone cannot tell whether master is the bump's ancestor.
+      - uses: actions/checkout@v7
+        with:
+          ref: master
+          fetch-depth: 0
+      - env:
+          SHA: ${{ needs.bump.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch -q origin master pins/latest
+          if ! git merge-base --is-ancestor origin/master "$SHA"; then
+            echo "::notice::master moved since the bump: not landed, the next run bumps on top of it"
+            exit 0
+          fi
+          git push origin "$SHA:refs/heads/master"
+          git push -q origin :refs/heads/pins/latest
+          # CI as a master push runs it: its concurrency group, the gate, every module's release auto.
+          gh workflow run ci.yaml --ref master
