@@ -1,10 +1,14 @@
 version: 2
+# Daily, every PR auto-merges on a green gate (ci.yaml) and reaches every consumer at once: a release lands only once
+# it is 3 days old (cooldown), time for a hijacked or broken one to be pulled. Security updates skip the cooldown.
 updates:
   - package-ecosystem: gomod
     directory: /
     commit-message: { prefix: deps }   # Go style: "deps: bump …"
     schedule:
       interval: daily
+    cooldown:
+      default-days: 3
     # `// indirect` too: by default Dependabot bumps only direct requirements, and a consumer inherits every
     # indirect floor kit sets (go-jose v4.1.4 behind go-oidc reached their images that way).
     allow:
@@ -20,6 +24,8 @@ updates:
     commit-message: { prefix: deps }   # Go style: "deps: bump …"
     schedule:
       interval: daily
+    cooldown:
+      default-days: 3
     allow:
       - dependency-type: all
     groups:
@@ -32,6 +38,8 @@ updates:
     commit-message: { prefix: deps }   # Go style: "deps: bump …"
     schedule:
       interval: daily
+    cooldown:
+      default-days: 3
     allow:
       - dependency-type: all
     groups:
@@ -44,6 +52,8 @@ updates:
     commit-message: { prefix: deps }   # Go style: "deps: bump …"
     schedule:
       interval: daily
+    cooldown:
+      default-days: 3
     groups:
       actions:
         patterns: ["*"]
@@ -54,6 +64,8 @@ updates:
     commit-message: { prefix: deps }   # Go style: "deps: bump …"
     schedule:
       interval: daily
+    cooldown:
+      default-days: 3
     groups:
       ui-fixture:
         patterns: ["*"]
