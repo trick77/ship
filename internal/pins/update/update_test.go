@@ -31,6 +31,16 @@ func fakeGet(golangci, vuln, trivy string, image bool) Get {
 	}
 }
 
+// down is get with every URL containing part failing.
+func down(get Get, part string) Get {
+	return func(u string, h map[string]string) ([]byte, error) {
+		if strings.Contains(u, part) {
+			return nil, errors.New("503 " + u)
+		}
+		return get(u, h)
+	}
+}
+
 // repo is a root with pins.go as it is and a README naming lint.
 func repo(t *testing.T, lint string) string {
 	t.Helper()
@@ -110,15 +120,47 @@ func TestUpdate_whenOnlyReadmeBehind_thenChange(t *testing.T) {
 	}
 }
 
+// README behind pins.go: From is the oldest version moved, not pins.go's current one.
+func TestUpdate_whenFilesDiffer_thenFromOldest(t *testing.T) {
+	cs, err := Update(repo(t, "v0.1.0"), fakeGet("v9.0.0", pins.Govulncheck, pins.Trivy, true))
+	if err != nil || len(cs) != 1 || cs[0].From != "v0.1.0" || cs[0].To != "v9.0.0" {
+		t.Fatalf("%v %+v", err, cs)
+	}
+}
+
 // One upstream failing never holds the others back.
 func TestUpdate_whenOneUpstreamBroken_thenOthersMove(t *testing.T) {
 	root := repo(t, pins.Golangci)
-	cs, err := Update(root, fakeGet("v9.0.0", pins.Govulncheck, "9.1.0", false))
-	if err == nil || !strings.Contains(err.Error(), "trivy: image 9.1.0 not on ghcr yet") {
+	cs, err := Update(root, down(fakeGet("v9.0.0", pins.Govulncheck, "9.1.0", true), "trivy/releases"))
+	if err == nil || !strings.Contains(err.Error(), "trivy: 503") {
 		t.Errorf("err %v", err)
 	}
 	if len(cs) != 1 || cs[0].Name != "golangci-lint" || !strings.Contains(read(t, root, pinsGo), `"v9.0.0"`) {
 		t.Errorf("changes %+v", cs)
+	}
+}
+
+// A trivy release whose image is not on ghcr yet is no change and no failure: the next run takes it.
+func TestUpdate_whenTrivyImageMissing_thenNotYet(t *testing.T) {
+	root := repo(t, pins.Golangci)
+	cs, err := Update(root, fakeGet(pins.Golangci, pins.Govulncheck, "9.1.0", false))
+	if err != nil || len(cs) != 0 || !strings.Contains(read(t, root, pinsGo), `"`+pins.Trivy+`"`) {
+		t.Errorf("%v %+v", err, cs)
+	}
+}
+
+// A pin failing in its second file writes neither: no half edit for another pin's commit.
+func TestUpdate_whenSecondFileBroken_thenNothingWritten(t *testing.T) {
+	root := repo(t, pins.Golangci)
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("no lint key\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := read(t, root, pinsGo)
+	if _, err := Update(root, fakeGet("v9.0.0", pins.Govulncheck, pins.Trivy, true)); err == nil {
+		t.Fatal("no error")
+	}
+	if read(t, root, pinsGo) != before {
+		t.Error("pins.go half edited")
 	}
 }
 
@@ -164,9 +206,6 @@ func TestTrivyLatest_whenToken_thenAuthenticated(t *testing.T) {
 // The tracked regexps find every pin in the real files: a reworded const or README line would stop its updates.
 func TestTracked_whenRealFiles_thenEveryPinFound(t *testing.T) {
 	for _, p := range tracked {
-		if p.files[p.src] == nil {
-			t.Errorf("%s: src %s not among its files", p.name, p.src)
-		}
 		for f, re := range p.files {
 			b, err := os.ReadFile(filepath.Join("../../..", f))
 			if err != nil {
@@ -187,9 +226,10 @@ func TestRun_whenChangesOrErrors_thenSubjectAndExit(t *testing.T) {
 		out, inErr string
 	}{
 		{"current", fakeGet(pins.Golangci, pins.Govulncheck, pins.Trivy, true), 0, "", ""},
-		{"moved, one broken", fakeGet("v9.0.0", pins.Govulncheck, "9.1.0", false), 0,
+		{"moved, one broken", down(fakeGet("v9.0.0", pins.Govulncheck, pins.Trivy, true), "trivy/releases"), 0,
 			"pins: golangci-lint v9.0.0\n", "::warning::pins: trivy"},
-		{"none moved, broken", fakeGet(pins.Golangci, pins.Govulncheck, "9.1.0", false), 1, "", "::error::pins: trivy"},
+		{"none moved, broken", down(fakeGet(pins.Golangci, pins.Govulncheck, pins.Trivy, true), "trivy/releases"), 1,
+			"", "::error::pins: trivy"},
 	} {
 		var out, errOut strings.Builder
 		code := run(repo(t, pins.Golangci), tc.get, &out, &errOut)

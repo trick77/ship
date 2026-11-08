@@ -42,9 +42,10 @@ jobs:
   # auto: patch, or a `Release: minor|major` + `Release-note:` line in a commit; docs/tests only → no release.
   # Each module on its own (tags v…, kit/v…, kit/auth/v…), only its own changes count; one not merged yet skips.
   # The dirs: ship itself ("") and ship.yaml's go.modules, kept equal by a test (workflows_test.go).
+  # A dispatch on master too: the Pins workflow's push (GITHUB_TOKEN) starts no run, it dispatches this one.
   release:
     needs: [check]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/master'
     strategy:
       fail-fast: false
       matrix:

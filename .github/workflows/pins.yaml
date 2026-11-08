@@ -3,7 +3,7 @@ name: Pins
 # Daily: internal/pins' tool versions (golangci-lint, govulncheck, trivy), Go consts Dependabot cannot read, move to
 # their newest releases by themselves. The bump runs the full gate (check.yaml) and, green, lands on master and is
 # released (patch), as a merged PR would be. A push with the GITHUB_TOKEN starts no workflow: hence the gate here
-# and the release dispatched (workflow_dispatch is the one event that token may start).
+# and CI dispatched on master (workflow_dispatch is the one event that token may start), which releases.
 on:
   schedule:
     - cron: "41 4 * * *"
@@ -30,9 +30,10 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: master
+      # Any Go runs the updater; the gate (check.yaml) picks go.mod's newest patch itself.
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          go-version: stable
       - id: bump
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -80,4 +81,5 @@ jobs:
           fi
           git push origin "$SHA:refs/heads/master"
           git push -q origin :refs/heads/pins/latest
-          gh workflow run ship-release.yaml --ref master -f bump=auto -f dir=ship
+          # CI as a master push runs it: its concurrency group, the gate, every module's release auto.
+          gh workflow run ci.yaml --ref master

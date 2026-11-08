@@ -85,8 +85,7 @@ jobs:
       - if: steps.shape.outputs.images == 'true'
         uses: crazy-max/ghaction-github-runtime@v4
       # Signs each pushed image's digest. No cosign-release input: the installer's default (checksum-pinned per installer
-      # release) is the cosign, so Dependabot moving the installer moves cosign too. A cosign-release pin is a string
-      # Dependabot never reads: v3.1.3 sat stale until its download 504ed and every image release failed (2026-11).
+      # release) is the cosign, so Dependabot moving the installer moves cosign too (why: AGENTS.md).
       - if: steps.shape.outputs.images == 'true'
         uses: sigstore/cosign-installer@v4.1.3
       - working-directory: ${{ inputs.go-dir }}

@@ -25,22 +25,24 @@ type Change struct{ Name, From, To string }
 type pin struct {
 	name   string
 	prefix string                    // the version's "v", or "" (trivy's image tags)
-	src    string                    // the file whose version is the pin's, one of files
 	files  map[string]*regexp.Regexp // file (repo-relative) → the version, the regexp's second group
-	latest func(Get) (string, error)
+	latest func(Get) (string, error) // errNotYet: no newer release usable yet
 }
 
 const pinsGo = "internal/pins/pins.go"
 
+// errNotYet: the newest release is not usable yet (trivy's image not pushed): no change, no failure.
+var errNotYet = errors.New("not usable yet")
+
 var tracked = []pin{
-	{name: "golangci-lint", prefix: "v", src: pinsGo, files: map[string]*regexp.Regexp{
+	{name: "golangci-lint", prefix: "v", files: map[string]*regexp.Regexp{
 		pinsGo:      regexp.MustCompile(`(?m)^(\tGolangci = ")([^"]+)(")`),
 		"README.md": regexp.MustCompile(`(?m)^(lint: )(v[0-9.]+)()`),
 	}, latest: proxyLatest("github.com/golangci/golangci-lint/v2")}, // /v2: a v3 needs its config moved by hand
-	{name: "govulncheck", prefix: "v", src: pinsGo, files: map[string]*regexp.Regexp{
+	{name: "govulncheck", prefix: "v", files: map[string]*regexp.Regexp{
 		pinsGo: regexp.MustCompile(`(?m)^(\tGovulncheck = ")([^"]+)(")`),
 	}, latest: proxyLatest("golang.org/x/vuln")},
-	{name: "trivy", src: pinsGo, files: map[string]*regexp.Regexp{
+	{name: "trivy", files: map[string]*regexp.Regexp{
 		pinsGo: regexp.MustCompile(`(?m)^(\tTrivy = ")([^"]+)(")`),
 	}, latest: trivyLatest},
 }
@@ -61,46 +63,45 @@ func Update(root string, get Get) ([]Change, error) {
 	return out, errors.Join(errs...)
 }
 
-// update moves p's files that are behind its newest release; nil when none was.
+// update moves p's files that are behind its newest release; nil when none was. Every file is read and matched
+// before any is written: a pin that fails leaves no half edit for another pin's commit to carry.
 func (p pin) update(root string, get Get) (*Change, error) {
 	to, err := p.latest(get)
+	if errors.Is(err, errNotYet) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
 	if !valid(to, p.prefix) {
 		return nil, fmt.Errorf("latest %q is not a %sX.Y.Z version", to, p.prefix)
 	}
-	read := func(f string) ([]byte, string, error) {
-		b, err := os.ReadFile(filepath.Join(root, f)) //nolint:gosec // root + a path from tracked, no input
-		if err != nil {
-			return nil, "", err
-		}
-		m := p.files[f].FindSubmatch(b)
-		if m == nil {
-			return nil, "", fmt.Errorf("no pin in %s", f)
-		}
-		return b, string(m[2]), nil
-	}
-	_, from, err := read(p.src)
-	if err != nil {
-		return nil, err
-	}
-	var moved bool
+	writes := map[string][]byte{}
+	var from string // the oldest version moved
 	for f, re := range p.files {
-		b, cur, err := read(f)
+		b, err := os.ReadFile(filepath.Join(root, f)) //nolint:gosec // root + a path from tracked, no input
 		if err != nil {
 			return nil, err
 		}
+		m := re.FindSubmatch(b)
+		if m == nil {
+			return nil, fmt.Errorf("no pin in %s", f)
+		}
+		cur := string(m[2])
 		if !newer(to, cur, p.prefix) {
 			continue
 		}
-		b = re.ReplaceAll(b, []byte("${1}"+to+"${3}"))
+		if from == "" || newer(from, cur, p.prefix) {
+			from = cur
+		}
+		writes[f] = re.ReplaceAll(b, []byte("${1}"+to+"${3}"))
+	}
+	for f, b := range writes {
 		if err := os.WriteFile(filepath.Join(root, f), b, 0o644); err != nil { //nolint:gosec // a source file, as git checks it out
 			return nil, err
 		}
-		moved = true
 	}
-	if !moved {
+	if len(writes) == 0 {
 		return nil, nil
 	}
 	return &Change{p.name, from, to}, nil
@@ -168,7 +169,7 @@ func trivyLatest(get Get) (string, error) {
 		"Authorization": "Bearer " + tok.Token,
 		"Accept":        "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json",
 	}); err != nil {
-		return "", fmt.Errorf("image %s not on ghcr yet: %w", tag, err)
+		return "", fmt.Errorf("image %s not on ghcr (%w): %w", tag, err, errNotYet)
 	}
 	return tag, nil
 }

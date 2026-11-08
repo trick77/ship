@@ -23,11 +23,9 @@ deliberately.
   than consumers' go.mod: v2.14.0 binary = go1.27.0).
 - Tool versions ship runs or demands (golangci-lint default, govulncheck, trivy) live in `internal/pins`, nowhere
   else. ship must never go stale, every repo runs it: a version Dependabot cannot read (a `with:` string, a Go
-  const) needs an updater. cosign's `cosign-release: v3.1.3` sat stale until its download 504ed
-  and every image release failed (2026-11): cosign = cosign-installer's default now, a test forbids the input.
-  internal/pins: the Pins workflow (daily) bumps them, gates, lands on master, dispatches the release. A new pin →
-  add it to `tracked` (internal/pins/update). Auto-landed bumps reach every consumer the same day, unchecked
-  against their code (lint findings, trivy CVEs): wanted, a stale pin broke them all at once instead. ship's own Dependabot runs daily (public: free minutes).
+  const) needs an updater. cosign's `cosign-release: v3.1.3` sat stale until its download 504ed and every image
+  release failed (2026-11). New pin → `tracked` in internal/pins/update. Auto-landed bumps reach every consumer the
+  same day, unchecked against their code (lint findings, trivy CVEs): wanted, a stale pin broke them all at once.
   npm versions never: Dependabot moves them per repo, an equality pin turns every bump PR red. conform wants the
   UI tools present at an exact version (save-exact), typescript < `pins.TypescriptCap` (typescript-eslint; dependabot's
   ignore renders from it). kit's version is never conform's: Dependabot moves it. Go and Node are floors
