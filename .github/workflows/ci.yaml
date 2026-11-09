@@ -95,7 +95,5 @@ jobs:
       bump: auto
       dir: ${{ matrix.dir }}
       ship: go run .
-      # The check job above gated this commit.
-      gate: false
     permissions:
       contents: write
