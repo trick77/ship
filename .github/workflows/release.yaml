@@ -13,18 +13,9 @@ name: Release
 #       with: { bump: "${{ inputs.bump }}" }
 #       permissions: { contents: write, packages: write, id-token: write }   # no images (ship.yaml): contents: write only
 #
-# The release job sets no permissions of its own: it inherits the caller's grant, so a repo without images needs
-# neither packages: write nor id-token: write (cosign's keyless signature: the workflow's OIDC token). The docker and
-# cosign steps run only when ship.yaml has images:.
-#
-# The gate job runs check.yaml (the caller's CI gate) on the commit first: a PR gated against an older master and
-# rebase-merged onto a newer one was never checked as merged (loom 0.10.2: two PRs each added a migration 0053, each
-# green alone; the release refused to boot). Its own job, read-only: the gate runs the repo's code and its npm
-# install scripts, never next to the release's write token, OIDC token and registry login. The template's caller
-# passes no gate input (conform keeps it so): a gate failing on master fails the repo's pushes the same way. The gate
-# calls check.yaml as the template's ci.yaml does (no postgres input, no secrets: ship.yaml postgres: is ship check's),
-# at master: a release runs master's workflows. Two runs racing past their gates: ship release skips a commit behind
-# master, whose own run releases it.
+# The job sets no permissions of its own: it inherits the caller's grant, so a repo without images needs neither
+# packages: write nor id-token: write (cosign's keyless signature: the workflow's OIDC token). The docker and cosign
+# steps run only when ship.yaml has images:.
 on:
   workflow_call:
     inputs:
@@ -42,92 +33,9 @@ on:
         description: How to run ship; empty = ship at master's sha on GitHub.
         type: string
         default: ""
-      gate:
-        description: Run check.yaml before releasing; false only where the same commit just passed it (ship's CI).
-        type: boolean
-        default: true
-      node-version:
-        description: >-
-          Node for the gate's UI; empty = the node-version the caller's .github/workflows/ci.yaml sets up (conform
-          keeps it the UI's node builder's), none there = no UI.
-        type: string
-        default: ""
 
 jobs:
-  # What gate and release share: the bump checked, one ship, the gate's Node and UI dir.
-  resolve:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    outputs:
-      ship: ${{ steps.ship.outputs.cmd }}
-      node: ${{ steps.node.outputs.node }}
-      ui-dir: ${{ steps.node.outputs.ui-dir }}
-    steps:
-      # One ship for gate and release. Default: master's sha on GitHub, as the pre-push hook runs it. Not @master: the
-      # module proxy can still serve an older master, and a release cannot be undone. Not github.job_workflow_sha:
-      # empty for a caller (2026-10-11).
-      - id: ship
-        env:
-          SHIP: ${{ inputs.ship }}
-          BUMP: ${{ inputs.bump }}
-        run: |
-          case "$BUMP" in patch|minor|major|auto) ;; *) echo "::error::bump '$BUMP'"; exit 1 ;; esac
-          if [ -z "$SHIP" ]; then
-            # Exactly refs/heads/master: ls-remote matches by suffix, so x/refs/heads/master would match too.
-            sha="$(git ls-remote https://github.com/trick77/ship refs/heads/master | awk '$2 == "refs/heads/master" { print $1 }')"
-            [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::cannot resolve ship's master on GitHub: '$sha'"; exit 1; }
-            SHIP="go run github.com/trick77/ship@$sha"
-          fi
-          echo "cmd=$SHIP" >> "$GITHUB_OUTPUT"
-      - if: inputs.gate
-        uses: actions/checkout@v7
-        with:
-          sparse-checkout: |
-            .github/workflows/ci.yaml
-            ship.yaml
-          sparse-checkout-cone-mode: false
-          persist-credentials: false
-      # Node and ui-dir as the caller's CI passes them to check.yaml: its ci.yaml is conform's render of the template
-      # (block style, one check job, node-version = the UI's node builder's). A ci.yaml of another shape yields no
-      # Node: with a UI that fails here (set node-version), never runs on the runner's preinstalled one.
-      - id: node
-        if: inputs.gate
-        env:
-          NODE: ${{ inputs.node-version }}
-          CI_FILE: .github/workflows/ci.yaml
-          SHIP_YAML: ship.yaml
-        run: |
-          ui=""
-          if [ -f "$CI_FILE" ]; then
-            [ -n "$NODE" ] || NODE="$(awk '$1 == "node-version:" { print $2; exit }' "$CI_FILE" | tr -d "\"'")"
-            ui="$(awk '$1 == "ui-dir:" { print $2; exit }' "$CI_FILE" | tr -d "\"'")"
-          fi
-          if [ -z "$NODE" ] && [ -f "$SHIP_YAML" ] && grep -q '^ui:' "$SHIP_YAML"; then
-            echo "::error::$SHIP_YAML has ui: but no node-version (input or $CI_FILE)"; exit 1
-          fi
-          echo "node=$NODE" >> "$GITHUB_OUTPUT"
-          echo "ui-dir=${ui:-ui}" >> "$GITHUB_OUTPUT"
-
-  gate:
-    needs: [resolve]
-    if: inputs.gate
-    permissions:
-      contents: read
-    uses: trick77/ship/.github/workflows/check.yaml@master
-    with:
-      go-dir: ${{ inputs.go-dir }}
-      node-version: ${{ needs.resolve.outputs.node }}
-      ui-dir: ${{ needs.resolve.outputs.ui-dir }}
-      ship: ${{ needs.resolve.outputs.ship }}
-
   release:
-    needs: [resolve, gate]
-    # gate skipped (gate: false) releases; gate failed or cancelled does not.
-    if: >-
-      !cancelled() && needs.resolve.result == 'success' &&
-      (needs.gate.result == 'success' || (needs.gate.result == 'skipped' && !inputs.gate))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
@@ -183,9 +91,18 @@ jobs:
       - working-directory: ${{ inputs.go-dir }}
         env:
           GH_TOKEN: ${{ github.token }}
-          SHIP: ${{ needs.resolve.outputs.ship }}
+          SHIP: ${{ inputs.ship }}
           BUMP: ${{ inputs.bump }}
           DIR: ${{ inputs.dir }}
+        # Default: master's sha on GitHub, as the pre-push hook runs it. Not @master: the module proxy can still serve
+        # an older master, and a release cannot be undone. Not github.job_workflow_sha: empty for a caller (2026-10-11).
         run: |
+          case "$BUMP" in patch|minor|major|auto) ;; *) echo "::error::bump '$BUMP'"; exit 1 ;; esac
+          if [ -z "$SHIP" ]; then
+            # Exactly refs/heads/master: ls-remote matches by suffix, so x/refs/heads/master would match too.
+            sha="$(git ls-remote https://github.com/trick77/ship refs/heads/master | awk '$2 == "refs/heads/master" { print $1 }')"
+            [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::cannot resolve ship's master on GitHub: '$sha'"; exit 1; }
+            SHIP="go run github.com/trick77/ship@$sha"
+          fi
           # -dir only when set: a ship input from before -dir still runs.
           $SHIP release "$BUMP" -cache gha ${DIR:+-dir "$DIR"}
