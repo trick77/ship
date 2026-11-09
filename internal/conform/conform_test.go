@@ -1155,9 +1155,25 @@ func TestModel_whenRowTypes_thenFindingsByDeclaringFile(t *testing.T) {
 	}
 	want := []string{
 		"imports database/sql: model.go declares the rows, the store scans them (bad/model.go)",
-		"calls Scan (line 10): model.go declares the rows, the store scans them (bad/model.go)",
+		"calls Scan (line 13): model.go declares the rows, the store scans them (bad/model.go)",
+		"calls Scan (line 14): model.go declares the rows, the store scans them (bad/model.go)",
 		"User is a row type (scanned at api/api.go:13), declare it in model.go (domain/user.go)",
+		"U is a row type (scanned at plain/builder.go:6), declare it in model.go (plain/builder.go)",
+		"FV is a row type (scanned at plain/flow.go:48), declare it in model.go (plain/flow.go)",
+		"N is a row type (scanned at plain/flow.go:51), declare it in model.go (plain/flow.go)",
+		"T is a row type (scanned at plain/flow.go:57), declare it in model.go (plain/flow.go)",
+		"X is a row type (scanned at plain/flow.go:54), declare it in model.go (plain/flow.go)",
+		"CL is a row type (scanned at plain/more.go:47), declare it in model.go (plain/more.go)",
+		"FE is a row type (scanned at plain/more.go:56), declare it in model.go (plain/more.go)",
+		"G is a row type (scanned at plain/more.go:30), declare it in model.go (plain/more.go)",
+		"ME is a row type (scanned at plain/more.go:50), declare it in model.go (plain/more.go)",
+		"TB is a row type (scanned at plain/more.go:12), declare it in model.go (plain/more.go)",
 		"P is a row type (scanned at plain/plain.go:9), declare it in model.go (plain/plain.go)",
+		"CF is a row type (scanned at plain/third.go:51), declare it in model.go (plain/third.go)",
+		"FW is a row type (scanned at plain/third.go:72), declare it in model.go (plain/third.go)",
+		"IB is a row type (scanned at plain/third.go:6), declare it in model.go (plain/third.go)",
+		"LB is a row type (scanned at plain/third.go:47), declare it in model.go (plain/third.go)",
+		"TF is a row type (scanned at plain/third.go:29), declare it in model.go (plain/third.go)",
 		"V is a row type (scanned at plain/wrap.go:23), declare it in model.go (plain/wrap.go)",
 		"W is a row type (scanned at plain/wrap.go:20), declare it in model.go (plain/wrap.go)",
 		"appended is a row type (scanned at store/legacy.go:26), declare it in model.go (store/legacy.go)",
@@ -1193,7 +1209,7 @@ func TestModel_whenLoadFails_thenOneFinding(t *testing.T) {
 func TestModel_whenSchemaDocAliasedInModule_thenOK(t *testing.T) {
 	r := fixture(t, "model/rows")
 	for _, f := range []string{"store/legacy.go", "store/nested.go", "store/rec.go", "api/api.go", "bad/model.go",
-		"plain/plain.go", "plain/wrap.go", "store/named.go"} {
+		"plain/plain.go", "plain/wrap.go", "plain/flow.go", "plain/builder.go", "plain/more.go", "plain/third.go", "store/named.go"} {
 		r.remove(f)
 	}
 	r.edit("store/model.go", "Table: Tags", "Table: tags")

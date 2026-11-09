@@ -31,10 +31,11 @@ func dbImport(p string) bool {
 	return p == "database/sql" || strings.HasPrefix(p, "github.com/jackc/pgx")
 }
 
-// model: a row type, a named struct a Scan fills a field of (in a file importing database/sql or pgx, or calling a
-// row's Scan(dest ...any) through an interface or a field), lives in its package's model.go, its doc naming the
-// table; model.go holds no database code. Type-checked (go/packages), never matched by name: a scan target is the
-// struct that declares the field, through a dest slice, an embedding or another package. Only go.dir's and
+// model: a row type, a named struct a row's Scan(…, dest ...any) fills a field of (see flow), lives in its package's
+// model.go, its doc naming the table; model.go holds no database code. Only a module importing database/sql or pgx
+// is loaded: one scanning solely through another module's interface is skipped, its schema checks too.
+// Type-checked (go/packages), never matched by name: a scan target is the struct that declares the field, through a
+// dest slice, an embedding or another package. Only go.dir's and
 // go.modules' own types count, a function-local one is exempt (it cannot move without leaving its scope).
 func (e *env) model() result {
 	listed := e.listed()
@@ -199,39 +200,38 @@ func (e *env) modelModule(dir string) []finding {
 		return []finding{{what: what, file: gomod}}
 	}
 	slices.SortFunc(pkgs, func(a, b *packages.Package) int { return strings.Compare(a.PkgPath, b.PkgPath) })
+	if len(pkgs) == 0 {
+		return nil
+	}
 	var fs []finding
-	rows := map[*types.TypeName]token.Position{}
 	docs := map[token.Pos]*ast.CommentGroup{}
-	var fset *token.FileSet
+	fl := newFlow(pkgs, own)
 	for _, p := range pkgs {
-		fset = p.Fset
 		for _, af := range p.Syntax {
 			f := e.rel(p.Fset.Position(af.Pos()).Filename)
 			typeDocs(af, docs)
-			db, model := false, path.Base(f) == ModelFile
+			if path.Base(f) != ModelFile {
+				continue
+			}
 			for _, im := range af.Imports {
-				v, _ := strconv.Unquote(im.Path.Value)
-				if !dbImport(v) {
-					continue
-				}
-				db = true
-				if model {
+				if v, _ := strconv.Unquote(im.Path.Value); dbImport(v) {
 					fs = append(fs, finding{what: "imports " + v + ": " + modelWhy, file: f})
 				}
 			}
-			if model {
-				fs = append(fs, scanCalls(p.Fset, af, f)...)
-			}
-			if ss, scans := dests(p.TypesInfo, af, db); db || scans {
-				for _, s := range ss {
-					if obj := e.credit(p.TypesInfo, s, own); obj != nil {
-						at := p.Fset.Position(s.Pos())
-						at.Filename = e.rel(at.Filename)
-						if prev, ok := rows[obj]; !ok || before(at, prev) {
-							rows[obj] = at
-						}
-					}
-				}
+			fs = append(fs, scanCalls(p.Fset, af, f, func(c *ast.CallExpr) bool {
+				_, ok := fl.rowScan(p.TypesInfo, c)
+				return ok
+			})...)
+		}
+	}
+	fset := pkgs[0].Fset // one load, one file set
+	rows := map[*types.TypeName]token.Position{}
+	for _, d := range fl.dests() {
+		if obj := e.credit(d.info, d.sel, own); obj != nil {
+			at := fset.Position(d.sel.Pos())
+			at.Filename = e.rel(at.Filename)
+			if prev, ok := rows[obj]; !ok || before(at, prev) {
+				rows[obj] = at
 			}
 		}
 	}
@@ -265,103 +265,27 @@ func typeDocs(af *ast.File, docs map[token.Pos]*ast.CommentGroup) {
 	}
 }
 
-// scanCalls: model.go calling Scan, any receiver's.
-func scanCalls(fset *token.FileSet, af *ast.File, f string) []finding {
+// scanCalls: model.go calling a row's Scan (rowScan): a bufio or fmt Scan reads no row.
+func scanCalls(fset *token.FileSet, af *ast.File, f string, rowScan func(*ast.CallExpr) bool) []finding {
 	var fs []finding
 	ast.Inspect(af, func(n ast.Node) bool {
-		if c, ok := n.(*ast.CallExpr); ok {
-			if sel, ok := c.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Scan" {
-				fs = append(fs, finding{what: fmt.Sprintf("calls Scan (line %d): %s", fset.Position(c.Pos()).Line,
-					modelWhy), file: f})
-			}
+		if c, ok := n.(*ast.CallExpr); ok && rowScan(c) {
+			fs = append(fs, finding{what: fmt.Sprintf("calls Scan (line %d): %s", fset.Position(c.Pos()).Line,
+				modelWhy), file: f})
 		}
 		return true
 	})
 	return fs
 }
 
-// scanCall: c calls a selector named Scan (a method, a method expression, a package's func, a func field).
-func scanCall(c *ast.CallExpr) (*ast.SelectorExpr, bool) {
-	fn, ok := ast.Unparen(c.Fun).(*ast.SelectorExpr)
-	return fn, ok && fn.Sel.Name == "Scan"
-}
-
-// rowScan: c calls a row's Scan, a method Scan(…, dest ...any): sql.Row(s), pgx.Row(s), the rows a DBTX interface or
-// a pool field returns, an own scanner interface. The name picks the call, the type-checked signature decides:
-// bufio.Scanner's Scan() or a sql.Scanner's Scan(any) fills no row.
-func rowScan(info *types.Info, c *ast.CallExpr) bool {
-	fn, ok := scanCall(c)
-	if !ok {
+// isAppend: c calls the builtin append on a []any.
+func isAppend(info *types.Info, c *ast.CallExpr) bool {
+	id, ok := ast.Unparen(c.Fun).(*ast.Ident)
+	if !ok || len(c.Args) == 0 {
 		return false
 	}
-	sel, ok := info.Selections[fn]
-	if !ok || sel.Kind() != types.MethodVal {
-		return false
-	}
-	sig, ok := sel.Type().(*types.Signature)
-	return ok && sig.Variadic() && anySlice(sig.Params().At(sig.Params().Len()-1).Type())
-}
-
-// dests are the field selectors a scan fills: &x.F as a Scan argument, as an element of a []any literal or appended
-// to a []any (a dest slice a helper builds, scanned as dest...), also inside a wrapper call there (timeAt(&p.At),
-// nested calls included). They count in a file importing database/sql or pgx (db; a Scan argument: of any call named
-// Scan) or holding a row's Scan (rows; a Scan argument: of a rowScan only). A wrapper in a Scan's arguments is any call
-// not returning a []any; in a []any it returns a scanner (oneDest), a query argument's wrapper (nullable(&r.Name))
-// is none. A dest builder returning []any (sourceDest(&j.Source)) credits the struct it fills through its own
-// literal, not the field's holder. Known gaps: a dest slice forwarded through a helper's own varargs (scanRun(rows,
-// extra...)), field pointers handed to a dest builder's parameters (stamps(&p.At)), a dest builder in a file
-// neither importing the database nor holding a row's Scan.
-func dests(info *types.Info, af *ast.File, db bool) (out []*ast.SelectorExpr, rows bool) {
-	var add func(args []ast.Expr, scan bool)
-	add = func(args []ast.Expr, scan bool) {
-		for _, a := range args {
-			switch x := ast.Unparen(a).(type) {
-			case *ast.UnaryExpr:
-				if s, ok := ast.Unparen(x.X).(*ast.SelectorExpr); ok && x.Op == token.AND {
-					out = append(out, s)
-				}
-			case *ast.CallExpr:
-				if t := info.TypeOf(x); (scan && !anySlice(t)) || oneDest(t) {
-					add(x.Args, scan)
-				}
-			}
-		}
-	}
-	ast.Inspect(af, func(n ast.Node) bool {
-		switch x := n.(type) {
-		case *ast.CallExpr:
-			_, named := scanCall(x)
-			row := rowScan(info, x)
-			rows = rows || row
-			if row || db && named {
-				add(x.Args, true)
-			} else if fn, ok := ast.Unparen(x.Fun).(*ast.Ident); ok {
-				if _, ok := info.Uses[fn].(*types.Builtin); ok && fn.Name == "append" && len(x.Args) > 1 &&
-					anySlice(info.TypeOf(x.Args[0])) {
-					add(x.Args[1:], false)
-				}
-			}
-		case *ast.CompositeLit:
-			if anySlice(info.TypeOf(x)) {
-				add(x.Elts, false)
-			}
-		}
-		return true
-	})
-	return out, rows
-}
-
-// oneDest: a call's result a scan fills, a pointer or a type with a Scan method (sql.Scanner).
-func oneDest(t types.Type) bool {
-	if t == nil {
-		return false
-	}
-	if _, ok := t.Underlying().(*types.Pointer); ok {
-		return true
-	}
-	obj, _, _ := types.LookupFieldOrMethod(t, false, nil, "Scan")
-	_, ok := obj.(*types.Func)
-	return ok
+	_, ok = info.Uses[id].(*types.Builtin)
+	return ok && id.Name == "append" && anySlice(info.TypeOf(c.Args[0]))
 }
 
 // anySlice: a slice of the empty interface, a Scan's dest.

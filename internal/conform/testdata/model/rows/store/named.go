@@ -6,7 +6,7 @@ import (
 	"example.com/rows/scanx"
 )
 
-// H is scanned through a package's Scan func: a file importing the database matches it by name.
+// H is scanned through this module's package Scan func: its dest ...any signature decides, no import needed.
 type H struct{ F int }
 
 // M is scanned through a method expression.
