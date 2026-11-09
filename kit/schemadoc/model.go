@@ -1,7 +1,9 @@
 package schemadoc
 
 import (
+	"regexp"
 	"slices"
+	"strings"
 )
 
 // Schema is the tables and views of a database, each ordered by name.
@@ -70,7 +72,8 @@ func (t Table) pkColumns() []string {
 }
 
 // oneToOne reports whether cols hold all of t's primary key or of a unique index without a predicate (a partial one
-// is unique only where its predicate holds): then at most one row carries any one value of cols.
+// is unique only where its predicate holds) or whose predicate only keeps its keys non-NULL: then at most one row
+// carries any one value of cols.
 func (t Table) oneToOne(cols []string) bool {
 	covers := func(keys []string) bool {
 		if len(keys) == 0 {
@@ -87,8 +90,73 @@ func (t Table) oneToOne(cols []string) bool {
 		return true
 	}
 	return slices.ContainsFunc(t.Indexes, func(i Index) bool {
-		return i.Unique && i.Where == "" && !slices.Contains(i.Keys, "") && covers(i.Keys)
+		return i.Unique && nullGuard(i.Where, i.Keys) && !slices.Contains(i.Keys, "") && covers(i.Keys)
 	})
+}
+
+// nullGuard reports whether partial index predicate where leaves the index as unique as none: it is empty, or only
+// AND-joined `<key> IS NOT NULL` terms, each column one of keys. Rows it leaves out hold a NULL key, which never
+// collides in a unique index anyway. A quoted column matches its key exactly (Postgres folds only bare names), a
+// bare one in any case.
+func nullGuard(where string, keys []string) bool {
+	if where == "" {
+		return true
+	}
+	for _, term := range andTerms(where) {
+		col, quoted, ok := notNullColumn(term)
+		if !ok || !slices.ContainsFunc(keys, func(k string) bool { return k == col || !quoted && strings.EqualFold(k, col) }) {
+			return false
+		}
+	}
+	return true
+}
+
+// andTerms is predicate where split at its top-level AND keywords (outside literals and quoted names), each term
+// trimmed and its parentheses turned to spaces: with only AND joining, grouping changes nothing, and a term holding
+// any other operator fails notNullColumn.
+func andTerms(where string) []string {
+	var terms []string
+	var b strings.Builder
+	for i := 0; i < len(where); {
+		if j := skipQuoted(where, i); j != i {
+			b.WriteString(where[i:j])
+			i = j
+			continue
+		}
+		switch {
+		case where[i] == '(' || where[i] == ')':
+			b.WriteByte(' ')
+			i++
+		case keywordAt(where, i, "AND"):
+			terms = append(terms, strings.TrimSpace(b.String()))
+			b.Reset()
+			i += len("AND")
+		default:
+			b.WriteByte(where[i])
+			i++
+		}
+	}
+	return append(terms, strings.TrimSpace(b.String()))
+}
+
+// notNullTail is what follows the column in `<column> IS NOT NULL` (or SQLite's NOT NULL, NOTNULL).
+var notNullTail = regexp.MustCompile(`(?i)^\s+(?:IS\s+NOT\s+NULL|NOT\s+NULL|NOTNULL)$`)
+
+// notNullColumn is the column, unquoted, of a `<column> IS NOT NULL` term, and whether it was quoted ("x", `x`,
+// [x]); ok is false for any other term.
+func notNullColumn(term string) (col string, quoted, ok bool) {
+	end := 0
+	if term != "" && strings.IndexByte("\"`[", term[0]) >= 0 {
+		end, quoted = skipQuoted(term, 0), true
+	} else {
+		for end < len(term) && identByte(term[end]) {
+			end++
+		}
+	}
+	if end == 0 || !notNullTail.MatchString(term[end:]) {
+		return "", false, false
+	}
+	return leadingName(term[:end]), quoted, true
 }
 
 // Column is one column. PK is its 1-based position in the primary key, 0 when not part of it. Default is the

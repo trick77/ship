@@ -61,6 +61,7 @@ Virtual table: `fts5(title, body)`.
 
 | Column | Type | Null | Default | PK |
 | --- | --- | --- | --- | --- |
+| `rowid` | INTEGER | no |  | 1 |
 | `title` |  | yes |  |  |
 | `body` |  | yes |  |  |
 
@@ -189,6 +190,7 @@ erDiagram
         INTEGER body_len
     }
     search {
+        INTEGER rowid PK
         ANY title
         ANY body
     }

@@ -266,8 +266,10 @@ func TestSQLiteVirtualTables(t *testing.T) {
 	if len(vec.Columns) != 2 {
 		t.Errorf("vec_chunks columns = %+v, want the rowid dropped beside chunk_id", vec.Columns)
 	}
-	if got := s.table("search").Columns; len(got) != 2 {
-		t.Errorf("search columns = %+v, want the hidden ones dropped", got)
+	// fts5 declares no key: its rowid is shown as one, ahead of the declared columns.
+	if got := s.table("search").Columns; len(got) != 3 ||
+		got[0] != (Column{Name: "rowid", Type: "INTEGER", NotNull: true, PK: 1}) || got[1].Name != "title" {
+		t.Errorf("search columns = %+v, want rowid, then the declared ones without the hidden ones", got)
 	}
 	if s.table("search").Module != "fts5" || s.table("videos").Module != "" {
 		t.Errorf("modules: search %q, videos %q", s.table("search").Module, s.table("videos").Module)
@@ -298,22 +300,30 @@ func TestCheckLists(t *testing.T) {
 // A module's declared rowid without a key column beside it is the key (vec0 keyed on chunks.id); beside one, a
 // duplicate.
 func TestModuleRowid(t *testing.T) {
-	got := moduleRowid([]Column{{Name: "embedding", Type: "float[4]"}, {Name: "rowid"}})
-	want := []Column{{Name: "embedding", Type: "float[4]"}, {Name: "rowid", Type: "INTEGER", NotNull: true, PK: 1}}
+	rowid := Column{Name: "rowid", Type: "INTEGER", NotNull: true, PK: 1}
+	got := moduleRowid([]Column{{Name: "embedding", Type: "float[4]"}, {Name: "rowid"}}, "vec0")
+	want := []Column{{Name: "embedding", Type: "float[4]"}, rowid}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("keyless: %+v, want %+v", got, want)
 	}
-	got = moduleRowid([]Column{{Name: "id", Type: "INTEGER", PK: 1}, {Name: "rowid"}})
+	got = moduleRowid([]Column{{Name: "id", Type: "INTEGER", PK: 1}, {Name: "rowid"}}, "vec0")
 	if len(got) != 1 || got[0].Name != "id" {
 		t.Errorf("keyed: %+v, want the rowid dropped", got)
 	}
 	// A rowid declared the primary key itself is that key.
-	got = moduleRowid([]Column{{Name: "rowid", PK: 1}, {Name: "v"}})
+	got = moduleRowid([]Column{{Name: "rowid", PK: 1}, {Name: "v"}}, "vec0")
 	if len(got) != 2 || got[0].PK != 1 || !got[0].NotNull {
 		t.Errorf("rowid PK: %+v, want it kept as the key", got)
 	}
-	if got := moduleRowid([]Column{{Name: "a"}}); len(got) != 1 {
+	if got := moduleRowid([]Column{{Name: "a"}}, "rtree"); len(got) != 1 {
 		t.Errorf("no rowid: %+v", got)
+	}
+	// A full-text table declares none: its implicit rowid goes first.
+	for _, m := range []string{"fts3", "fts4", "fts5"} {
+		got := moduleRowid([]Column{{Name: "body"}}, m)
+		if want := []Column{rowid, {Name: "body"}}; !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: %+v, want %+v", m, got, want)
+		}
 	}
 }
 

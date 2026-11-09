@@ -134,7 +134,7 @@ func describeSQLiteTable(ctx context.Context, db *sql.DB, name, create, module s
 	if module != "" {
 		// A virtual table has neither foreign keys, indexes nor constraints of its own.
 		markRowidAlias(t.Columns, false)
-		t.Columns = moduleRowid(t.Columns)
+		t.Columns = moduleRowid(t.Columns, module)
 		return t, nil
 	}
 	if t.ForeignKeys, err = sqliteForeignKeys(ctx, db, name); err != nil {
@@ -149,12 +149,22 @@ func describeSQLiteTable(ctx context.Context, db *sql.DB, name, create, module s
 	return t, nil
 }
 
-// moduleRowid is a virtual table's columns with the rowid a module declares (vec0 does) as the key it is: kept, the
-// way a reader learns the rows key on another table's id (rowid = chunks.id), marked the NOT NULL INTEGER primary
-// key. A table declaring a primary key column of its own keys on that one: the rowid is dropped, a duplicate.
-func moduleRowid(cols []Column) []Column {
+// ftsModules are the full-text modules: they declare no key column, yet their integer rowid (fts3/fts4's docid) is
+// the key they have and what code joins on (rowid = chunks.id, content_rowid=).
+var ftsModules = []string{"fts3", "fts4", "fts5"}
+
+// moduleRowid is a virtual table's columns with its rowid as the key it is, the way a reader learns the rows key on
+// another table's id (rowid = chunks.id): the rowid a module declares (vec0 does) kept and marked the NOT NULL
+// INTEGER primary key, a full-text table's implicit one put first. A table declaring a primary key column of its own
+// keys on that one: a declared rowid is dropped, a duplicate. A plain table's implicit rowid stays unshown: such a
+// table has a key of its own.
+func moduleRowid(cols []Column, module string) []Column {
+	rowid := Column{Name: "rowid", Type: "INTEGER", NotNull: true, PK: 1}
 	i := slices.IndexFunc(cols, func(c Column) bool { return strings.EqualFold(c.Name, "rowid") })
 	if i < 0 {
+		if slices.Contains(ftsModules, module) {
+			return append([]Column{rowid}, cols...)
+		}
 		return cols
 	}
 	for j, c := range cols {
@@ -162,7 +172,8 @@ func moduleRowid(cols []Column) []Column {
 			return slices.Delete(cols, i, i+1)
 		}
 	}
-	cols[i].Type, cols[i].NotNull, cols[i].PK = "INTEGER", true, 1
+	rowid.Name = cols[i].Name
+	cols[i] = rowid
 	return cols
 }
 

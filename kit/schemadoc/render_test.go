@@ -125,15 +125,73 @@ func TestRenderMermaidOneToOne(t *testing.T) {
 		child("uniq", Index{Name: "u", Columns: []string{`"p_id" COLLATE NOCASE DESC`}, Keys: []string{"p_id"}, Unique: true}),
 		child("expr", Index{Name: "u", Columns: []string{"lower(p_id)"}, Keys: []string{""}, Unique: true}),
 		child("partial", Index{Name: "u", Columns: []string{"p_id"}, Keys: []string{"p_id"}, Unique: true, Where: "p_id > 0"}),
+		// A predicate keeping only NULL keys out leaves the index unique.
+		child("guarded", Index{Name: "u", Columns: []string{"p_id"}, Keys: []string{"p_id"}, Unique: true,
+			Where: "(p_id IS NOT NULL)"}),
 		child("plain", Index{Name: "i", Columns: []string{"p_id"}, Keys: []string{"p_id"}})}}
 	out, err := Render(s, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"pk |o--|| p", "uniq |o--|| p", "wide |o--|| p", "expr }o--|| p",
-		"partial }o--|| p", "plain }o--|| p"} {
+		"partial }o--|| p", "guarded |o--|| p", "plain }o--|| p"} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+// The intro counts views per kind, known kinds first in a fixed order.
+func TestRenderViewCounts(t *testing.T) {
+	cagg := func(name string) View { return View{Name: name, Kind: "continuous aggregate"} }
+	for _, tc := range []struct {
+		s    Schema
+		want string
+	}{
+		{Schema{Tables: []Table{{Name: "a"}, {Name: "b"}}}, "2 tables;"},
+		{Schema{Tables: []Table{{Name: "a"}}, Views: []View{cagg("c1"), cagg("c2")}}, "1 table, 2 continuous aggregates;"},
+		{Schema{Views: []View{cagg("c"), {Name: "z", Kind: "zz"}, {Name: "m", Kind: "materialized view"},
+			{Name: "v1", Kind: "view"}, {Name: "v2"}, {Name: "y", Kind: "yy"}}},
+			"0 tables, 2 views, 1 materialized view, 1 continuous aggregate, 1 yy, 1 zz;"},
+	} {
+		out, err := Render(tc.s, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(out), "\n"+tc.want) {
+			t.Errorf("output lacks %q:\n%s", tc.want, out)
+		}
+	}
+}
+
+func TestNullGuard(t *testing.T) {
+	keys := []string{"a", "b"}
+	for where, want := range map[string]bool{
+		"":                                      true,
+		"a IS NOT NULL":                         true,
+		"(a IS NOT NULL)":                       true,
+		"A is not null":                         true,
+		`"a" IS NOT NULL`:                       true,
+		"[b] NOTNULL":                           true,
+		"`b` NOT NULL":                          true,
+		`"A" IS NOT NULL`:                       false, // a quoted name keeps its case in Postgres
+		"'a' IS NOT NULL":                       false,
+		`"a AND b" IS NOT NULL`:                 false,
+		`a IS NOT NULL AND "a(" IS NOT NULL`:    false,
+		`"a IS NOT NULL`:                        false,
+		"a IS NOT NULL AND b IS NOT NULL":       true,
+		"((a IS NOT NULL) AND (b IS NOT NULL))": true,
+		"a IS NULL":                             false,
+		"c IS NOT NULL":                         false,
+		"a IS NOT NULL OR b IS NOT NULL":        false,
+		"a IS NOT NULL AND state <> 'done'":     false,
+		"state <> 'done'":                       false,
+		"lower(a) IS NOT NULL":                  false,
+		"NOT (a IS NOT NULL)":                   false,
+		"()":                                    false,
+	} {
+		if got := nullGuard(where, keys); got != want {
+			t.Errorf("nullGuard(%q) = %v, want %v", where, got, want)
 		}
 	}
 }
