@@ -5,6 +5,8 @@
       day: sunday
       time: "07:00"
       timezone: Europe/Zurich
+    cooldown:
+      default-days: 7
     open-pull-requests-limit: 5
 [[- end ]]
 [[- define "allow" ]]

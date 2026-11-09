@@ -131,7 +131,7 @@ func newer(to, cur, prefix string) bool {
 
 // cooldown: a release is taken once published this long, time for a hijacked or broken one to be pulled. It is
 // Dependabot's (dependabot.yaml default-days), a test keeps them one.
-const cooldown = 72 * time.Hour
+const cooldown = 7 * 24 * time.Hour
 
 // walk caps the releases newest tries, from the highest down.
 const walk = 10
