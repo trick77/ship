@@ -49,7 +49,7 @@ func TestRenderUnknownTable(t *testing.T) {
 		Entity{Package: "ghosts", Name: "Ghost", Table: "ghosts"},
 		Entity{Package: "ghosts", Name: "Spirit", Table: "spirits"})
 	_, err := Render(describeFixture(t), es)
-	if err == nil || !strings.Contains(err.Error(), "ghosts.Ghost: table ghosts") || !strings.Contains(err.Error(), "ghosts.Spirit: table spirits") {
+	if err == nil || !strings.Contains(err.Error(), "ghosts.Ghost: no table or view ghosts") || !strings.Contains(err.Error(), "ghosts.Spirit: no table or view spirits") {
 		t.Errorf("err = %v, want both unknown tables named", err)
 	}
 }
@@ -102,5 +102,16 @@ func TestRenderChecksAndViews(t *testing.T) {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}
+	}
+}
+
+func TestRenderViewRow(t *testing.T) {
+	s := Schema{Views: []View{{Name: "active", Kind: "view"}}}
+	out, err := Render(s, []Entity{{Package: "store", Dir: "store", Name: "Active", Table: "active"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "\n## Views\n\n- `active` (view)\n  - `store.Active` (store)\n"; !strings.Contains(string(out), want) {
+		t.Errorf("output lacks %q:\n%s", want, out)
 	}
 }

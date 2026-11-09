@@ -1,6 +1,6 @@
 // Package schemadoc writes a repo's database schema as Markdown: one section per table (columns, foreign keys,
-// indexes, CHECK constraints and the Go types that hold its rows), the views by name, and a Mermaid erDiagram, which
-// GitHub renders.
+// indexes, CHECK constraints and the Go types that hold its rows), the views by name with the Go types read from them,
+// and a Mermaid erDiagram, which GitHub renders.
 //
 // The doc is generated, never written by hand, and checked like a golden file by the consumer's own test: it opens a
 // fresh database with its own driver and extensions, runs its migrations, and compares
@@ -14,8 +14,8 @@
 // rewrites the file instead (see Regenerate; go test runs in the Go module directory, not a repo root above it).
 //
 // Go types are found by convention: structs, exported or not, in files named model.go whose doc comment ends in a line
-// "Table: <name>" (the table holding their rows) or "Table: -" (not stored as a row). A struct without that line, or
-// naming a table the schema lacks, fails Render: the mapping is the part that drifts.
+// "Table: <name>" (the table or view holding their rows) or "Table: -" (not stored as a row). A struct without that
+// line, or naming a table or view the schema lacks, fails Render: the mapping is the part that drifts.
 package schemadoc
 
 import (
