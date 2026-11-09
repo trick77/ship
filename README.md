@@ -169,7 +169,7 @@ jobs:
   check:
     uses: trick77/ship/.github/workflows/check.yaml@master      # inputs: go-dir, node-version, ui-dir, postgres (deprecated: ship.yaml postgres:)
   release:
-    uses: trick77/ship/.github/workflows/release.yaml@master    # inputs: bump, go-dir, dir
+    uses: trick77/ship/.github/workflows/release.yaml@master    # inputs: bump, go-dir, dir, node-version (else ci.yaml's); gates with check.yaml first
   vuln:
     uses: trick77/ship/.github/workflows/vuln.yaml@master       # inputs: go-dir
   cleanup:

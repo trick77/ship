@@ -75,6 +75,121 @@ func TestCIRelease_whenMaster_thenEveryModuleReleased(t *testing.T) {
 	}
 }
 
+// A release gates the commit it tags: check.yaml runs in a read-only job the release job needs, on by default; only
+// ship's CI, whose check job just gated the same commit, turns it off. A release not waiting for the gate, releasing
+// on its failure, or a gate off by default tags what no gate saw as merged (loom 0.10.2). The gate runs the repo's
+// code: write permissions there hand them to its npm install scripts.
+func TestRelease_whenRun_thenGatedBeforeTagging(t *testing.T) {
+	type step struct {
+		ID  string            `yaml:"id"`
+		If  string            `yaml:"if"`
+		Run string            `yaml:"run"`
+		Env map[string]string `yaml:"env"`
+	}
+	type job struct {
+		Needs       []string          `yaml:"needs"`
+		If          string            `yaml:"if"`
+		Uses        string            `yaml:"uses"`
+		With        map[string]any    `yaml:"with"`
+		Permissions map[string]string `yaml:"permissions"`
+		Steps       []step            `yaml:"steps"`
+	}
+	read := func(f string, v any) {
+		t.Helper()
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := yaml.Unmarshal(b, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var w struct {
+		On struct {
+			WorkflowCall struct {
+				Inputs map[string]struct {
+					Default any `yaml:"default"`
+				} `yaml:"inputs"`
+			} `yaml:"workflow_call"`
+		} `yaml:"on"`
+		Jobs map[string]job `yaml:"jobs"`
+	}
+	read(".github/workflows/release.yaml", &w)
+	if d := w.On.WorkflowCall.Inputs["gate"].Default; d != true {
+		t.Errorf("input gate defaults to %v, want true", d)
+	}
+	resolve, gate, release := w.Jobs["resolve"], w.Jobs["gate"], w.Jobs["release"]
+	if gate.Uses != "trick77/ship/.github/workflows/check.yaml@master" || gate.If != "inputs.gate" ||
+		!slices.Equal(gate.Needs, []string{"resolve"}) || gate.With["ship"] != "${{ needs.resolve.outputs.ship }}" {
+		t.Errorf("gate job: %+v; want check.yaml after resolve, if inputs.gate, the resolved ship", gate)
+	}
+	for name, j := range map[string]job{"resolve": resolve, "gate": gate} {
+		if len(j.Permissions) != 1 || j.Permissions["contents"] != "read" {
+			t.Errorf("%s job permissions %v, want contents: read alone", name, j.Permissions)
+		}
+	}
+	if !slices.Contains(release.Needs, "gate") || !slices.Contains(release.Needs, "resolve") ||
+		!strings.Contains(release.If, "needs.gate.result == 'success'") ||
+		!strings.Contains(release.If, "(needs.gate.result == 'skipped' && !inputs.gate)") {
+		t.Errorf("release job needs %v, if %q; want it after a passed gate, or a skipped one with gate off",
+			release.Needs, release.If)
+	}
+	i := slices.IndexFunc(release.Steps, func(s step) bool { return strings.Contains(s.Run, `$SHIP release "$BUMP"`) })
+	if i < 0 || release.Steps[i].Env["SHIP"] != "${{ needs.resolve.outputs.ship }}" {
+		t.Errorf("release step %d does not run the resolved ship", i)
+	}
+
+	// ship's CI turns the gate off (its check job gated the commit); the manual fallback keeps it.
+	var ci, manual struct {
+		Jobs map[string]job `yaml:"jobs"`
+	}
+	read(".github/workflows/ci.yaml", &ci)
+	read(".github/workflows/ship-release.yaml", &manual)
+	if r := ci.Jobs["release"]; !slices.Contains(r.Needs, "check") || r.With["gate"] != false {
+		t.Errorf("ci.yaml release: needs %v, gate %v; want needs check and gate false", r.Needs, r.With["gate"])
+	}
+	if g, ok := manual.Jobs["release"].With["gate"]; ok {
+		t.Errorf("ship-release.yaml sets gate %v, want it left on", g)
+	}
+
+	// The gate's Node: the input, else the caller's ci.yaml's node-version, else none; a UI without one fails.
+	node := slices.IndexFunc(resolve.Steps, func(s step) bool { return s.ID == "node" })
+	if node < 0 || resolve.Steps[node].If != "inputs.gate" {
+		t.Fatal("no step id node in resolve, or not only with the gate")
+	}
+	for _, tc := range []struct{ input, ci, shipYAML, want string }{
+		{"", "    with:\n      go-dir: backend\n      node-version: \"26\"\n", "ui:\n", "node=26\nui-dir=ui\n"},
+		{"", "    with:\n      node-version: '22'\n      ui-dir: web\n", "", "node=22\nui-dir=web\n"},
+		{"24", "      node-version: \"26\"\n", "", "node=24\nui-dir=ui\n"},
+		{"", "    with:\n      go-dir: backend\n", "go:\n  dir: backend\n", "node=\nui-dir=ui\n"},
+		// No ci.yaml; then a UI and no Node found (flow style): fails.
+		{"", "", "", "node=\nui-dir=ui\n"},
+		{"", "    with: { node-version: \"22\" }\n", "ui:\n  dir: ui\n", ""},
+	} {
+		dir := t.TempDir()
+		ciPath, shipPath, out := filepath.Join(dir, "ci.yaml"), filepath.Join(dir, "ship.yaml"), filepath.Join(dir, "out")
+		for p, s := range map[string]string{ciPath: tc.ci, shipPath: tc.shipYAML} {
+			if s != "" {
+				if err := os.WriteFile(p, []byte(s), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		cmd := exec.Command("bash", "-e", "-c", resolve.Steps[node].Run)
+		cmd.Env = append(os.Environ(), "NODE="+tc.input, "CI_FILE="+ciPath, "SHIP_YAML="+shipPath, "GITHUB_OUTPUT="+out)
+		msg, err := cmd.CombinedOutput()
+		if tc.want == "" {
+			if err == nil || !strings.HasPrefix(string(msg), "::error::") {
+				t.Errorf("ci %q: want an ::error:: and a failure, got %v %s", tc.ci, err, msg)
+			}
+			continue
+		}
+		if got, _ := os.ReadFile(out); err != nil || string(got) != tc.want {
+			t.Errorf("input %q, ci %q: got %q (%v %s), want %q", tc.input, tc.ci, got, err, msg, tc.want)
+		}
+	}
+}
+
 // The dependabot job merges to master with no human: only after the gate, only Dependabot's own pushes, only the head
 // and the master the gate checked. A broader if or a lost guard merges a human's or a fork's PR, or an unchecked tree.
 func TestCIDependabot_whenAutoMerge_thenGatedAndGuarded(t *testing.T) {
