@@ -33,12 +33,16 @@ type Entity struct {
 }
 
 // Field is one field, exported or not (a scanned column may be unexported); blank fields are left out. Doc is its
-// doc comment, else its trailing comment, whole and on one line.
+// doc comment, else its trailing comment, whole, paragraphs split by a blank line. SharedDoc names the field whose
+// doc comment heads the run of lines this one continues without one of its own, when that comment names it (// A,
+// B and C are the clip's parts.\n A, B int\n C bool: B and C share A's); a comment naming only its head (// ID is
+// the row id.) is its head's. Names on the commented line itself always share it (A, B int).
 type Field struct {
-	Name     string
-	Type     string
-	Doc      string
-	Embedded bool
+	Name      string
+	Type      string
+	Doc       string
+	SharedDoc string
+	Embedded  bool
 }
 
 // NoTable is the Table value of a type not stored as a row.
@@ -81,7 +85,8 @@ func Entities(dir string) ([]Entity, error) {
 }
 
 func parseModel(path, dir string) ([]Entity, error) {
-	f, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ParseComments|parser.SkipObjectResolution)
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, nil, parser.ParseComments|parser.SkipObjectResolution)
 	if err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
@@ -101,7 +106,7 @@ func parseModel(path, dir string) ([]Entity, error) {
 			if doc == nil && len(gen.Specs) == 1 {
 				doc = gen.Doc
 			}
-			e := Entity{Package: f.Name.Name, Dir: dir, Name: ts.Name.Name, Fields: fields(st)}
+			e := Entity{Package: f.Name.Name, Dir: dir, Name: ts.Name.Name, Fields: fields(fset, st)}
 			e.Doc, e.Table = splitTable(doc.Text())
 			out = append(out, e)
 		}
@@ -123,27 +128,74 @@ func splitTable(doc string) (string, string) {
 	return strings.TrimSpace(strings.Join(keep, "\n")), table
 }
 
-func fields(st *ast.StructType) []Field {
+func fields(fset *token.FileSet, st *ast.StructType) []Field {
 	var out []Field
+	// The field heading the current run of lines and its doc, the run's last line.
+	shared, sharedDoc, prevEnd := "", "", -1
 	for _, f := range st.Fields.List {
 		typ := types.ExprString(f.Type)
-		doc := oneLine(f.Doc.Text())
-		if doc == "" {
-			doc = oneLine(f.Comment.Text())
+		doc := paragraphs(f.Doc.Text())
+		ownDoc := doc != "" // a directive alone (//nolint:…) is no doc
+		if !ownDoc {
+			doc = paragraphs(f.Comment.Text())
 		}
-		if len(f.Names) == 0 {
-			name := typ[strings.LastIndex(typ, ".")+1:]
-			name = strings.TrimPrefix(name, "*")
-			out = append(out, Field{Name: name, Type: typ, Doc: doc, Embedded: true})
-			continue
+		start, end := fset.Position(f.Pos()).Line, fset.Position(f.End()).Line
+		if ownDoc || f.Comment != nil || start != prevEnd+1 {
+			shared = "" // its own comment, or a blank line, ends the run; a doc starts a new one below
 		}
+		prevEnd = end
+		names := make([]string, 0, len(f.Names))
 		for _, n := range f.Names {
 			if n.Name != "_" {
-				out = append(out, Field{Name: n.Name, Type: typ, Doc: doc})
+				names = append(names, n.Name)
 			}
+		}
+		embedded := len(f.Names) == 0
+		if embedded {
+			name := typ[strings.LastIndex(typ, ".")+1:]
+			names = []string{strings.TrimPrefix(name, "*")}
+		}
+		for i, n := range names {
+			fd := Field{Name: n, Type: typ, Doc: doc, Embedded: embedded}
+			switch {
+			case ownDoc && i > 0:
+				fd.Doc, fd.SharedDoc = "", names[0] // A, B int under one comment: B shares A's
+			case doc == "" && shared != "" && mentions(sharedDoc, n):
+				fd.SharedDoc = shared
+			}
+			out = append(out, fd)
+		}
+		if ownDoc && len(names) > 0 {
+			shared, sharedDoc = names[0], doc
 		}
 	}
 	return out
+}
+
+// mentions reports whether doc names the word w as a word of its own.
+func mentions(doc, w string) bool {
+	for i := 0; ; {
+		j := strings.Index(doc[i:], w)
+		if j < 0 {
+			return false
+		}
+		j += i
+		if (j == 0 || !identByte(doc[j-1])) && (j+len(w) == len(doc) || !identByte(doc[j+len(w)])) {
+			return true
+		}
+		i = j + 1
+	}
+}
+
+// paragraphs is s with each paragraph on one line, paragraphs split by a blank line.
+func paragraphs(s string) string {
+	var out []string
+	for p := range strings.SplitSeq(s, "\n\n") {
+		if p = oneLine(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return strings.Join(out, "\n\n")
 }
 
 // Summary is the doc's first paragraph on one line.

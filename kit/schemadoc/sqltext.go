@@ -200,7 +200,8 @@ func sqliteGenerated(create, col string) string {
 		if strings.EqualFold(leadingName(def), col) {
 			// The first list after AS: a type's width or a CHECK comes before it, inside parentheses of its own.
 			if lists := keywordLists(def, "AS"); len(lists) > 0 {
-				return strings.TrimSpace(lists[0][1 : len(lists[0])-1])
+				l := lists[0].list
+				return strings.TrimSpace(l[1 : len(l)-1])
 			}
 		}
 	}
@@ -231,22 +232,77 @@ func leadingName(def string) string {
 }
 
 // sqliteChecks is the CHECK constraints of a CREATE TABLE statement, column and table level, in the order written,
-// each as CHECK (<expression>) on one line. A constraint's name is left out, as Postgres' constraint text does.
+// each as CHECK (<expression>) on one line, CONSTRAINT <name> CHECK (…) when named: SQLite's error names it, and a
+// migration rebuilding the table looks for it.
 func sqliteChecks(create string) []string {
 	defs, _, _ := firstList(create)
 	var out []string
 	for _, def := range defs {
-		for _, l := range keywordLists(def, "CHECK") {
-			out = append(out, "CHECK "+l)
-		}
+		out = append(out, checkLists(def)...)
 	}
 	return out
 }
 
+// checkLists is def's CHECK constraints at its top level (outside parentheses, literals and quoted names), a name
+// given by CONSTRAINT <name> right before kept as written.
+func checkLists(def string) []string {
+	var out []string
+	for _, l := range keywordLists(def, "CHECK") {
+		c := "CHECK " + l.list
+		if name := constraintName(def[:l.at]); name != "" {
+			c = "CONSTRAINT " + name + " " + c
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// constraintName is the name of the CONSTRAINT <name> before ends with, as written (quotes kept); "" when before
+// ends otherwise.
+func constraintName(before string) string {
+	s := strings.TrimRight(before, " ")
+	start, end := len(s), len(s)
+	if q := strings.IndexByte(`"'`+"`]", lastByte(s)); q >= 0 {
+		open := (`"'` + "`[")[q]
+		// The opening quote, past doubled ones ("a""b"); brackets have none.
+		for start = end - 2; start >= 0; start-- {
+			if s[start] != open {
+				continue
+			}
+			if open != '[' && start > 0 && s[start-1] == open {
+				start--
+				continue
+			}
+			break
+		}
+		if start < 0 {
+			return ""
+		}
+	} else {
+		for start > 0 && identByte(s[start-1]) {
+			start--
+		}
+	}
+	rest := strings.TrimRight(s[:start], " ")
+	const kw = "CONSTRAINT"
+	if start == end || len(rest) < len(kw) || !keywordAt(rest, len(rest)-len(kw), kw) {
+		return ""
+	}
+	return s[start:end]
+}
+
+// lastByte is s's last byte, 0 when empty.
+func lastByte(s string) byte {
+	if s == "" {
+		return 0
+	}
+	return s[len(s)-1]
+}
+
 // keywordLists is the parenthesised lists, parentheses included, that follow keyword kw at the top level of def (a
 // definition on one line: outside parentheses, literals and quoted names).
-func keywordLists(def, kw string) []string {
-	var out []string
+func keywordLists(def, kw string) []keywordList {
+	var out []keywordList
 	for i := 0; i < len(def); {
 		if j := skipQuoted(def, i); j != i {
 			i = j
@@ -274,11 +330,17 @@ func keywordLists(def, kw string) []string {
 			return out
 		}
 		if open != i {
-			out = append(out, def[open:end+1])
+			out = append(out, keywordList{at: i, list: def[open : end+1]})
 		}
 		i = end + 1
 	}
 	return out
+}
+
+// keywordList is a parenthesised list after a keyword, parentheses included; at is the keyword's offset.
+type keywordList struct {
+	at   int
+	list string
 }
 
 // keywordAt reports whether the keyword kw, any case, stands at s[i] as a word of its own.

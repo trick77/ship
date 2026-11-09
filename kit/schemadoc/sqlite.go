@@ -118,8 +118,7 @@ func describeSQLiteTable(ctx context.Context, db *sql.DB, name, create, module s
 		if err := r.Scan(&c.Name, &c.Type, &c.NotNull, &def, &c.PK, &hidden); err != nil {
 			return err
 		}
-		// A module may declare the rowid it keys on as a column (vec0 does); every table has one, it is no column.
-		if hidden == 1 || module != "" && strings.EqualFold(c.Name, "rowid") {
+		if hidden == 1 {
 			return nil
 		}
 		c.Default, c.HasDefault = def.String, def.Valid
@@ -135,6 +134,7 @@ func describeSQLiteTable(ctx context.Context, db *sql.DB, name, create, module s
 	if module != "" {
 		// A virtual table has neither foreign keys, indexes nor constraints of its own.
 		markRowidAlias(t.Columns, false)
+		t.Columns = moduleRowid(t.Columns)
 		return t, nil
 	}
 	if t.ForeignKeys, err = sqliteForeignKeys(ctx, db, name); err != nil {
@@ -147,6 +147,23 @@ func describeSQLiteTable(ctx context.Context, db *sql.DB, name, create, module s
 	markRowidAlias(t.Columns, pkIndex)
 	t.Checks = sqliteChecks(create)
 	return t, nil
+}
+
+// moduleRowid is a virtual table's columns with the rowid a module declares (vec0 does) as the key it is: kept, the
+// way a reader learns the rows key on another table's id (rowid = chunks.id), marked the NOT NULL INTEGER primary
+// key. A table declaring a primary key column of its own keys on that one: the rowid is dropped, a duplicate.
+func moduleRowid(cols []Column) []Column {
+	i := slices.IndexFunc(cols, func(c Column) bool { return strings.EqualFold(c.Name, "rowid") })
+	if i < 0 {
+		return cols
+	}
+	for j, c := range cols {
+		if j != i && c.PK > 0 {
+			return slices.Delete(cols, i, i+1)
+		}
+	}
+	cols[i].Type, cols[i].NotNull, cols[i].PK = "INTEGER", true, 1
+	return cols
 }
 
 // markRowidAlias marks a rowid alias NOT NULL: the pragma reports it nullable, yet it is the rowid itself. It is a
@@ -233,7 +250,7 @@ func sqliteIndexes(ctx context.Context, db *sql.DB, table string) ([]Index, bool
 		return nil, false, err
 	}
 	for k := range idx {
-		if idx[k].Columns, err = sqliteIndexColumns(ctx, db, idx[k].Name, creates[k]); err != nil {
+		if idx[k].Columns, idx[k].Keys, err = sqliteIndexColumns(ctx, db, idx[k].Name, creates[k]); err != nil {
 			return nil, false, err
 		}
 	}
@@ -241,10 +258,10 @@ func sqliteIndexes(ctx context.Context, db *sql.DB, table string) ([]Index, bool
 }
 
 // sqliteIndexColumns is an index's key columns, with " COLLATE <name>" where not BINARY and " DESC" where
-// descending; an expression (cid -2) is its text in create.
-func sqliteIndexColumns(ctx context.Context, db *sql.DB, index, create string) ([]string, error) {
-	var cols []string
-	err := queryRows(ctx, db, qSQLiteIndexColumns, func(r *sql.Rows) error {
+// descending; an expression (cid -2) is its text in create. keys is the same keys' bare column names, "" for an
+// expression.
+func sqliteIndexColumns(ctx context.Context, db *sql.DB, index, create string) (cols, keys []string, err error) {
+	err = queryRows(ctx, db, qSQLiteIndexColumns, func(r *sql.Rows) error {
 		var cid int64
 		var name, coll sql.NullString
 		var desc bool
@@ -255,6 +272,7 @@ func sqliteIndexColumns(ctx context.Context, db *sql.DB, index, create string) (
 		if cid == -2 {
 			c = indexKey(create, len(cols))
 		}
+		keys = append(keys, name.String)
 		// The collation the key compares with, written on it or inherited from its column; BINARY is the default.
 		if coll.Valid && !strings.EqualFold(coll.String, "BINARY") {
 			c += " COLLATE " + coll.String
@@ -266,7 +284,7 @@ func sqliteIndexColumns(ctx context.Context, db *sql.DB, index, create string) (
 		return nil
 	}, index)
 	if err != nil {
-		return nil, fmt.Errorf("index %s: %w", index, err)
+		return nil, nil, fmt.Errorf("index %s: %w", index, err)
 	}
-	return cols, nil
+	return cols, keys, nil
 }

@@ -105,6 +105,59 @@ func TestRenderChecksAndViews(t *testing.T) {
 	}
 }
 
+// A child keyed by its parent's id (its PK) or by a unique key has at most one row per parent; a partial unique
+// index or a plain one does not make it so.
+func TestRenderMermaidOneToOne(t *testing.T) {
+	parent := Table{Name: "p", Columns: []Column{{Name: "id", Type: "INTEGER", NotNull: true, PK: 1}}}
+	child := func(name string, idx ...Index) Table {
+		return Table{Name: name, Columns: []Column{{Name: "id", Type: "INTEGER", NotNull: true, PK: 1},
+			{Name: "p_id", Type: "INTEGER", NotNull: true}},
+			ForeignKeys: []ForeignKey{{Columns: []string{"p_id"}, RefTable: "p", RefColumns: []string{"id"}}}, Indexes: idx}
+	}
+	byPK := Table{Name: "pk", Columns: []Column{{Name: "p_id", Type: "INTEGER", NotNull: true, PK: 1}},
+		ForeignKeys: []ForeignKey{{Columns: []string{"p_id"}, RefTable: "p", RefColumns: []string{"id"}}}}
+	// A composite key holding a unique one is one-to-one too.
+	wide := child("wide", Index{Name: "u", Columns: []string{"p_id"}, Keys: []string{"p_id"}, Unique: true})
+	wide.Columns = append(wide.Columns, Column{Name: "tenant", Type: "TEXT", NotNull: true})
+	wide.ForeignKeys[0].Columns = []string{"p_id", "tenant"}
+	s := Schema{Tables: []Table{parent, byPK, wide,
+		// Keys, not the displayed Columns, decide.
+		child("uniq", Index{Name: "u", Columns: []string{`"p_id" COLLATE NOCASE DESC`}, Keys: []string{"p_id"}, Unique: true}),
+		child("expr", Index{Name: "u", Columns: []string{"lower(p_id)"}, Keys: []string{""}, Unique: true}),
+		child("partial", Index{Name: "u", Columns: []string{"p_id"}, Keys: []string{"p_id"}, Unique: true, Where: "p_id > 0"}),
+		child("plain", Index{Name: "i", Columns: []string{"p_id"}, Keys: []string{"p_id"}})}}
+	out, err := Render(s, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"pk |o--|| p", "uniq |o--|| p", "wide |o--|| p", "expr }o--|| p",
+		"partial }o--|| p", "plain }o--|| p"} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+// A field under another's comment points to it; a field doc's paragraphs keep their break.
+func TestRenderFieldDocs(t *testing.T) {
+	e := Entity{Package: "store", Dir: "store", Name: "Clip", Table: NoTable, Fields: []Field{
+		{Name: "Prompt", Type: "string", Doc: "The clip's parts.\n\nEach may be empty."},
+		{Name: "M", Type: "map[string]int", Doc: "A map<string>int & co, `a<b>`."},
+		{Name: "Review", Type: "string", SharedDoc: "Prompt"},
+	}}
+	out, err := Render(Schema{Views: []View{{Name: "v", Kind: "view"}}}, []Entity{e})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"| `Prompt` | `string` | The clip's parts.<br>Each may be empty. |",
+		"| `Review` | `string` | see `Prompt` |", "0 tables, 1 view;",
+		"| A map&lt;string&gt;int &amp; co, `a<b>`. |"} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestRenderViewRow(t *testing.T) {
 	s := Schema{Views: []View{{Name: "active", Kind: "view"}}}
 	out, err := Render(s, []Entity{{Package: "store", Dir: "store", Name: "Active", Table: "active"}})

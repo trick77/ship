@@ -30,6 +30,17 @@ func TestEntities(t *testing.T) {
 			Doc: "Stats is computed per request, never stored.", Fields: []Field{
 				{Name: "Count", Type: "int", Doc: "Count is the number of videos, hidden ones included."},
 				{Name: "Since", Type: "string", Doc: "trailing comment"},
+				{Name: "From", Type: "string", Doc: "From and To bound the count.\n\nBoth are UTC."},
+				{Name: "To", Type: "string", SharedDoc: "From"}, // under From's comment
+				{Name: "Until", Type: "string"},                 // a blank line ends the run
+				{Name: "Hits", Type: "int", Doc: "Hits is the cache hits."},
+				{Name: "Misses", Type: "int"}, // Hits' doc opens with Hits: about it alone
+				{Name: "Odd", Type: "int"},    // a directive is no doc
+				{Name: "Even", Type: "int"},   // nor a shared one
+				{Name: "Lo", Type: "int", Doc: "The window's edges."},
+				{Name: "Hi", Type: "int", SharedDoc: "Lo"}, // one line under one comment
+				{Name: "Req", Type: "int", Doc: "The request id."},
+				{Name: "Resp", Type: "int"}, // not named by Req's comment
 			}},
 		{Package: "channels", Dir: "channels", Name: "Untagged", Doc: "Untagged has no Table line."},
 		{Package: "channels", Dir: "channels", Name: "Video", Table: "videos",

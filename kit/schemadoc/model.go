@@ -12,8 +12,8 @@ type Schema struct {
 	Views  []View
 }
 
-// View is a view, by name and Kind ("view", "materialized view") only: its definition is the engine's rewrite of
-// the query, which changes with the engine's version. A TimescaleDB continuous aggregate is a view.
+// View is a view, by name and Kind ("view", "materialized view", "continuous aggregate": TimescaleDB's, a view to
+// Postgres) only: its definition is the engine's rewrite of the query, which changes with the engine's version.
 //
 // Table: -
 type View struct {
@@ -39,7 +39,8 @@ func (s Schema) hasView(name string) bool {
 // Table is one table. Module names a virtual table's module (vec0, fts5), empty for a plain table; ModuleArgs is
 // what its CREATE statement passed the module, on one line. A module may declare its columns untyped (vec0 does), so
 // the arguments are where a vector's width shows. Checks is the CHECK constraints, each CHECK (<expression>) as the
-// engine spells it: SQLite as written, Postgres as pg_get_constraintdef rewrites it.
+// engine spells it (SQLite as written, Postgres as pg_get_constraintdef rewrites it), prefixed CONSTRAINT <name>
+// where named: always in Postgres, which names every one.
 //
 // Table: -
 type Table struct {
@@ -66,6 +67,28 @@ func (t Table) pkColumns() []string {
 		out = append(out, c.Name)
 	}
 	return out
+}
+
+// oneToOne reports whether cols hold all of t's primary key or of a unique index without a predicate (a partial one
+// is unique only where its predicate holds): then at most one row carries any one value of cols.
+func (t Table) oneToOne(cols []string) bool {
+	covers := func(keys []string) bool {
+		if len(keys) == 0 {
+			return false
+		}
+		for _, k := range keys {
+			if !slices.Contains(cols, k) {
+				return false
+			}
+		}
+		return true
+	}
+	if covers(t.pkColumns()) {
+		return true
+	}
+	return slices.ContainsFunc(t.Indexes, func(i Index) bool {
+		return i.Unique && i.Where == "" && !slices.Contains(i.Keys, "") && covers(i.Keys)
+	})
 }
 
 // Column is one column. PK is its 1-based position in the primary key, 0 when not part of it. Default is the
@@ -96,12 +119,14 @@ type ForeignKey struct {
 
 // Index is one secondary index. A primary key's own index is left out; a UNIQUE constraint's is kept. Columns are
 // key columns in order, an expression as its text; SQLite appends " COLLATE <name>" where not BINARY, both engines
-// " DESC" where descending. Where is a partial index's predicate.
+// " DESC" where descending. Keys is the same keys' bare column names, "" for an expression: what a foreign key
+// matches. Where is a partial index's predicate.
 //
 // Table: -
 type Index struct {
 	Name    string
 	Columns []string
+	Keys    []string
 	Unique  bool
 	Where   string
 }
