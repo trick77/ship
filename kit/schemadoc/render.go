@@ -44,11 +44,8 @@ func Render(s Schema, entities []Entity) ([]byte, error) {
 
 	var b bytes.Buffer
 	b.WriteString(Header + "\n\n# Database schema\n\n")
-	count := plural(len(tables), "table")
-	if len(s.Views) > 0 {
-		count += ", " + plural(len(s.Views), "view")
-	}
-	fmt.Fprintf(&b, "%s; the diagram is at the end. Go types are the `model.go` structs whose rows they hold.\n", count)
+	fmt.Fprintf(&b, "%s; the diagram is at the end. Go types are the `model.go` structs whose rows they hold.\n",
+		strings.Join(append([]string{plural(len(tables), "table")}, viewCounts(s.Views)...), ", "))
 	for _, t := range tables {
 		writeTable(&b, t, byTable[t.Name])
 	}
@@ -308,6 +305,35 @@ func codeList(ss []string) string {
 		out[i] = code(s)
 	}
 	return strings.Join(out, ", ")
+}
+
+// viewKinds is the order viewCounts lists the known kinds in; any other kind follows, by name.
+var viewKinds = []string{"view", "materialized view", "continuous aggregate"}
+
+// viewCounts is the views counted per kind ("33 continuous aggregates"): calling TimescaleDB's aggregates views
+// would hide what they are. A view without a kind counts as a view.
+func viewCounts(views []View) []string {
+	n := map[string]int{}
+	var kinds []string
+	for _, v := range views {
+		k := cmp.Or(v.Kind, "view")
+		if n[k] == 0 {
+			kinds = append(kinds, k)
+		}
+		n[k]++
+	}
+	rank := func(k string) int {
+		if i := slices.Index(viewKinds, k); i >= 0 {
+			return i
+		}
+		return len(viewKinds)
+	}
+	slices.SortFunc(kinds, func(a, b string) int { return cmp.Or(cmp.Compare(rank(a), rank(b)), strings.Compare(a, b)) })
+	var out []string
+	for _, k := range kinds {
+		out = append(out, plural(n[k], k))
+	}
+	return out
 }
 
 // plural is n and noun, an s appended unless n is 1.
