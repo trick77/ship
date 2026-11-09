@@ -31,6 +31,11 @@ func (s Schema) table(name string) *Table {
 	return nil
 }
 
+// hasView reports whether s has a view named name.
+func (s Schema) hasView(name string) bool {
+	return slices.ContainsFunc(s.Views, func(v View) bool { return v.Name == name })
+}
+
 // Table is one table. Module names a virtual table's module (vec0, fts5), empty for a plain table; ModuleArgs is
 // what its CREATE statement passed the module, on one line. A module may declare its columns untyped (vec0 does), so
 // the arguments are where a vector's width shows. Checks is the CHECK constraints, each CHECK (<expression>) as the
