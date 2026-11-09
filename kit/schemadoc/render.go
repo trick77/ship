@@ -44,7 +44,11 @@ func Render(s Schema, entities []Entity) ([]byte, error) {
 
 	var b bytes.Buffer
 	b.WriteString(Header + "\n\n# Database schema\n\n")
-	fmt.Fprintf(&b, "%d tables; the diagram is at the end. Go types are the `model.go` structs whose rows they hold.\n", len(tables))
+	count := plural(len(tables), "table")
+	if len(s.Views) > 0 {
+		count += ", " + plural(len(s.Views), "view")
+	}
+	fmt.Fprintf(&b, "%s; the diagram is at the end. Go types are the `model.go` structs whose rows they hold.\n", count)
 	for _, t := range tables {
 		writeTable(&b, t, byTable[t.Name])
 	}
@@ -142,8 +146,47 @@ func writeFreeEntity(b *bytes.Buffer, e Entity) {
 		if f.Embedded {
 			name += " (embedded)"
 		}
-		fmt.Fprintf(b, "| %s | %s | %s |\n", name, code(f.Type), cell(f.Doc))
+		fmt.Fprintf(b, "| %s | %s | %s |\n", name, code(f.Type), fieldDoc(f))
 	}
+}
+
+// fieldDoc is a field's doc for its table cell: its paragraphs on one line each, split by <br> (a later paragraph
+// may lean on the break); a field under another's doc comment, with none of its own, points to that field.
+func fieldDoc(f Field) string {
+	if f.Doc == "" && f.SharedDoc != "" {
+		return "see " + code(f.SharedDoc)
+	}
+	// Entities wrote each paragraph on one line. The <br> makes the cell HTML: a < or & of the doc's own is escaped,
+	// outside a code span (which shows its text as is).
+	paras := strings.Split(f.Doc, "\n\n")
+	for i, p := range paras {
+		paras[i] = cell(htmlText(p))
+	}
+	return strings.Join(paras, "<br>")
+}
+
+// htmlText is s with <, > and & escaped outside `code spans`, for a cell holding HTML.
+func htmlText(s string) string {
+	var b strings.Builder
+	code := false
+	for _, r := range s {
+		switch {
+		case r == '`':
+			code = !code
+			b.WriteRune(r)
+		case code:
+			b.WriteRune(r)
+		case r == '<':
+			b.WriteString("&lt;")
+		case r == '>':
+			b.WriteString("&gt;")
+		case r == '&':
+			b.WriteString("&amp;")
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // actions is an FK's non-default referential actions.
@@ -197,7 +240,13 @@ func writeMermaid(b *bytes.Buffer, tables []Table) {
 					parent = "o|"
 				}
 			}
-			fmt.Fprintf(b, "    %s }o--%s %s : %q\n", mermaidIdent(t.Name), parent, mermaidIdent(fk.RefTable), strings.Join(fk.Columns, ", "))
+			// A parent has at most one child when the key columns are the child's primary key or a unique key.
+			child := "}o"
+			if t.oneToOne(fk.Columns) {
+				child = "|o"
+			}
+			fmt.Fprintf(b, "    %s %s--%s %s : %q\n", mermaidIdent(t.Name), child, parent, mermaidIdent(fk.RefTable),
+				strings.Join(fk.Columns, ", "))
 		}
 	}
 	b.WriteString("```\n")
@@ -259,6 +308,14 @@ func codeList(ss []string) string {
 		out[i] = code(s)
 	}
 	return strings.Join(out, ", ")
+}
+
+// plural is n and noun, an s appended unless n is 1.
+func plural(n int, noun string) string {
+	if n != 1 {
+		noun += "s"
+	}
+	return strconv.Itoa(n) + " " + noun
 }
 
 func yesNo(v bool) string {

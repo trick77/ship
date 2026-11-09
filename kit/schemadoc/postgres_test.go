@@ -9,11 +9,13 @@ import (
 )
 
 // postgresFixture is what pg_catalog reports for a parent and a child table, plus the bookkeeping table: identity
-// and generated columns, a CHECK constraint, a view and a materialized view.
+// and generated columns, a CHECK constraint, a view, a materialized view and a TimescaleDB continuous aggregate.
 func postgresFixture() *fakeDB {
 	f := newFake()
 	f.on(qPostgresTables, nil, row("channels"), row("schema_migrations"), row("videos"))
-	f.on(qPostgresViews, nil, row("channel_stats", "m"), row("active_videos", "v"))
+	f.on(qPostgresHasTimescale, nil, row(true))
+	f.on(qPostgresCaggs, nil, row("daily_views"))
+	f.on(qPostgresViews, nil, row("channel_stats", "m"), row("active_videos", "v"), row("daily_views", "v"))
 
 	f.on(qPostgresColumns, args("channels"),
 		row("id", "text", true, nil, "", "", int64(1)),
@@ -22,7 +24,7 @@ func postgresFixture() *fakeDB {
 	)
 	f.on(qPostgresForeignKeys, args("channels"))
 	f.on(qPostgresIndexes, args("channels"))
-	f.on(qPostgresChecks, args("channels"), row("CHECK (subscribers >= 0)"))
+	f.on(qPostgresChecks, args("channels"), row("channels_subscribers_check", "CHECK (subscribers >= 0)"))
 
 	f.on(qPostgresColumns, args("videos"),
 		row("id", "bigint", true, nil, "d", "", int64(1)),
@@ -33,8 +35,8 @@ func postgresFixture() *fakeDB {
 	)
 	f.on(qPostgresForeignKeys, args("videos"), row("videos_channel_id_fkey", "channels", "channel_id", "id", "a", "n"))
 	f.on(qPostgresIndexes, args("videos"),
-		row("idx_videos_channel", false, "channel_id\x1fadded_at", ""),
-		row("idx_videos_lower", true, "lower(id)", "channel_id IS NOT NULL"),
+		row("idx_videos_channel", false, "channel_id\x1fadded_at", "channel_id\x1fadded_at", ""),
+		row("idx_videos_lower", true, "lower(id)", "", "channel_id IS NOT NULL"),
 	)
 	f.on(qPostgresChecks, args("videos"))
 	return f
@@ -50,7 +52,7 @@ func TestPostgresDescribe(t *testing.T) {
 			{Name: "id", Type: "text", NotNull: true, PK: 1},
 			{Name: "subscribers", Type: "bigint", NotNull: true, Default: "0", HasDefault: true},
 			{Name: "seq", Type: "bigint", NotNull: true, Default: "identity always", HasDefault: true},
-		}, Checks: []string{"CHECK (subscribers >= 0)"}},
+		}, Checks: []string{"CONSTRAINT channels_subscribers_check CHECK (subscribers >= 0)"}},
 		{Name: "videos", Columns: []Column{
 			{Name: "id", Type: "bigint", NotNull: true, Default: "identity by default", HasDefault: true, PK: 1},
 			{Name: "channel_id", Type: "text"},
@@ -60,12 +62,30 @@ func TestPostgresDescribe(t *testing.T) {
 		}, ForeignKeys: []ForeignKey{
 			{Columns: []string{"channel_id"}, RefTable: "channels", RefColumns: []string{"id"}, OnUpdate: "NO ACTION", OnDelete: "SET NULL"},
 		}, Indexes: []Index{
-			{Name: "idx_videos_channel", Columns: []string{"channel_id", "added_at"}},
-			{Name: "idx_videos_lower", Columns: []string{"lower(id)"}, Unique: true, Where: "channel_id IS NOT NULL"},
+			{Name: "idx_videos_channel", Columns: []string{"channel_id", "added_at"}, Keys: []string{"channel_id", "added_at"}},
+			{Name: "idx_videos_lower", Columns: []string{"lower(id)"}, Keys: []string{""}, Unique: true,
+				Where: "channel_id IS NOT NULL"},
 		}},
-	}, Views: []View{{Name: "active_videos", Kind: "view"}, {Name: "channel_stats", Kind: "materialized view"}}}
+	}, Views: []View{{Name: "active_videos", Kind: "view"}, {Name: "channel_stats", Kind: "materialized view"},
+		{Name: "daily_views", Kind: "continuous aggregate"}}}
 	if !reflect.DeepEqual(s, want) {
 		t.Errorf("schema = %+v\nwant %+v", s, want)
+	}
+}
+
+// Without TimescaleDB its catalog is never asked: every view is a view.
+func TestPostgresDescribe_whenNoTimescale_thenPlainViews(t *testing.T) {
+	f := postgresFixture()
+	f.on(qPostgresHasTimescale, nil, row(false))
+	f.failOn(qPostgresCaggs) // asked anyway: Describe fails
+	s, err := Describe(context.Background(), f.open(t), Postgres)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range s.Views {
+		if v.Kind == "continuous aggregate" {
+			t.Errorf("%+v, want no continuous aggregate", v)
+		}
 	}
 }
 
@@ -99,6 +119,8 @@ func TestPostgresQueryErrors(t *testing.T) {
 		{qPostgresIndexes, args("videos")},
 		{qPostgresChecks, args("videos")},
 		{qPostgresViews, nil},
+		{qPostgresHasTimescale, nil},
+		{qPostgresCaggs, nil},
 	} {
 		f := postgresFixture()
 		f.failOn(c.q, c.arg...)

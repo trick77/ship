@@ -29,6 +29,23 @@ type Stats struct {
 	// hidden ones included.
 	Count int
 	Since string // trailing comment
+	// From and To bound the count.
+	//
+	// Both are UTC.
+	From string
+	To   string
+
+	Until string
+	// Hits is the cache hits.
+	Hits   int
+	Misses int
+	//nolint:revive
+	Odd, Even int
+	// The window's edges.
+	Lo, Hi int
+	// The request id.
+	Req  int
+	Resp int
 }
 
 type (

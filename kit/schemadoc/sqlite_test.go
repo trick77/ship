@@ -186,7 +186,7 @@ func TestSQLiteRowidAlias(t *testing.T) {
 
 func TestSQLiteChecks(t *testing.T) {
 	s := describeFixture(t)
-	want := []string{`CHECK (body <> ')' AND length(body) > 0)`, `CHECK ("check" BETWEEN 1 AND 5)`}
+	want := []string{`CHECK (body <> ')' AND length(body) > 0)`, `CONSTRAINT rank_range CHECK ("check" BETWEEN 1 AND 5)`}
 	if got := s.table("notes").Checks; !reflect.DeepEqual(got, want) {
 		t.Errorf("notes checks = %q, want %q", got, want)
 	}
@@ -261,15 +261,59 @@ func TestSQLiteVirtualTables(t *testing.T) {
 	if got := vec.Columns[1]; got.Name != "embedding" || got.Type != "float[4]" {
 		t.Errorf("vec_chunks column = %+v", got)
 	}
-	// The declared rowid is the table's own, no column; fts5's hidden columns are none of a row either.
+	// chunk_id is the declared key: the declared rowid duplicates it (moduleRowid). fts5's hidden columns are none
+	// of a row.
 	if len(vec.Columns) != 2 {
-		t.Errorf("vec_chunks columns = %+v, want rowid dropped", vec.Columns)
+		t.Errorf("vec_chunks columns = %+v, want the rowid dropped beside chunk_id", vec.Columns)
 	}
 	if got := s.table("search").Columns; len(got) != 2 {
 		t.Errorf("search columns = %+v, want the hidden ones dropped", got)
 	}
 	if s.table("search").Module != "fts5" || s.table("videos").Module != "" {
 		t.Errorf("modules: search %q, videos %q", s.table("search").Module, s.table("videos").Module)
+	}
+}
+
+// A CHECK's name is the CONSTRAINT <name> right before it, quoted or not; one naming another constraint is not its.
+func TestCheckLists(t *testing.T) {
+	for def, want := range map[string][]string{
+		`x INT CHECK (x > 0)`:                        {`CHECK (x > 0)`},
+		`x INT CONSTRAINT pos CHECK (x > 0)`:         {`CONSTRAINT pos CHECK (x > 0)`},
+		`CONSTRAINT "a b"  CHECK(x)`:                 {`CONSTRAINT "a b" CHECK (x)`},
+		"CONSTRAINT `t` CHECK (x)":                   {"CONSTRAINT `t` CHECK (x)"},
+		`CONSTRAINT [t] CHECK (x)`:                   {`CONSTRAINT [t] CHECK (x)`},
+		`CONSTRAINT "a""b" CHECK (x)`:                {`CONSTRAINT "a""b" CHECK (x)`},
+		`CONSTRAINT "a""" CHECK (x)`:                 {`CONSTRAINT "a""" CHECK (x)`},
+		`x INT CONSTRAINT nn NOT NULL CHECK (x > 0)`: {`CHECK (x > 0)`},
+		`x TEXT DEFAULT 'CONSTRAINT y' CHECK (x)`:    {`CHECK (x)`},
+		`x INT CHECK (x > 0) CONSTRAINT y CHECK (x)`: {`CHECK (x > 0)`, `CONSTRAINT y CHECK (x)`},
+		`"unclosed CHECK (x)`:                        nil,
+	} {
+		if got := checkLists(def); !reflect.DeepEqual(got, want) {
+			t.Errorf("checkLists(%q) = %q, want %q", def, got, want)
+		}
+	}
+}
+
+// A module's declared rowid without a key column beside it is the key (vec0 keyed on chunks.id); beside one, a
+// duplicate.
+func TestModuleRowid(t *testing.T) {
+	got := moduleRowid([]Column{{Name: "embedding", Type: "float[4]"}, {Name: "rowid"}})
+	want := []Column{{Name: "embedding", Type: "float[4]"}, {Name: "rowid", Type: "INTEGER", NotNull: true, PK: 1}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("keyless: %+v, want %+v", got, want)
+	}
+	got = moduleRowid([]Column{{Name: "id", Type: "INTEGER", PK: 1}, {Name: "rowid"}})
+	if len(got) != 1 || got[0].Name != "id" {
+		t.Errorf("keyed: %+v, want the rowid dropped", got)
+	}
+	// A rowid declared the primary key itself is that key.
+	got = moduleRowid([]Column{{Name: "rowid", PK: 1}, {Name: "v"}})
+	if len(got) != 2 || got[0].PK != 1 || !got[0].NotNull {
+		t.Errorf("rowid PK: %+v, want it kept as the key", got)
+	}
+	if got := moduleRowid([]Column{{Name: "a"}}); len(got) != 1 {
+		t.Errorf("no rowid: %+v", got)
 	}
 }
 
@@ -376,12 +420,15 @@ func TestSQLiteForeignKeys(t *testing.T) {
 func TestSQLiteIndexes(t *testing.T) {
 	s := describeFixture(t)
 	want := []Index{
-		{Name: "idx_videos_channel", Columns: []string{"channel_id", "published_at DESC"}},
-		{Name: "idx_videos_new", Columns: []string{"status"}, Where: "status = 'new'"},
+		// Keys are the bare column names, "" for an expression.
+		{Name: "idx_videos_channel", Columns: []string{"channel_id", "published_at DESC"},
+			Keys: []string{"channel_id", "published_at"}},
+		{Name: "idx_videos_new", Columns: []string{"status"}, Keys: []string{"status"}, Where: "status = 'new'"},
 		// An expression is its text; the pragma's COLLATE and DESC are appended once, the written ones (and the
 		// comment) dropped.
-		{Name: "idx_videos_recent", Columns: []string{"channel_id", "coalesce(published_at, ')') COLLATE NOCASE DESC"}, Where: "title <> ''"},
-		{Name: "idx_videos_title", Columns: []string{"lower(title)"}, Unique: true},
+		{Name: "idx_videos_recent", Columns: []string{"channel_id", "coalesce(published_at, ')') COLLATE NOCASE DESC"},
+			Keys: []string{"channel_id", ""}, Where: "title <> ''"},
+		{Name: "idx_videos_title", Columns: []string{"lower(title)"}, Keys: []string{""}, Unique: true},
 	}
 	if got := s.table("videos").Indexes; !reflect.DeepEqual(got, want) {
 		t.Errorf("videos indexes = %+v\nwant %+v", got, want)

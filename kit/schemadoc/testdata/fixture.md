@@ -2,7 +2,7 @@
 
 # Database schema
 
-10 tables; the diagram is at the end. Go types are the `model.go` structs whose rows they hold.
+10 tables, 1 view; the diagram is at the end. Go types are the `model.go` structs whose rows they hold.
 
 ## channels
 
@@ -53,7 +53,7 @@ Foreign keys:
 Checks:
 
 - `CHECK (body <> ')' AND length(body) > 0)`
-- `CHECK ("check" BETWEEN 1 AND 5)`
+- `CONSTRAINT rank_range CHECK ("check" BETWEEN 1 AND 5)`
 
 ## search
 
@@ -151,6 +151,17 @@ In `channels`. Stats is computed per request, never stored.
 | --- | --- | --- |
 | `Count` | `int` | Count is the number of videos, hidden ones included. |
 | `Since` | `string` | trailing comment |
+| `From` | `string` | From and To bound the count.<br>Both are UTC. |
+| `To` | `string` | see `From` |
+| `Until` | `string` |  |
+| `Hits` | `int` | Hits is the cache hits. |
+| `Misses` | `int` |  |
+| `Odd` | `int` |  |
+| `Even` | `int` |  |
+| `Lo` | `int` | The window's edges. |
+| `Hi` | `int` | see `Lo` |
+| `Req` | `int` | The request id. |
+| `Resp` | `int` |  |
 
 ## Diagram
 
@@ -206,7 +217,7 @@ erDiagram
         TEXT published_at
         ANY note
     }
-    note_meta }o--|| notes : "note_id"
+    note_meta |o--|| notes : "note_id"
     notes }o--|| videos : "video_id"
     tag_notes }o--o| tags : "video_id, tag"
     tags }o--|| videos : "video_id"

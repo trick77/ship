@@ -20,6 +20,11 @@ const (
 	qPostgresViews = `SELECT c.relname, c.relkind::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
 		WHERE n.nspname = current_schema() AND c.relkind IN ('v', 'm') AND ` + pgNotExtension + `
 		ORDER BY c.relname`
+	// TimescaleDB's continuous aggregates are views to pg_class: its catalog names them (user_view_*, the same in
+	// 1.x and 2.x; the information view's columns are not), asked only where it is.
+	qPostgresHasTimescale = `SELECT to_regclass('_timescaledb_catalog.continuous_agg') IS NOT NULL`
+	qPostgresCaggs        = `SELECT user_view_name::text FROM _timescaledb_catalog.continuous_agg
+		WHERE user_view_schema = current_schema()`
 	pgNotExtension = `NOT EXISTS (SELECT 1 FROM pg_depend dep
 			WHERE dep.classid = 'pg_class'::regclass AND dep.objid = c.oid AND dep.deptype = 'e')`
 	qPostgresColumns = `SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull,
@@ -45,12 +50,16 @@ const (
 	qPostgresIndexes = `SELECT ic.relname, ix.indisunique,
 			array_to_string(ARRAY(SELECT pg_get_indexdef(ix.indexrelid, g, true)
 				FROM generate_series(1, ix.indnkeyatts) AS g ORDER BY g), chr(31)),
+			array_to_string(ARRAY(SELECT COALESCE(a.attname, '')
+				FROM unnest(ix.indkey::int2[]) WITH ORDINALITY AS k(n, o)
+				LEFT JOIN pg_attribute a ON a.attrelid = ix.indrelid AND a.attnum = k.n
+				WHERE k.o <= ix.indnkeyatts ORDER BY k.o), chr(31)),
 			COALESCE(pg_get_expr(ix.indpred, ix.indrelid, true), '')
 		FROM pg_index ix JOIN pg_class ic ON ic.oid = ix.indexrelid
 		WHERE ix.indrelid = to_regclass(quote_ident(current_schema()) || '.' || quote_ident($1))
 			AND NOT ix.indisprimary
 		ORDER BY ic.relname`
-	qPostgresChecks = `SELECT pg_get_constraintdef(con.oid, true) FROM pg_constraint con
+	qPostgresChecks = `SELECT quote_ident(con.conname), pg_get_constraintdef(con.oid, true) FROM pg_constraint con
 		WHERE con.contype = 'c' AND con.conrelid = to_regclass(quote_ident(current_schema()) || '.' || quote_ident($1))
 		ORDER BY con.conname`
 )
@@ -81,14 +90,21 @@ func describePostgres(ctx context.Context, db *sql.DB) (Schema, error) {
 		}
 		s.Tables = append(s.Tables, t)
 	}
+	caggs, err := postgresCaggs(ctx, db)
+	if err != nil {
+		return Schema{}, fmt.Errorf("list continuous aggregates: %w", err)
+	}
 	err = queryRows(ctx, db, qPostgresViews, func(r *sql.Rows) error {
 		var v View
 		if err := r.Scan(&v.Name, &v.Kind); err != nil {
 			return err
 		}
-		if v.Kind == "m" {
+		switch {
+		case caggs[v.Name]:
+			v.Kind = "continuous aggregate"
+		case v.Kind == "m":
 			v.Kind = "materialized view"
-		} else {
+		default:
 			v.Kind = "view"
 		}
 		s.Views = append(s.Views, v)
@@ -98,6 +114,24 @@ func describePostgres(ctx context.Context, db *sql.DB) (Schema, error) {
 		return Schema{}, fmt.Errorf("list views: %w", err)
 	}
 	return s, nil
+}
+
+// postgresCaggs is the names of the schema's TimescaleDB continuous aggregates, none without the extension.
+func postgresCaggs(ctx context.Context, db *sql.DB) (map[string]bool, error) {
+	var has bool
+	if err := db.QueryRowContext(ctx, qPostgresHasTimescale).Scan(&has); err != nil || !has {
+		return nil, err
+	}
+	out := map[string]bool{}
+	err := queryRows(ctx, db, qPostgresCaggs, func(r *sql.Rows) error {
+		var n string
+		if err := r.Scan(&n); err != nil {
+			return err
+		}
+		out[n] = true
+		return nil
+	})
+	return out, err
 }
 
 func describePostgresTable(ctx context.Context, db *sql.DB, name string) (Table, error) {
@@ -132,11 +166,11 @@ func describePostgresTable(ctx context.Context, db *sql.DB, name string) (Table,
 	}
 	err = queryRows(ctx, db, qPostgresIndexes, func(r *sql.Rows) error {
 		var i Index
-		var cols string
-		if err := r.Scan(&i.Name, &i.Unique, &cols, &i.Where); err != nil {
+		var cols, keys string
+		if err := r.Scan(&i.Name, &i.Unique, &cols, &keys, &i.Where); err != nil {
 			return err
 		}
-		i.Columns = strings.Split(cols, pgSep)
+		i.Columns, i.Keys = strings.Split(cols, pgSep), strings.Split(keys, pgSep)
 		t.Indexes = append(t.Indexes, i)
 		return nil
 	}, name)
@@ -144,11 +178,12 @@ func describePostgresTable(ctx context.Context, db *sql.DB, name string) (Table,
 		return t, err
 	}
 	err = queryRows(ctx, db, qPostgresChecks, func(r *sql.Rows) error {
-		var check string
-		if err := r.Scan(&check); err != nil {
+		var con, check string
+		if err := r.Scan(&con, &check); err != nil {
 			return err
 		}
-		t.Checks = append(t.Checks, check)
+		// Postgres names every constraint (t_col_check when unnamed): DROP CONSTRAINT needs it.
+		t.Checks = append(t.Checks, "CONSTRAINT "+con+" "+check)
 		return nil
 	}, name)
 	return t, err
