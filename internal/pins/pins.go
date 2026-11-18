@@ -5,7 +5,7 @@ const (
 	// Golangci is golangci-lint's default version (ship.yaml lint overrides it), built by go run.
 	Golangci = "v2.15.0"
 	// Govulncheck is the govulncheck version check runs, built by go run.
-	Govulncheck = "v1.9.0"
+	Govulncheck = "v1.10.0"
 	// Trivy is the ghcr.io/aquasecurity/trivy image tag release scans pushed images with.
 	Trivy = "0.76.2"
 	// GoMin is the lowest Go (major.minor) a repo's go.mod go lines and golang builder may name. A floor, not a pin:
