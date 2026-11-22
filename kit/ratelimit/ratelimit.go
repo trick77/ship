@@ -27,6 +27,27 @@
 // until they finish, so one caller's concurrency beyond its balance is refused (and penalised) whatever the outcomes;
 // size Burst above what a legitimate client runs at once. Permitted and Charge are the parts of Take, for a gate
 // that may race.
+//
+// A /64 is one subscriber, but a caller holding a /56 or /48 has 256 or 65,536 of them and walks past a per-/64
+// bucket. Tiers stacks limits a request must all pass, each a Limiter keyed its own way: a strict one per /64
+// beside a generous one per /48 (PrefixKey), so neither one /64 nor the whole block gets past its own allowance.
+// Tiers.Take spends a cost (the events in one batch, at least one) on every tier when all of them hold it and on
+// none when one does not. A batch above Tiers.MaxCost, the smallest Burst, is never admitted: a refusal without a
+// wait, the 413.
+//
+//	tiers := ratelimit.NewTiers(
+//		ratelimit.Tier{Limiter: per64, Key: ratelimit.ClientKey(1)},               // Burst 100: MaxCost
+//		ratelimit.Tier{Limiter: per48, Key: ratelimit.ClientPrefixKey(1, 32, 48)}, // Burst 2000
+//	)
+//	ok, wait := tiers.Take(r, float64(len(batch.Events))) // after parsing a body capped at 100 events' size
+//	switch {
+//	case !ok && wait == 0: // more events than tiers.MaxCost()
+//		httpx.WriteError(w, http.StatusRequestEntityTooLarge, "batch too large")
+//		return
+//	case !ok:
+//		httpx.TooManyRequests(w, wait)
+//		return
+//	}
 package ratelimit
 
 import (
@@ -38,6 +59,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/trick77/ship/kit/httpx"
@@ -66,10 +88,14 @@ type Options struct {
 // Limiter is a set of token buckets, one per key. Safe for concurrent use.
 type Limiter struct {
 	o         Options
+	seq       uint64 // creation order, the order Tiers takes several Limiters' locks in
 	mu        sync.Mutex
 	buckets   map[string]*bucket
 	lastPrune time.Time
 }
+
+// limiters numbers Limiters as New creates them.
+var limiters atomic.Uint64
 
 type bucket struct {
 	tokens float64
@@ -91,7 +117,7 @@ func New(o Options) *Limiter {
 	if o.Now == nil {
 		o.Now = time.Now
 	}
-	return &Limiter{o: o, buckets: map[string]*bucket{}}
+	return &Limiter{o: o, seq: limiters.Add(1), buckets: map[string]*bucket{}}
 }
 
 // Allow spends one token of key's bucket and reports whether there was one: Take(key, 1, 0).
@@ -260,7 +286,26 @@ func (l *Limiter) prune(now time.Time) {
 // office behind one neighbour. A port or brackets a proxy left on ("203.0.113.7:51234", "[2001:db8::1]:443") are
 // dropped, or every source port would be a fresh bucket. A value that is no address is returned as is: keying on
 // the literal still bounds whoever keeps sending it.
-func Key(ip string) string {
+func Key(ip string) string { return prefixKey(ip, 32, 64) }
+
+// PrefixKey is Key over wider networks, for a second, more generous tier (see Tiers): an IPv4 address keyed by its
+// first v4 bits ("203.0.113.0/24"; 32 is the address as is, as Key has it), an IPv6 address by its first v6 bits
+// ("2001:db8:1::/48"), ports, brackets, zones, v4-mapped addresses and non-addresses taken as Key takes them.
+// PrefixKey(32, 64) is Key. A v4 outside 1..32 or a v6 outside 1..64 panics, as New does on a misconfigured limit:
+// 0 is one bucket for every caller, which one flood fills for everybody, and a v6 longer than 64 is a bucket its
+// caller rotates out of for free.
+func PrefixKey(v4, v6 int) func(ip string) string {
+	if v4 < 1 || v4 > 32 {
+		panic(fmt.Sprintf("ratelimit.PrefixKey: v4 /%d, want 1 to 32", v4))
+	}
+	if v6 < 1 || v6 > 64 {
+		panic(fmt.Sprintf("ratelimit.PrefixKey: v6 /%d, want 1 to 64", v6))
+	}
+	return func(ip string) string { return prefixKey(ip, v4, v6) }
+}
+
+// prefixKey is PrefixKey's key for ip, with v4 and v6 in range.
+func prefixKey(ip string, v4, v6 int) string {
 	a, err := netip.ParseAddr(strings.TrimSuffix(strings.TrimPrefix(ip, "["), "]"))
 	if err != nil {
 		ap, perr := netip.ParseAddrPort(ip)
@@ -271,13 +316,24 @@ func Key(ip string) string {
 	}
 	a = a.Unmap()
 	if a.Is4() {
-		return a.String()
+		if v4 == 32 {
+			return a.String()
+		}
+		p, _ := a.Prefix(v4)
+		return p.String()
 	}
-	p, _ := a.WithZone("").Prefix(64)
+	p, _ := a.WithZone("").Prefix(v6)
 	return p.String()
 }
 
 // ClientKey keys a request by its caller: httpx.ClientIP with trustedHops, through Key.
 func ClientKey(trustedHops int) func(*http.Request) string {
 	return func(r *http.Request) string { return Key(httpx.ClientIP(r, trustedHops)) }
+}
+
+// ClientPrefixKey keys a request by its caller's network: httpx.ClientIP with trustedHops, through PrefixKey(v4, v6),
+// which panics on a bit count out of range here, at construction.
+func ClientPrefixKey(trustedHops, v4, v6 int) func(*http.Request) string {
+	key := PrefixKey(v4, v6)
+	return func(r *http.Request) string { return key(httpx.ClientIP(r, trustedHops)) }
 }
