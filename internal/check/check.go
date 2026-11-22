@@ -36,6 +36,9 @@ const PRFork = "SHIP_PR_FORK"
 // every touched line would count). The floor still applies.
 const SkipPatch = "[skip patch-coverage]"
 
+// repoSteps is the step of ship.yaml's steps:, the one that runs after docs only, too.
+const repoSteps = "repo steps"
+
 // Run runs the whole gate in root and stops at the first failure. pushing: the remote refs the push writes (the
 // pre-push hook's, refs/heads/<name>), none by hand.
 func Run(root string, c *config.Config, pushing ...string) error {
@@ -60,6 +63,12 @@ func Run(root string, c *config.Config, pushing ...string) error {
 		// Closures, not method values: r.subjects would copy r here, before the fetch sets noBase.
 		{"commit subjects", func() error { return r.subjects() }},
 		{"secret scan", func() error { return r.secrets() }},
+		// A push of docs alone (docsOnly) skips every step below but the repo's own: nothing else reads docs, and a
+		// repo step may (loom's model-name check greps README and AGENTS.md).
+		{"docs only", func() (err error) {
+			r.docs, err = r.docsOnly()
+			return err
+		}},
 		{"ui embed", r.cleanEmbed},
 		{"ui build", r.uiBuild},
 		{"npm audit", r.npmAudit},
@@ -76,7 +85,7 @@ func Run(root string, c *config.Config, pushing ...string) error {
 		{"golangci-lint " + c.Lint, r.goOnly(r.lint)},
 		{"ui lint", r.uiLint},
 		{"shellcheck", r.shellcheck},
-		{"repo steps", r.extra},
+		{repoSteps, r.extra},
 		// Postgres is go test's database: none without Go.
 		{"postgres", r.goOnly(func() (err error) {
 			pgEnv, stopPG, err = r.postgres()
@@ -90,6 +99,9 @@ func Run(root string, c *config.Config, pushing ...string) error {
 		{"coverage", func() error { return r.gates() }},
 	}
 	for _, s := range steps {
+		if r.docs && s.name != repoSteps {
+			continue
+		}
 		fmt.Printf("== %s ==\n", s.name)
 		if err := s.fn(); err != nil {
 			return fmt.Errorf("%s: %w", s.name, err)
@@ -121,6 +133,8 @@ type runner struct {
 	// noBase: origin has no <base> yet, set by the fetch step. Every commit of HEAD is then the branch's and every
 	// line of the tree a changed one: all of it is new to origin's base.
 	noBase bool
+	// docs: the branch changes docs alone, set by the docs only step; only the repo steps run after it.
+	docs bool
 }
 
 // fetch fetches origin/<base> and reports whether there is no base yet: the fetch failed, origin answers ls-remote,
