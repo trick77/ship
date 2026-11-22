@@ -75,11 +75,19 @@ jobs:
       # Go: the newest patch of go.mod's major.minor, not its exact version: setup-go given go.mod installs a pinned
       # 1.x.0 as is, and govulncheck fails on stdlib fixes a dev's newer local Go has. The higher of the go and
       # toolchain lines: below either, go (GOTOOLCHAIN=auto) switches to that exact, unpatched version. Copied in
-      # release.yaml and vuln.yaml, a test keeps them one.
+      # release.yaml and vuln.yaml, a test keeps them one. A repo of UI alone (ship.yaml's top-level ui: and no go:,
+      # quoted or not, a BOM dropped; no go.mod) has no Go of its own: ship runs on the newest stable, uncached (no
+      # go.sum to key on).
       - id: go
         env:
           MOD: ${{ inputs.go-dir }}/go.mod
         run: |
+          keys=""
+          [ ! -f ship.yaml ] || keys="$(awk 'NR == 1 { sub("^\357\273\277", "") } match($0, "^[\"\047]?[A-Za-z_]+[\"\047]?[ \t]*:") { k = substr($0, 1, RLENGTH); gsub("[\"\047 \t:]", "", k); print k }' ship.yaml)"
+          if [ ! -f "$MOD" ] && grep -qx ui <<< "$keys" && ! grep -qx go <<< "$keys"; then
+            echo "version=stable" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           [ -f "$MOD" ] || { echo "::error::$MOD: no such file (go-dir)"; exit 1; }
           v="$(awk '$1 == "go" || ($1 == "toolchain" && sub(/^go/, "", $2)) { split($2, p, "."); if (p[1] ~ /^[0-9]+$/ && (p[1] > a + 0 || (p[1] == a + 0 && p[2] + 0 > b))) { a = p[1] + 0; b = p[2] + 0 } } END { if (a != "") print a "." b }' "$MOD")"
           [[ "$v" =~ ^[0-9]+\.[0-9]+$ ]] || { echo "::error::$MOD: no go version"; exit 1; }
@@ -88,6 +96,7 @@ jobs:
         with:
           go-version: ${{ steps.go.outputs.version }}
           check-latest: true
+          cache: ${{ steps.go.outputs.version != 'stable' }}
           cache-dependency-path: ${{ inputs.go-dir }}/go.sum
       - if: inputs.node-version != ''
         uses: actions/setup-node@v7

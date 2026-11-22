@@ -179,6 +179,27 @@ func TestRun_whenUINoImages_thenNoBuild(t *testing.T) {
 	}
 }
 
+// A repo of UI alone (ui.dir ., no go:, no go.mod): the tag and the GitHub release, no Go at all.
+func TestRun_whenUIOnly_thenTagAndReleaseNoGo(t *testing.T) {
+	work := clone(t)
+	t.Setenv("GITHUB_REPOSITORY", "o/r")
+	if err := os.WriteFile(filepath.Join(work, "index.ts"), []byte("export const a = 1;\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"rm", "-q", "go.mod", "main.go"}, {"add", "index.ts"}, {"commit", "-q", "-m", "ui alone"},
+		{"push", "-q", "--no-verify", "origin", "master"}, {"fetch", "-q", "origin"}} {
+		if _, err := gitx.Git(work, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c, _ := config.Parse([]byte("ui:\n  dir: .\n"))
+	out, err := capture(t, func() error { return Run(work, c, Options{Bump: "auto", DryRun: true}) })
+	if err != nil || strings.Contains(out, "go ") || !strings.Contains(out, "1.4.2 -> 1.4.3") ||
+		!strings.Contains(out, "refs/tags/1.4.3") || !strings.Contains(out, "gh release create 1.4.3") {
+		t.Fatalf("release of UI alone: %v\n%s", err, out)
+	}
+}
+
 func TestRun_whenNoImagesBuildFails_thenNothingTagged(t *testing.T) {
 	work := clone(t)
 	writeMain(t, work, "package main\n\nfunc main() { broken }\n")

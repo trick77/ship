@@ -14,6 +14,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
+	"github.com/trick77/ship/internal/gitx"
 	"github.com/trick77/ship/internal/pins"
 )
 
@@ -57,6 +58,21 @@ type Config struct {
 	Allow []Allow `yaml:"allow"`
 	// Dependabot adds the repo's ignores to ship's dependabot.yaml.
 	Dependabot Dependabot `yaml:"dependabot"`
+	// goKey: ship.yaml names go: (HasGo).
+	goKey bool
+}
+
+// HasGo reports whether the repo has a Go side: false only with ui: and no go: in ship.yaml and no go.mod at go.dir
+// (the root), a repo of UI alone, where every Go step and rule stands down. Anything less is Go, a Config not from
+// Parse too: a Go repo that forgot go: fails where it always did, and one with its go.mod below the root fails
+// check's go modules step and conform's gomod. The go.mod is git's (tracked or untracked, not ignored), as those
+// see it: an ignored one on a laptop must not gate Go the CI checkout never has. No listing (not a repo): Go.
+func (c *Config) HasGo(root string) bool {
+	if c.goKey || c.UI == nil {
+		return true
+	}
+	files, err := gitx.Files(root, path.Join(c.Go.Dir, "go.mod"))
+	return err != nil || len(files) > 0
 }
 
 // Go configures the Go side of the gate.
@@ -117,6 +133,15 @@ func (u UI) EmbedFromDir() string {
 
 // LcovDir is the directory Test writes the coverage report into, repo-relative (.gitignore's line).
 func (u UI) LcovDir() string { return path.Dir(filepath.ToSlash(u.Lcov)) }
+
+// ReportsDirectory is vite's coverage.reportsDirectory conform wants, relative to Dir: coverage/ui beside Dir
+// ("../coverage/ui"), at the root for a root UI ("coverage/ui"), never outside the repo. Lcov defaults into it.
+func (u UI) ReportsDirectory() string {
+	if u.Dir == "." {
+		return "coverage/ui"
+	}
+	return "../coverage/ui"
+}
 
 // Step is one extra check command, run with sh -c.
 type Step struct {
@@ -185,6 +210,7 @@ func Parse(b []byte) (*Config, error) {
 	var keys map[string]any
 	_ = yaml.Unmarshal(b, &keys) // malformed input fails the strict decode below
 	_, hasUI := keys["ui"]
+	_, c.goKey = keys["go"]
 	if hasUI {
 		c.UI = uiDefaults()
 	}
@@ -235,7 +261,7 @@ func (c *Config) defaults() error {
 			}
 		}
 		if c.UI.Lcov == "" {
-			// conform's vite reportsDirectory "../coverage/ui", seen from the repo root.
+			// conform's vite reportsDirectory (ReportsDirectory), seen from the repo root.
 			c.UI.Lcov = filepath.Join(filepath.Dir(c.UI.Dir), "coverage", "ui", "lcov.info")
 		}
 	}

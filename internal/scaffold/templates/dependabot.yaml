@@ -52,6 +52,7 @@
 [[- end -]]
 version: 2
 updates:
+[[- if .Go ]]
   - package-ecosystem: gomod
     directory: [[ .GoDirAbs ]]
 [[- template "head" ]]
@@ -60,6 +61,7 @@ updates:
 [[- template "kit" ]]
 [[- template "split" "gomod" ]]
 [[- template "ignore" (index .Ignore "gomod") ]]
+[[- end ]]
 [[- range .GoModules ]]
 
   # Nested Go module (ship.yaml go.modules), its own go.mod.
@@ -73,7 +75,9 @@ updates:
 [[- template "ignore" (index $.Ignore "gomod") ]]
 [[- end ]]
 [[- if .UI ]]
-
+[[- /* a blank line after a Go entry, none right after updates: */ -]]
+[[- if .Go ]]
+[[ end ]]
   - package-ecosystem: npm
     directory: [[ .UIDirAbs ]]
 [[- template "head" ]]

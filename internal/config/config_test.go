@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/trick77/ship/internal/gitx"
 	"github.com/trick77/ship/internal/pins"
 )
 
@@ -288,5 +289,80 @@ func TestParse_whenEmbedSpelledLoosely_thenCleaned(t *testing.T) {
 	}
 	if _, err := Parse([]byte("ui:\n  embed: ../x\n")); err == nil {
 		t.Error("an embed outside the repo passed")
+	}
+}
+
+// A repo of UI alone: ui: and no go:, no go.mod at the root. Anything less stays a Go repo, so a Go repo that
+// forgot go: still fails where it always did.
+// The go.mod is git's view of it (tracked or untracked, not ignored), as check's go modules step and CI see it: an
+// ignored one on a laptop must not make the hook gate Go that CI never sees.
+func TestHasGo_whenUIOnlyAndNoGoMod_thenFalse(t *testing.T) {
+	for _, tc := range []struct {
+		yaml           string
+		gomod, ignored bool
+		want           bool
+	}{
+		{"ui: { dir: . }\n", false, false, false},
+		{"ui: {}\n", false, false, false},
+		{"ui: {}\n", true, false, true},
+		{"ui: {}\n", true, true, false},
+		{"ui: {}\ngo:\n  dir: backend\n", false, false, true},
+		{"ui: {}\ngo:\n", false, false, true},
+		{"", false, false, true},
+		{"patch: 80\n", false, false, true},
+	} {
+		dir := t.TempDir()
+		if _, err := gitx.Git(dir, "init", "-q"); err != nil {
+			t.Fatal(err)
+		}
+		if tc.gomod {
+			if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module x\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if tc.ignored {
+			if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("/go.mod\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		c, err := Parse([]byte(tc.yaml))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := c.HasGo(dir); got != tc.want {
+			t.Errorf("%q, go.mod %v, ignored %v: HasGo %v, want %v", tc.yaml, tc.gomod, tc.ignored, got, tc.want)
+		}
+	}
+	if !(&Config{}).HasGo(t.TempDir()) {
+		t.Error("a Config not from Parse lost its Go")
+	}
+	// No git listing (not a repo): Go, never a gate silently dropped.
+	c, err := Parse([]byte("ui: {}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.HasGo(t.TempDir()) {
+		t.Error("outside a repo a UI lost its Go gate")
+	}
+}
+
+// vite's reportsDirectory lands beside ui.dir, coverage/ui at the root for a root UI: never outside the repo.
+func TestUI_whenDirRootOrNested_thenReportsDirectoryAndLcovAgree(t *testing.T) {
+	for _, tc := range []struct{ yaml, reports, lcov string }{
+		{"ui: {}\n", "../coverage/ui", "coverage/ui/lcov.info"},
+		{"ui: { dir: web/ui }\n", "../coverage/ui", "web/coverage/ui/lcov.info"},
+		{"ui: { dir: ./ }\n", "coverage/ui", "coverage/ui/lcov.info"},
+		{"ui: { dir: ., lcov: out/lcov.info }\n", "coverage/ui", "out/lcov.info"},
+	} {
+		c, err := Parse([]byte(tc.yaml))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := c.UI.ReportsDirectory(); got != tc.reports {
+			t.Errorf("%q: reportsDirectory %q, want %q", tc.yaml, got, tc.reports)
+		}
+		if got := filepath.ToSlash(c.UI.Lcov); got != tc.lcov {
+			t.Errorf("%q: lcov %q, want %q", tc.yaml, got, tc.lcov)
+		}
 	}
 }

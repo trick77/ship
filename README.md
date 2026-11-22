@@ -33,7 +33,7 @@ postgres: "17"        # go test gets postgres:17-alpine (or a tagged image: time
 shell: [hooks/pre-commit]   # shellcheck these too (*.sh and sh/bash shebangs are found by themselves)
 patch: 75             # min coverage of changed lines, %
 tag_prefix: ""        # "v" for a Go module
-go:
+go:                   # omit with ui: and no go.mod at the root: a repo of UI alone, see below
   dir: .              # module dir, e.g. backend
   floor: 75           # min line coverage, %
   race: true
@@ -46,7 +46,7 @@ ui:                   # omit for no UI
   build: npm ci && npm run build      # tsc -b && vite build: the typecheck; the only value conform passes
   lint: npm run lint                  # eslint / prettier --check, the only value conform passes; "" = none, needs a ui allow
   test: npm run test -- --coverage --coverage.reporter=lcov --coverage.reporter=text-summary  # must write lcov
-  lcov: coverage/ui/lcov.info         # repo-relative, vite reportsDirectory "../coverage/ui"; SF: paths relative to ui.dir
+  lcov: coverage/ui/lcov.info         # repo-relative, vite reportsDirectory "../coverage/ui" ("coverage/ui" for ui.dir .); SF: paths relative to ui.dir
   embed: backend/web/dist             # go:embed dir, emptied but for .gitkeep before ui.build (no make target for it); omit for none
 steps:                # repo-specific checks, run after lint
   - { name: openapi lint, run: npx spectral lint api.yaml }
@@ -72,6 +72,14 @@ it. Each listed module gets go.dir's gates (mod verify, tidy, build, govulncheck
 it), and its changed lines in the patch gate; `go.exclude` applies, `go.coverpkg` is go.dir's alone. Entries are
 cleaned like go.dir (`./kit/auth/` is `kit/auth`); one outside the repo (absolute or through `..`), the root or a
 duplicate fails.
+
+A repo of UI alone: `ui:` and no `go:` in ship.yaml, no `go.mod` at the root (a TypeScript library, `ui.dir: .`:
+npm installs a git dependency from the repo root only). Every Go step of check prints `(no go)`, `ship lint` and
+`ship vuln` too; the UI steps, its floor and the patch gate run. conform skips `golangci`, `gomod`, `kit`,
+`handrolled` and `model`; init writes no vuln caller and no gomod dependabot entry. A `go.mod` anywhere (`testdata/`,
+`vendor/` aside) fails check's go modules step and conform's `gomod`: a Go repo that forgot `go:`. `images:`
+(`kit`), `postgres:` (`postgres`) and a leftover vuln caller (`workflows`) fail without Go. The Check and
+Release workflows set up the newest stable Go for ship itself; release tags and publishes the GitHub release.
 
 The Go coverage report lives in the git dir (`.git/ship/`), never in the tree. What the UI side writes there (the
 test runner's coverage output, `node_modules`, the tsbuildinfo, the embed dir but its `.gitkeep`) is `.gitignore`'s
@@ -212,11 +220,11 @@ it until the allow goes; `-diff` lists it by name, never counted); conform still
 | `scaffold` | every owned file equals ship's template. The rules below read the owned files too; on one `scaffold` fails, not allowed, their findings are dropped (`ship init` rewrites it); an allowed diff keeps them | per `path` |
 | `workflows` | ci/release/cleanup callers use `trick77/ship/.github/workflows/<x>.yaml@master`; release: `packages: write` and `id-token: write` (cosign) ⇔ images, bump options include `auto`; no other image cleanup action, in any workflow | yes |
 | `visibility` | GitHub's visibility (Actions event, else the API unauthenticated, cached a day in the git dir) matches `visibility:`; a failed lookup: `visibility:` stands (a note), unset = FAIL; public: CI on every PR (no `if:`); private: Dependabot-only `if:`, every npm/docker/docker-compose update grouped, ≤ 5 open PRs, cleanup caller with images | yes |
-| `dependabot` | `commit-message: { prefix: deps }` everywhere; gomod (go.dir, go.modules), github-actions, npm (UI), docker (Containerfile), docker-compose `/` (a root `compose*.yaml` naming an image by a version tag) present | yes |
+| `dependabot` | `commit-message: { prefix: deps }` everywhere; gomod (go.dir, go.modules; with Go), github-actions, npm (UI), docker (Containerfile), docker-compose `/` (a root `compose*.yaml` naming an image by a version tag) present | yes |
 | `containerfile` | per image: `ARG VERSION` into `-X github.com/trick77/ship/kit/version.Version=${VERSION}`, `-trimpath`, non-root final stage, builder `golang:X.Y` = go.mod's and ≥ ship's Go floor (1.27), floating its patch (`golang:1.27-alpine`, never `golang:1.27.0-alpine`: the image gets the newest patch's stdlib, as CI does; a `@sha256:` digest on the floating tag passes, Dependabot moves it with every patch), builder `node:N` ≥ ship's Node floor (26), every base (not a stage, `scratch` or `${ARG}`) with a tag or digest (untagged = a floating `:latest` Dependabot cannot track) | per `image` |
 | `distroless` | final stage on `gcr.io/distroless/` | per `image` |
 | `dockerignore` | exists with images; excludes `<ui.dir>/node_modules` and `<ui.dir>/dist` | yes |
-| `ui` | `ui.build: npm ci && npm run build` (check empties `ui.embed` itself), `ui.lint: npm run lint`; scripts exactly `build` = `tsc -b && vite build`, `lint` = `eslint . --max-warnings 0 && npm run format:check`, `format` = `prettier --write 'src/**/*.{ts,tsx,css}' '*.ts'`, `format:check` = `prettier --check …` (same globs), `test` = `vitest run`; devDependencies `typescript`, `prettier`, `eslint`, `typescript-eslint`, `eslint-config-prettier`, `@eslint/js`, `eslint-plugin-react-hooks` present at an exact version (no range; the version is the repo's), typescript below `pins.TypescriptCap` (typescript-eslint); eslint.config.js; tsconfig.json references `./tsconfig.node.json`; vite.config.ts: `defineConfig` from `vitest/config`, `globals: true`, `setupFiles: ["./src/test/setup.ts"]`, `reportsDirectory: "../coverage/ui"`, with `ui.embed` its path from `ui.dir` (`"../backend/web/dist"`, the `outDir`; vite's own `dist` needs no line) and `emptyOutDir: false` (explicit); `src/test/setup.ts`'s first statement `import "@testing-library/jest-dom/vitest";` | yes |
+| `ui` | `ui.build: npm ci && npm run build` (check empties `ui.embed` itself), `ui.lint: npm run lint`; scripts exactly `build` = `tsc -b && vite build`, `lint` = `eslint . --max-warnings 0 && npm run format:check`, `format` = `prettier --write 'src/**/*.{ts,tsx,css}' '*.ts'`, `format:check` = `prettier --check …` (same globs), `test` = `vitest run`; devDependencies `typescript`, `prettier`, `eslint`, `typescript-eslint`, `eslint-config-prettier`, `@eslint/js`, `eslint-plugin-react-hooks` present at an exact version (no range; the version is the repo's), typescript below `pins.TypescriptCap` (typescript-eslint); eslint.config.js; tsconfig.json references `./tsconfig.node.json`; vite.config.ts: `defineConfig` from `vitest/config`, `globals: true`, `setupFiles: ["./src/test/setup.ts"]`, `reportsDirectory: "../coverage/ui"` (`"coverage/ui"` for `ui.dir: .`), with `ui.embed` its path from `ui.dir` (`"../backend/web/dist"`, the `outDir`; vite's own `dist` needs no line) and `emptyOutDir: false` (explicit); `src/test/setup.ts`'s first statement `import "@testing-library/jest-dom/vitest";` | yes |
 | `golangci` | no `.golangci.yaml`/`.yml` in the repo: ship's config is the family's | per `path` |
 | `gomod` | `go x.y.z` ≥ 1.27.0 in go.dir and every go.modules module; kit's version is Dependabot's to move | yes |
 | `kit` | a repo with images requires kit | yes |

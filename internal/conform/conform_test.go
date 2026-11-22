@@ -748,6 +748,66 @@ func TestRun_whenLibrary_thenAppRulesSkipped(t *testing.T) {
 	}
 }
 
+// A repo of UI alone at the root (no go:, no go.mod): the Go rules skip, no vuln caller or gomod entry is wanted,
+// and vite's coverage lands at the root's coverage/ui. A go.mod anywhere is a Go repo that forgot go:.
+func TestRun_whenUIOnlyAtRoot_thenGoRulesSkipped(t *testing.T) {
+	r := newRepo(t, map[string]string{
+		"package.json":      appPackageJSON,
+		"tsconfig.json":     appTSConfig,
+		"vite.config.ts":    strings.Replace(appViteConfig, `"../coverage/ui"`, `"coverage/ui"`, 1),
+		"src/test/setup.ts": appSetup,
+		"AGENTS.md":         agentsMD,
+	})
+	r.opts.Getenv = fakeEnv(map[string]string{"GITHUB_ACTIONS": "true", "GITHUB_EVENT_PATH": r.event(false)})
+	const ship = "ui:\n  dir: .\n"
+	if err := Init(r.dir, r.config(ship), r.opts, false); err != nil {
+		t.Fatal(err)
+	}
+	out, err := r.run(ship)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	for _, s := range []string{"ok scaffold", "ok workflows", "ok dependabot", "ok ui", "skip golangci: no go",
+		"skip gomod: no go", "skip kit: no images", "skip handrolled: no go", "skip model: no go"} {
+		if !strings.Contains(out, s+"\n") {
+			t.Errorf("no %q in:\n%s", s, out)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(r.dir, scaffold.Vuln)); err == nil {
+		t.Error("init wrote a vuln caller without Go")
+	}
+	r.write("vite.config.ts", appViteConfig)
+	if out, _ := r.run(ship); !strings.Contains(out, `FAIL ui: no reportsDirectory: "coverage/ui"`) {
+		t.Errorf("reportsDirectory outside the repo passed:\n%s", out)
+	}
+	r.write("vite.config.ts", strings.Replace(appViteConfig, `"../coverage/ui"`, `"coverage/ui"`, 1))
+	r.write("lib/testdata/m/go.mod", "module example.com/fixture\n")
+	if out, err := r.run(ship); err != nil {
+		t.Errorf("a fixture go.mod failed: %v\n%s", err, out)
+	}
+	r.write("backend/go.mod", "module example.com/app\n\ngo 1.27.1\n")
+	if out, _ := r.run(ship); !strings.Contains(out, "FAIL gomod: a Go module, but ship.yaml has no go: (go.dir, "+
+		"go.modules) (backend/go.mod)") {
+		t.Errorf("go.mod below a repo of UI alone passed:\n%s", out)
+	}
+	r.remove("backend/go.mod")
+	// What only Go uses fails, never a silent skip: a leftover vuln caller, go test's postgres, images (built from Go).
+	r.write(scaffold.Vuln, publicVulnCaller)
+	out, _ = r.run(ship + "postgres: \"17\"\nimages:\n  - {}\n")
+	for _, s := range []string{
+		"FAIL workflows: no Go: govulncheck has nothing to scan, drop the vuln caller (" + scaffold.Vuln + ")",
+		"FAIL postgres: no Go: postgres is go test's database, drop postgres: (ship.yaml)",
+		"FAIL kit: no Go: images are built from a Go side (go.mod, ship.yaml go:) (ship.yaml)",
+	} {
+		if !strings.Contains(out, s+"\n") {
+			t.Errorf("no %q in:\n%s", s, out)
+		}
+	}
+}
+
+const publicVulnCaller = "name: Vuln\non:\n  workflow_dispatch:\njobs:\n  vuln:\n" +
+	"    uses: trick77/ship/.github/workflows/vuln.yaml@master\n"
+
 // Every rule reads the owned files as rendered: a value wrong in a template fails its rule (the conforming app run
 // proves the templates pass). On a stale owned file report shows scaffold's finding alone.
 func TestRules_whenOwnedFileBroken_thenRuleFailsReportShowsScaffold(t *testing.T) {

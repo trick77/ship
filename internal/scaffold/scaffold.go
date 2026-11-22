@@ -89,6 +89,10 @@ type data struct {
 	Branches, GoDir, GoDirAbs, UIDir, UIDirAbs string
 	DependabotOnly, NodeVersion, Packages      string
 	TypescriptCap                              string
+	// Go: the repo has a Go side (config.HasGo). UIIgnore starts a .gitignore line below ui.dir: "ui/", "/" at the
+	// root (git ignores a ./ pattern).
+	Go       bool
+	UIIgnore string
 	// Embed is ui.embed; Coverage the directory ui.test writes lcov into. Both repo-relative, "" without a UI.
 	Embed, Coverage       string
 	DockerDirs, GoModules []string
@@ -104,9 +108,10 @@ func Files(root string, c *config.Config, f Facts) ([]File, error) {
 		Branches: "[" + c.Base + "]", GoDir: c.Go.Dir, GoDirSet: c.Go.Dir != ".",
 		GoDirAbs: abs(c.Go.Dir), DependabotOnly: DependabotOnly, NodeVersion: f.NodeVersion, DockerDirs: f.DockerDirs,
 		Compose: f.Compose, Ignore: map[string][]config.Ignore{}, TypescriptCap: pins.TypescriptCap,
+		Go: c.HasGo(root),
 	}
 	// An ignore under an ecosystem dependabot.yaml has no entry for would be written nowhere, init and conform green.
-	rendered := map[string]bool{"gomod": true, "github-actions": true, "npm": d.UI, "docker": len(f.DockerDirs) > 0,
+	rendered := map[string]bool{"gomod": d.Go, "github-actions": true, "npm": d.UI, "docker": len(f.DockerDirs) > 0,
 		"docker-compose": f.Compose}
 	for _, ig := range c.Dependabot.Ignore {
 		if !rendered[ig.Ecosystem] {
@@ -124,6 +129,10 @@ func Files(root string, c *config.Config, f Facts) ([]File, error) {
 	if c.UI != nil {
 		d.UIDir, d.UIDirAbs, d.UIDirSet = c.UI.Dir, abs(c.UI.Dir), c.UI.Dir != "ui"
 		d.Embed, d.Coverage = c.UI.Embed, c.UI.LcovDir()
+		d.UIIgnore = c.UI.Dir + "/"
+		if c.UI.Dir == "." {
+			d.UIIgnore = "/"
+		}
 	}
 	var files []File
 	add := func(p, tmpl, manual string, block func(have []byte, block string) ([]byte, string)) error {
@@ -163,8 +172,11 @@ func Files(root string, c *config.Config, f Facts) ([]File, error) {
 	if err := add(Release, "release.yaml", "", nil); err != nil {
 		return nil, err
 	}
-	if err := add(Vuln, "vuln.yaml", visibility, nil); err != nil {
-		return nil, err
+	// govulncheck's scan: nothing to scan without Go.
+	if d.Go {
+		if err := add(Vuln, "vuln.yaml", visibility, nil); err != nil {
+			return nil, err
+		}
 	}
 	if d.Images {
 		pkgs := ""

@@ -38,3 +38,8 @@ deliberately.
 - Conform (`ship conform`, check's first step) is the canon gate: a consumer's owned files are byte-equal to
   internal/scaffold's templates; change the canon there, never in a consumer. Exceptions: ship.yaml `allow` + why.
 - Coverage: comment/blank lines never count (go/scanner, not a regex). Floors and patch share one line model.
+- Repo of UI alone (`config.HasGo` false): `ui:`, no `go:`, no root go.mod in git's listing (an ignored one would
+  make hook and CI disagree); narrow on purpose, a Go repo that forgot `go:` must still fail (any go.mod fails
+  gomod; images, postgres:, a vuln caller fail too). The workflows' go step mirrors it in awk (top-level keys, quoted
+  or not, BOM dropped; Go must exist before ship can run), for ship's own Go (stable, uncached: no go.sum).
+  trick77/diagram (TS lib, `ui.dir: .`) is why.

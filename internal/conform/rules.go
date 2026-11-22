@@ -118,15 +118,17 @@ var viteBase = []viteWant{
 	{`from "vitest/config"`, "defineConfig from vitest/config (types the test key)"},
 	{"globals: true", "test.globals: true (Testing Library's cleanup)"},
 	{`setupFiles: ["./src/test/setup.ts"]`, `test.setupFiles: ["./src/test/setup.ts"]`},
-	{`reportsDirectory: "../coverage/ui"`, `coverage.reportsDirectory: "../coverage/ui" (ship.yaml ui.lcov: coverage/ui/lcov.info)`},
 }
 
-// viteWants is viteBase and, with ui.embed, the build's output: outDir names the embed dir from ui.dir (a literal
+// viteWants is viteBase, the coverage directory from ui.dir (config.UI.ReportsDirectory: "../coverage/ui", a root
+// UI's "coverage/ui") and, with ui.embed, the build's output: outDir names the embed dir from ui.dir (a literal
 // there, or a const the build block takes; vite's own dist needs no line) and emptyOutDir is off explicitly. vite's
 // default is off for an outDir outside the UI dir and on inside it, where it would delete the tracked .gitkeep;
 // check empties the dir itself either way.
 func (e *env) viteWants() []viteWant {
-	ws := slices.Clone(viteBase)
+	rd := e.c.UI.ReportsDirectory()
+	ws := append(slices.Clone(viteBase), viteWant{`reportsDirectory: "` + rd + `"`,
+		`coverage.reportsDirectory: "` + rd + `" (ship.yaml ui.lcov: coverage/ui/lcov.info)`})
 	if rel := e.c.UI.EmbedFromDir(); rel != "" {
 		if rel != "dist" {
 			ws = append(ws, viteWant{`"` + rel + `"`, "build.outDir \"" + rel + "\" (ship.yaml ui.embed, from ui.dir)"})
@@ -257,6 +259,9 @@ func (e *env) testSetup() []finding {
 
 // golangci: one lint config, ship's, everywhere.
 func (e *env) golangci() result {
+	if !e.c.HasGo(e.root) {
+		return result{skip: noGo}
+	}
 	var fs []finding
 	for f := range e.listed() {
 		if b := path.Base(f); b == ".golangci.yaml" || b == ".golangci.yml" {
@@ -359,6 +364,9 @@ func atLeast(v, floor string) bool {
 // gomod: every module's go line is a full toolchain version (go mod tidy's own form) at least pins.GoMin. kit's
 // version is Dependabot's to move like any dependency's: a kit release never fails a consumer's push.
 func (e *env) gomod() result {
+	if !e.c.HasGo(e.root) {
+		return e.strayGoMods()
+	}
 	file := e.goPath("go.mod")
 	m, err := e.goMod()
 	switch {
@@ -382,10 +390,34 @@ func (e *env) gomod() result {
 	return result{findings: fs}
 }
 
+// noGo is the skip of a Go rule in a repo of UI alone (config.HasGo).
+const noGo = "no go"
+
+// strayGoMods: a repo of UI alone has no go.mod the go tool would build (testdata, vendor, _ and . dirs aside): one
+// is a Go repo that forgot go:, never gated.
+func (e *env) strayGoMods() result {
+	var fs []finding
+	for f := range e.listed() {
+		if path.Base(f) == "go.mod" && inModuleAt(".", f, map[string]bool{}) {
+			fs = append(fs, finding{what: "a Go module, but ship.yaml has no go: (go.dir, go.modules)", file: f})
+		}
+	}
+	if len(fs) == 0 {
+		return result{skip: noGo}
+	}
+	slices.SortFunc(fs, func(a, b finding) int { return strings.Compare(a.file, b.file) })
+	return result{findings: fs}
+}
+
 // kit: a repo with images is a service, and a service runs on kit.
 func (e *env) kit() result {
 	if len(e.c.Images) == 0 {
 		return result{skip: "no images"}
+	}
+	// A service is Go: the Containerfile canon (go build, golang builder at go.mod's version) has nothing to hold.
+	if !e.c.HasGo(e.root) {
+		return result{findings: []finding{{what: "no Go: images are built from a Go side (go.mod, ship.yaml go:)",
+			file: config.File}}}
 	}
 	m, err := e.goMod()
 	if err != nil || m == nil {
@@ -413,6 +445,9 @@ var (
 
 // handrolled: version stamping, health routes, shutdown signals and OIDC sign-in come from kit, never a copy.
 func (e *env) handrolled() result {
+	if !e.c.HasGo(e.root) {
+		return result{skip: noGo}
+	}
 	var fs []finding
 	var versionDirs []string
 	listed := e.listed()
@@ -500,6 +535,11 @@ func (e *env) agents() result {
 func (e *env) postgres() result {
 	if e.c.Postgres == "" {
 		return result{skip: "no postgres"}
+	}
+	// check starts it for go test alone: in a repo of UI alone it would never start, unsaid.
+	if !e.c.HasGo(e.root) {
+		return result{findings: []finding{{what: "no Go: postgres is go test's database, drop postgres:",
+			file: config.File}}}
 	}
 	files, svcs, err := e.composeServices()
 	if err != nil {

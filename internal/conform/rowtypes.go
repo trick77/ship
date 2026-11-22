@@ -38,6 +38,9 @@ func dbImport(p string) bool {
 // dest slice, an embedding or another package. Only go.dir's and
 // go.modules' own types count, a function-local one is exempt (it cannot move without leaving its scope).
 func (e *env) model() result {
+	if !e.c.HasGo(e.root) {
+		return result{skip: noGo}
+	}
 	listed := e.listed()
 	var mods []string
 	for _, dir := range append([]string{e.c.Go.Dir}, e.c.Go.Modules...) {

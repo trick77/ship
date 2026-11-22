@@ -174,6 +174,10 @@ func TestSetupGo_whenRun_thenNewestPatchOfGoMod(t *testing.T) {
 					next.With["check-latest"] != "true" || next.With["go-version-file"] != "" {
 					t.Errorf("%s: step go not followed by setup-go with its version and check-latest: %+v", f, next)
 				}
+				// No go.sum to key a cache on without Go: setup-go would warn on every run.
+				if c := next.With["cache"]; c != "false" && c != "${{ steps.go.outputs.version != 'stable' }}" {
+					t.Errorf("%s: setup-go caches a repo of UI alone (no go.sum): cache %q", f, c)
+				}
 			}
 		}
 		if !found {
@@ -185,15 +189,30 @@ func TestSetupGo_whenRun_thenNewestPatchOfGoMod(t *testing.T) {
 			t.Errorf("step go differs:\n%s:\n%s\n%s:\n%s", files[0], scripts[0], files[i], scripts[i])
 		}
 	}
-	for _, tc := range []struct{ mod, want string }{
-		{"module x\n\ngo 1.27.0\n", "1.27"},
-		{"module x\n\ngo 1.27.0 // why\r\n\ntoolchain go1.28.1\n", "1.28"},
-		{"module x\n\ngo 1.28.0\n\ntoolchain go1.27.5\n", "1.28"},
-		{"module x\n\ngo 1.9.0\n\ntoolchain go1.10.1\n", "1.10"},
-		{"module x\n\ngo 1.27.3\n\ntoolchain default\n", "1.27"},
-		{"module x\n\ngo 1.27\n", "1.27"},
-		{"module x\n", ""},
-		{"", ""}, // no go.mod at all
+	// ship is the repo's ship.yaml, "" for none. A repo of UI alone (ui:, no go:, no go.mod) runs ship on the newest
+	// stable Go; anything else without a go.mod fails as it always did. Top-level keys only, quoted or not, a BOM
+	// tolerated.
+	const bom = "\xef\xbb\xbf"
+	for _, tc := range []struct{ ship, mod, want string }{
+		{"", "module x\n\ngo 1.27.0\n", "1.27"},
+		{"", "module x\n\ngo 1.27.0 // why\r\n\ntoolchain go1.28.1\n", "1.28"},
+		{"", "module x\n\ngo 1.28.0\n\ntoolchain go1.27.5\n", "1.28"},
+		{"", "module x\n\ngo 1.9.0\n\ntoolchain go1.10.1\n", "1.10"},
+		{"", "module x\n\ngo 1.27.3\n\ntoolchain default\n", "1.27"},
+		{"", "module x\n\ngo 1.27\n", "1.27"},
+		{"", "module x\n", ""},
+		{"", "", ""}, // no go.mod at all
+		{"ui:\n  dir: .\n", "", "stable"},
+		{"ui: { dir: . }\n", "", "stable"},
+		{"ui: {}\n", "module x\n\ngo 1.27.0\n", "1.27"},
+		{"\"ui\": { dir: . }\n", "", "stable"},
+		{bom + "ui: {}\n", "", "stable"},
+		{"'ui' : {}\n", "", "stable"},
+		{"ui:\n  dir: .\ngo:\n  dir: .\n", "", ""},
+		{"ui: {}\n\"go\": {}\n", "", ""},
+		{bom + "go:\nui: {}\n", "", ""},
+		{"patch: 80\n", "", ""},
+		{"steps:\n  - ui: x\n", "", ""},
 	} {
 		dir := t.TempDir()
 		mod, out := filepath.Join(dir, "go.mod"), filepath.Join(dir, "out")
@@ -202,18 +221,24 @@ func TestSetupGo_whenRun_thenNewestPatchOfGoMod(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+		if tc.ship != "" {
+			if err := os.WriteFile(filepath.Join(dir, "ship.yaml"), []byte(tc.ship), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
 		cmd := exec.Command("bash", "-e", "-c", scripts[0])
+		cmd.Dir = dir
 		cmd.Env = append(os.Environ(), "MOD="+mod, "GITHUB_OUTPUT="+out)
 		msg, err := cmd.CombinedOutput()
 		got, _ := os.ReadFile(out)
 		if tc.want == "" {
 			if err == nil || !strings.HasPrefix(string(msg), "::error::") {
-				t.Errorf("%q: want an ::error:: and a failure, got %v %s", tc.mod, err, msg)
+				t.Errorf("%q %q: want an ::error:: and a failure, got %v %s", tc.ship, tc.mod, err, msg)
 			}
 			continue
 		}
 		if err != nil || string(got) != "version="+tc.want+"\n" {
-			t.Errorf("%q: got %q (%v %s), want version=%s", tc.mod, got, err, msg, tc.want)
+			t.Errorf("%q %q: got %q (%v %s), want version=%s", tc.ship, tc.mod, got, err, msg, tc.want)
 		}
 	}
 }
