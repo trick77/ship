@@ -109,9 +109,33 @@ func Head(root string) (string, error) { return Git(root, "rev-parse", "HEAD") }
 // MergeBase is the fork point of HEAD from ref.
 func MergeBase(root, ref string) (string, error) { return Git(root, "merge-base", ref, "HEAD") }
 
-// SkipMarker reports whether a commit between base and HEAD carries marker in its message.
-func SkipMarker(root, base, marker string) (bool, error) {
-	log, err := Git(root, "log", "--format=%B", base+"..HEAD")
+// EmptyTree is the id of the tree without files, in the repo's own hash (SHA-1 or SHA-256): against it every line
+// of the working tree is new.
+func EmptyTree(root string) (string, error) {
+	return Git(root, "hash-object", "-t", "tree", os.DevNull)
+}
+
+// RemoteBranches lists the branches remote has, asking the remote itself (ls-remote): an error is a remote git
+// cannot reach or read (none of that name, network, auth), an empty list a remote reached that has no branch at all.
+func RemoteBranches(root, remote string) ([]string, error) {
+	out, err := Git(root, "ls-remote", remote)
+	if err != nil {
+		return nil, err
+	}
+	var bs []string
+	for _, line := range strings.Split(out, "\n") {
+		if _, ref, ok := strings.Cut(line, "\t"); ok {
+			if b, ok := strings.CutPrefix(ref, "refs/heads/"); ok {
+				bs = append(bs, b)
+			}
+		}
+	}
+	return bs, nil
+}
+
+// SkipMarker reports whether a commit of rev (a range like base..HEAD) carries marker in its message.
+func SkipMarker(root, rev, marker string) (bool, error) {
+	log, err := Git(root, "log", "--format=%B", rev)
 	if err != nil {
 		return false, err
 	}

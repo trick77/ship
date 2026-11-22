@@ -154,6 +154,15 @@ gate does not run rather than pass over the other side alone. Scope is the repor
 `go.coverpkg` and UI files outside vitest's `coverage.include` are not measured. The default `./...` instruments
 every package for every test binary, the slower run; `./internal/...` or `""` narrows it.
 
+First push: the fetch of origin/<base> fails and origin answers `git ls-remote` with no branch (tags do not count),
+or with others but not <base> while this push creates it (the pre-push hook's refs name `refs/heads/<base>`; by
+hand, HEAD is on <base>): no base yet, check says so and goes on. Subjects, `Release:` lines and the secret scan's
+history take every commit of HEAD; the patch gate every line of the tree (diffed against the empty tree), unless
+any commit of HEAD carries `[skip patch-coverage]`, and a `Release-note:` in any of them satisfies a `Release:
+minor`: an existing history pushed to a new remote brings its old ones along. Any other failed fetch fails check: no
+origin, network, auth, or origin without <base> while the push is another branch's (push <base> first, or fix a
+mistyped `base:`).
+
 Pre-push: deletes and tags pass; anything else must be HEAD with a clean tree (check tests the tree), then
 `ship check`. A tree with no `ship.yaml` in the index (a branch cut before ship) is refused: rebase it. A hook
 ship installed that is not this ship's script is rewritten with it (renamed over, so the running hook is

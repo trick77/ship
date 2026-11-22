@@ -36,10 +36,11 @@ const PRFork = "SHIP_PR_FORK"
 // every touched line would count). The floor still applies.
 const SkipPatch = "[skip patch-coverage]"
 
-// Run runs the whole gate in root and stops at the first failure.
-func Run(root string, c *config.Config) error {
+// Run runs the whole gate in root and stops at the first failure. pushing: the remote refs the push writes (the
+// pre-push hook's, refs/heads/<name>), none by hand.
+func Run(root string, c *config.Config, pushing ...string) error {
 	start := time.Now()
-	r := runner{root: root, c: c}
+	r := runner{root: root, c: c, pushing: pushing}
 	// The postgres container lives from its step to the end of go test, and never past check, failed or not.
 	var pgEnv []string
 	stopPG := func() {}
@@ -52,9 +53,13 @@ func Run(root string, c *config.Config) error {
 		{"conform", func() error { return conform.Run(root, c, conform.Options{}) }},
 		// ship's own git calls keep git's repo variables (a --git-dir/--work-tree repo needs them); only the
 		// tests and steps check runs lose them.
-		{"fetch origin/" + c.Base, func() error { return r.runGit(root, "fetch", "-q", "origin", c.Base) }},
-		{"commit subjects", r.subjects},
-		{"secret scan", r.secrets},
+		{"fetch origin/" + c.Base, func() (err error) {
+			r.noBase, err = r.fetch()
+			return err
+		}},
+		// Closures, not method values: r.subjects would copy r here, before the fetch sets noBase.
+		{"commit subjects", func() error { return r.subjects() }},
+		{"secret scan", func() error { return r.secrets() }},
 		{"ui embed", r.cleanEmbed},
 		{"ui build", r.uiBuild},
 		{"npm audit", r.npmAudit},
@@ -81,7 +86,7 @@ func Run(root string, c *config.Config) error {
 			return r.goTest(pgEnv...)
 		}},
 		{"ui test", r.uiTest},
-		{"coverage", r.gates},
+		{"coverage", func() error { return r.gates() }},
 	}
 	for _, s := range steps {
 		fmt.Printf("== %s ==\n", s.name)
@@ -108,13 +113,92 @@ func Vuln(root string, c *config.Config) error {
 type runner struct {
 	root string
 	c    *config.Config
+	// pushing: the remote refs the pre-push hook's push writes, none by hand.
+	pushing []string
+	// noBase: origin has no <base> yet, set by the fetch step. Every commit of HEAD is then the branch's and every
+	// line of the tree a changed one: all of it is new to origin's base.
+	noBase bool
+}
+
+// fetch fetches origin/<base> and reports whether there is no base yet: the fetch failed, origin answers ls-remote,
+// and it has no branch at all (a new repo's first push) or no <base> while this push creates it. Any other failure
+// stays the fetch's: no origin, network, auth, or a <base> origin lacks while the push is another branch's (a
+// typo in base:, or a branch pushed before the base). git's stderr waits for the verdict, so a first push does not
+// print git's fatal line.
+func (r runner) fetch() (noBase bool, err error) {
+	cmd := exec.Command("git", "fetch", "-q", "origin", r.c.Base) //nolint:gosec // git with ship's own arguments
+	cmd.Dir = r.root
+	var stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = os.Stdout, &stderr
+	if err = cmd.Run(); err != nil {
+		branches, lerr := gitx.RemoteBranches(r.root, "origin")
+		why := ""
+		switch {
+		case lerr != nil || slices.Contains(branches, r.c.Base):
+		case len(branches) == 0:
+			why = "origin has no branch (a new repo's first push)"
+		case r.createsBase():
+			why = "origin has no " + r.c.Base + ", this push creates it"
+		default:
+			err = fmt.Errorf("%w: origin has branches but no %s: push %s first (the gate passes the push that "+
+				"creates it), or fix base: in ship.yaml", err, r.c.Base, r.c.Base)
+		}
+		if why != "" {
+			fmt.Printf("ship: no base yet: %s; every commit of HEAD counts as the branch's, every line of the tree "+
+				"as changed, until origin/%s exists\n", why, r.c.Base)
+			return true, nil
+		}
+	}
+	_, _ = os.Stderr.Write(stderr.Bytes())
+	return false, err
+}
+
+// createsBase reports whether the gated push writes origin's <base>: one of the hook's refs is refs/heads/<base>,
+// or by hand, HEAD is on <base>. A typo in base: names a branch neither is, so it still fails.
+func (r runner) createsBase() bool {
+	if len(r.pushing) > 0 {
+		return slices.Contains(r.pushing, "refs/heads/"+r.c.Base)
+	}
+	b, err := gitx.Git(r.root, "symbolic-ref", "-q", "--short", "HEAD")
+	return err == nil && b == r.c.Base
+}
+
+// commits is the range of the commits the branch adds to origin: origin/<base>..HEAD, every commit of HEAD with no
+// base yet.
+func (r runner) commits() string {
+	if r.noBase {
+		return "HEAD"
+	}
+	return "origin/" + r.c.Base + "..HEAD"
+}
+
+// reword is the command that rewrites the branch's commits.
+func (r runner) reword() string {
+	if r.noBase {
+		return "git rebase -i --root"
+	}
+	return "git rebase -i origin/" + r.c.Base
+}
+
+// fork is what the branch's changes are measured from: the diff base of its changed lines and the range of its
+// commits, both from its merge-base with origin/<base>; with no base yet the empty tree and every commit of HEAD.
+func (r runner) fork() (diffBase, commits string, err error) {
+	if r.noBase {
+		empty, err := gitx.EmptyTree(r.root)
+		return empty, "HEAD", err
+	}
+	base, err := gitx.MergeBase(r.root, "origin/"+r.c.Base)
+	if err != nil {
+		return "", "", err
+	}
+	return base, base + "..HEAD", nil
 }
 
 // subjects checks that every commit the branch adds to origin/<base> has a Go-style subject (`area: what`). Merges
 // and bots (Dependabot) are skipped: neither is written by hand. The branch's `Release:` lines are checked here
 // too: once merged, a typo there would fail every auto release until one is cut by hand.
 func (r runner) subjects() error {
-	rng := "origin/" + r.c.Base + "..HEAD"
+	rng := r.commits()
 	cs, err := gitx.Commits(r.root, rng)
 	if err != nil {
 		return err
@@ -124,9 +208,12 @@ func (r runner) subjects() error {
 		return err
 	}
 	if _, _, err := subject.Release(messages); err != nil {
-		return fmt.Errorf("release lines (reword: git rebase -i origin/%s): %w", r.c.Base, err)
+		return fmt.Errorf("release lines (reword: %s): %w", r.reword(), err)
 	}
 	what := "commits"
+	if r.noBase {
+		what = "commits, all of HEAD (no base yet)"
+	}
 	if t := os.Getenv(PRTitle); t != "" {
 		if os.Getenv(PRFork) == "true" {
 			cs, what = nil, "fork PR, title only"
@@ -145,8 +232,8 @@ func (r runner) subjects() error {
 		}
 	}
 	if len(bad) > 0 {
-		return fmt.Errorf("%d of %d not Go style `area: what` (reword: git rebase -i origin/%s):\n%s",
-			len(bad), n, r.c.Base, strings.Join(bad, "\n"))
+		return fmt.Errorf("%d of %d not Go style `area: what` (reword: %s):\n%s",
+			len(bad), n, r.reword(), strings.Join(bad, "\n"))
 	}
 	fmt.Printf("ship: subjects ok: %d %s\n", n, what)
 	return nil
@@ -168,14 +255,6 @@ func (r runner) run(dir string, env []string, name string, args ...string) error
 	cmd.Dir = dir
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	cmd.Env = gitx.CleanEnv(env...)
-	return cmd.Run()
-}
-
-// runGit runs ship's own git call, output streamed, with git's repo variables kept.
-func (r runner) runGit(dir string, args ...string) error {
-	cmd := exec.Command("git", args...) //nolint:gosec // git with ship's own arguments
-	cmd.Dir = dir
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	return cmd.Run()
 }
 
@@ -659,12 +738,14 @@ func (r runner) goLines(dir string) (cover.Lines, error) {
 }
 
 func (r runner) patch(all cover.Lines) error {
-	ref := "origin/" + r.c.Base
-	base, err := gitx.MergeBase(r.root, ref)
+	base, commits, err := r.fork()
 	if err != nil {
 		return err
 	}
-	if skip, err := gitx.SkipMarker(r.root, base, SkipPatch); err != nil {
+	if r.noBase {
+		fmt.Printf("ship: patch coverage over every line of the tree: no origin/%s yet, all of it is new\n", r.c.Base)
+	}
+	if skip, err := gitx.SkipMarker(r.root, commits, SkipPatch); err != nil {
 		return err
 	} else if skip {
 		fmt.Printf("ship: patch coverage SKIPPED: a commit on this branch carries %s (floors still apply)\n", SkipPatch)

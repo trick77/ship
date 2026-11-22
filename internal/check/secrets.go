@@ -44,28 +44,39 @@ func (r runner) secrets() error {
 		}
 		hits = append(hits, scanSecrets(f, b)...)
 	}
-	base, err := gitx.MergeBase(r.root, "origin/"+r.c.Base)
+	_, rng, err := r.fork()
 	if err != nil {
 		return err
 	}
-	h, err := r.historySecrets(base + "..HEAD")
+	if r.noBase {
+		fmt.Printf("ship: secret scan: the tree and every commit of HEAD, no origin/%s yet\n", r.c.Base)
+	}
+	h, err := r.historySecrets(rng)
 	if err != nil {
 		return err
 	}
 	hits = append(hits, h...)
 	if len(hits) > 0 {
-		return fmt.Errorf("%d secret-shaped hit(s); rewrite them out (history: git rebase -i origin/%s), or mark a "+
-			"fixture line %s:\n  %s", len(hits), r.c.Base, AllowSecret, strings.Join(sortedUnique(hits), "\n  "))
+		return fmt.Errorf("%d secret-shaped hit(s); rewrite them out (history: %s), or mark a "+
+			"fixture line %s:\n  %s", len(hits), r.reword(), AllowSecret, strings.Join(sortedUnique(hits), "\n  "))
 	}
 	return nil
 }
 
 // historySecrets scans what the commits of rng add: files named .env, added lines, commit messages. Merges count
-// with their own changes (first parent); renames show as adds, so a .env renamed into place is caught.
+// with their own changes (first parent); renames show as adds, so a .env renamed into place is caught. With no base
+// the root commit is in rng: --root shows what it adds whatever log.showRoot says.
 func (r runner) historySecrets(rng string) ([]string, error) {
 	var hits []string
-	added, err := gitx.Git(r.root, "-c", "core.quotePath=false", "log", "--format=", "--name-only",
-		"--diff-filter=A", "--no-renames", "--diff-merges=first-parent", rng)
+	log := func(args ...string) []string {
+		args = append([]string{"-c", "core.quotePath=false", "log"}, args...)
+		if r.noBase {
+			args = append(args, "--root")
+		}
+		return append(args, rng)
+	}
+	added, err := gitx.Git(r.root, log("--format=", "--name-only", "--diff-filter=A", "--no-renames",
+		"--diff-merges=first-parent")...)
 	if err != nil {
 		return nil, err
 	}
@@ -81,8 +92,8 @@ func (r runner) historySecrets(rng string) ([]string, error) {
 	for _, m := range msgs {
 		hits = append(hits, scanSecrets("commit message", []byte(strings.TrimLeft(m, "\n")))...)
 	}
-	patch, err := gitx.Git(r.root, "-c", "core.quotePath=false", "log", "-p", "-U0", "--no-color", "--no-ext-diff",
-		"--no-renames", "--diff-merges=first-parent", "--src-prefix=a/", "--dst-prefix=b/", "--format=commit %h", rng)
+	patch, err := gitx.Git(r.root, log("-p", "-U0", "--no-color", "--no-ext-diff", "--no-renames",
+		"--diff-merges=first-parent", "--src-prefix=a/", "--dst-prefix=b/", "--format=commit %h")...)
 	if err != nil {
 		return nil, err
 	}

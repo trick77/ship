@@ -78,6 +78,37 @@ func TestChanged_whenCommittedStagedUnstagedUntracked_thenAddedLines(t *testing.
 	}
 }
 
+// Against the empty tree, every line of the tree is changed: a first push's patch base.
+func TestChanged_whenEmptyTree_thenEveryLine(t *testing.T) {
+	dir := repo(t, map[string]string{"a.go": "1\n2\n"})
+	write(t, dir, map[string]string{"new.go": "a\n"})
+	empty, err := EmptyTree(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Changed(dir, empty)
+	if err != nil || !slices.Equal(got["a.go"], []int{1, 2}) || !slices.Equal(got["new.go"], []int{1}) {
+		t.Fatalf("changed %v err %v", got, err)
+	}
+}
+
+func TestRemoteBranches(t *testing.T) {
+	dir := repo(t, map[string]string{"a": "x\n"})
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	mustGit(t, dir, "init", "-q", "--bare", remote)
+	mustGit(t, dir, "remote", "add", "origin", remote)
+	if bs, err := RemoteBranches(dir, "origin"); err != nil || bs != nil {
+		t.Fatalf("empty remote: %v err %v", bs, err)
+	}
+	mustGit(t, dir, "push", "-q", "origin", "master:main", "master:refs/tags/v1")
+	if bs, err := RemoteBranches(dir, "origin"); err != nil || !slices.Equal(bs, []string{"main"}) {
+		t.Fatalf("branches %v err %v", bs, err)
+	}
+	if _, err := RemoteBranches(dir, "nope"); err == nil {
+		t.Fatal("missing remote listed")
+	}
+}
+
 func TestRepoQueries(t *testing.T) {
 	dir := repo(t, map[string]string{"a.go": "package a\n", "b.txt": "x\n"})
 	root, err := Root(filepath.Join(dir))
@@ -106,7 +137,7 @@ func TestRepoQueries(t *testing.T) {
 	}
 	head, _ := Head(dir)
 	mustGit(t, dir, "commit", "-q", "--allow-empty", "-m", "x [skip patch-coverage]")
-	if skip, err := SkipMarker(dir, head, "[skip patch-coverage]"); err != nil || !skip {
+	if skip, err := SkipMarker(dir, head+"..HEAD", "[skip patch-coverage]"); err != nil || !skip {
 		t.Fatalf("skip %v err %v", skip, err)
 	}
 	if mb, err := MergeBase(dir, head); err != nil || mb != head {
