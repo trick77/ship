@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/trick77/ship/internal/config"
+	"github.com/trick77/ship/internal/gitx"
 )
 
 func parse(t *testing.T, s string) *config.Config {
@@ -270,8 +271,57 @@ func TestFiles_whenComposePins_thenComposeEntry(t *testing.T) {
 	}
 }
 
+// A repo of UI alone at the root (no go:, no go.mod): no Go caller or gomod entry, and the .gitignore block anchored
+// at the root (git ignores a ./ pattern: it matches nothing).
+func TestFiles_whenUIOnlyAtRoot_thenNoGoAndRootAnchored(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := gitx.Git(dir, "init", "-q"); err != nil {
+		t.Fatal(err)
+	}
+	c := parse(t, "ui:\n  dir: .\n")
+	files, err := Files(dir, c, Facts{Visibility: "public", NodeVersion: "26"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{CI, Release, Dependabot, ESLint, TSConfigNode, NPMRC, GitIgnore, Makefile}
+	if got := paths(files); strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("files %v, want %v", got, want)
+	}
+	if dep := string(byPath(t, files, Dependabot).Want); strings.Contains(dep, "gomod") ||
+		!strings.HasPrefix(dep, "version: 2\nupdates:\n  - package-ecosystem: npm\n    directory: /\n") {
+		t.Errorf("dependabot:\n%s", dep)
+	}
+	gi := "# ship:begin (owned by ship init; the repo's own lines go above the begin marker)\n" +
+		"# What the gate and the UI build write into the tree.\n" +
+		"coverage/ui/\n/node_modules/\n/*.tsbuildinfo\n/dist/\n# ship:end\n"
+	if got := string(byPath(t, files, GitIgnore).Want); got != gi {
+		t.Errorf(".gitignore:\n%s", got)
+	}
+	if ci := string(byPath(t, files, CI).Want); !strings.Contains(ci, "node-version: \"26\"\n      ui-dir: .\n") {
+		t.Errorf("ci.yaml:\n%s", ci)
+	}
+	// A go.mod at the root is Go again, go: or not.
+	write(t, dir, "go.mod", "module x\n")
+	if files, err = Files(dir, c, Facts{Visibility: "public"}); err != nil {
+		t.Fatal(err)
+	}
+	byPath(t, files, Vuln)
+	if dep := string(byPath(t, files, Dependabot).Want); !strings.Contains(dep, "gomod") {
+		t.Errorf("dependabot with go.mod:\n%s", dep)
+	}
+	// A gomod ignore without Go would be written nowhere.
+	if err := os.Remove(filepath.Join(dir, "go.mod")); err != nil {
+		t.Fatal(err)
+	}
+	c = parse(t, "ui:\n  dir: .\ndependabot:\n  ignore:\n    - { ecosystem: gomod, dependency: x, why: y }\n")
+	if _, err := Files(dir, c, Facts{Visibility: "public"}); err == nil {
+		t.Error("gomod ignore without Go accepted")
+	}
+}
+
 func TestFiles_whenUIElsewhere_thenInputsAndOwnedFilesThere(t *testing.T) {
 	dir := t.TempDir()
+	write(t, dir, "go.mod", "module x\n") // a Go repo: without one it is a repo of UI alone
 	c := parse(t, "ui:\n  dir: web\n")
 	files, err := Files(dir, c, Facts{Visibility: "public", NodeVersion: "27"})
 	if err != nil {

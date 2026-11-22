@@ -1,6 +1,7 @@
 package check
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -426,5 +427,83 @@ func TestGofmt_whenNestedModuleFileUnformatted_thenFail(t *testing.T) {
 	writeFile(t, dir, "sub/s.go", "package sub\nfunc  S() {}\n")
 	if err := (runner{root: dir, c: c}).gofmt(); err == nil || !strings.Contains(err.Error(), "sub/s.go") {
 		t.Fatalf("nested module's file not gofmt'd: %v", err)
+	}
+}
+
+// uiOnlyFixture is a repo of UI alone at the root (ui.dir ., no go: and no go.mod): origin/master at the first
+// commit, a branch commit adding src/b.ts, and the lcov report where ui.test writes it.
+func uiOnlyFixture(t *testing.T, lcov string) (string, *config.Config) {
+	t.Helper()
+	dir := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		if _, err := gitx.Git(dir, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git("init", "-q", "-b", "master")
+	git("config", "user.email", "t@example.com")
+	git("config", "user.name", "t")
+	git("config", "commit.gpgsign", "false")
+	writeFile(t, dir, ".gitignore", "/coverage/\n")
+	writeFile(t, dir, "src/a.ts", "export const a = 1\n")
+	git("add", "-A")
+	git("commit", "-q", "-m", "base")
+	git("update-ref", "refs/remotes/origin/master", "HEAD")
+	writeFile(t, dir, "src/b.ts", "export const b = 2\n")
+	git("add", "-A")
+	git("commit", "-q", "-m", "add b")
+	writeFile(t, dir, "coverage/ui/lcov.info", lcov)
+	c, err := config.Parse([]byte("ui:\n  dir: .\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir, c
+}
+
+// A repo of UI alone: the UI floor and the patch gate over its lines, no Go side looked for.
+func TestGates_whenUIOnly_thenUIFloorAndPatchAlone(t *testing.T) {
+	dir, c := uiOnlyFixture(t, "SF:src/a.ts\nDA:1,1\nend_of_record\nSF:src/b.ts\nDA:1,1\nend_of_record\n")
+	if err := (runner{root: dir, c: c}).gates(); err != nil {
+		t.Fatal(err)
+	}
+	dir, c = uiOnlyFixture(t, "SF:src/a.ts\nDA:1,1\nend_of_record\nSF:src/b.ts\nDA:1,0\nend_of_record\n")
+	err := (runner{root: dir, c: c}).gates()
+	if err == nil || !strings.Contains(err.Error(), "ui coverage 50.0%") ||
+		!strings.Contains(err.Error(), "src/b.ts: missing lines") {
+		t.Fatalf("untested UI line passed: %v", err)
+	}
+	if strings.Contains(err.Error(), "go coverage") || strings.Contains(err.Error(), "module") {
+		t.Fatalf("a Go side was looked for: %v", err)
+	}
+}
+
+// A repo of UI alone runs no Go step, lint and vuln included; a go.mod anywhere still fails the go modules step: a
+// Go repo that forgot go: never passes as one of UI alone.
+func TestGoSteps_whenUIOnly_thenStandDown(t *testing.T) {
+	dir, c := uiOnlyFixture(t, "")
+	r := runner{root: dir, c: c}
+	called := false
+	step := r.goOnly(func() error { called = true; return errors.New("ran") })
+	if err := step(); err != nil || called {
+		t.Fatalf("go step in a repo of UI alone: %v, ran %v", err, called)
+	}
+	c.Lint = "v0.0.0-ship-test"
+	if err := Lint(dir, c); err != nil {
+		t.Fatalf("lint: %v", err)
+	}
+	if err := Vuln(dir, c); err != nil {
+		t.Fatalf("vuln: %v", err)
+	}
+	if err := r.goModules(); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, "backend/go.mod", "module example.com/m\n\ngo 1.24\n")
+	if err := r.goModules(); err == nil || err.Error() != "go.mod in backend not gated: ship.yaml has no go: (go.dir, go.modules)" {
+		t.Fatalf("go.mod below a repo of UI alone passed: %v", err)
+	}
+	writeFile(t, dir, "go.mod", "module example.com/m\n\ngo 1.24\n")
+	if err := step(); err == nil || !called {
+		t.Fatalf("go step with a root go.mod: %v, ran %v", err, called)
 	}
 }

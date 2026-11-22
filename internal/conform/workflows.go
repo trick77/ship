@@ -60,10 +60,16 @@ func (w *workflow) caller(name string) (job, bool) {
 }
 
 // workflows: ship's callers @master, release's grants and auto; no image cleanup but ship's caller, in any workflow.
+// The vuln caller (govulncheck) only with Go: without, a leftover one is a finding (init writes none, removes none).
 func (e *env) workflows() result {
 	var fs []finding
-	callers := []struct{ file, name string }{{scaffold.CI, "check.yaml"}, {scaffold.Release, "release.yaml"},
-		{scaffold.Vuln, "vuln.yaml"}}
+	callers := []struct{ file, name string }{{scaffold.CI, "check.yaml"}, {scaffold.Release, "release.yaml"}}
+	switch {
+	case e.c.HasGo(e.root):
+		callers = append(callers, struct{ file, name string }{scaffold.Vuln, "vuln.yaml"})
+	case e.exists(scaffold.Vuln):
+		fs = append(fs, finding{what: "no Go: govulncheck has nothing to scan, drop the vuln caller", file: scaffold.Vuln})
+	}
 	if len(e.c.Images) > 0 {
 		callers = append(callers, struct{ file, name string }{scaffold.Cleanup, "cleanup-images.yaml"})
 	}
@@ -292,7 +298,10 @@ func (e *env) dependabot() result {
 				u.Directory, u.CommitMessage.Prefix), file: scaffold.Dependabot})
 		}
 	}
-	want := []struct{ eco, dir string }{{"gomod", abs(e.c.Go.Dir)}, {"github-actions", "/"}}
+	want := []struct{ eco, dir string }{{"github-actions", "/"}}
+	if e.c.HasGo(e.root) {
+		want = append([]struct{ eco, dir string }{{"gomod", abs(e.c.Go.Dir)}}, want...)
+	}
 	for _, m := range e.c.Go.Modules {
 		want = append(want, struct{ eco, dir string }{"gomod", abs(m)})
 	}

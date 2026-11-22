@@ -64,27 +64,28 @@ func Run(root string, c *config.Config, pushing ...string) error {
 		{"ui build", r.uiBuild},
 		{"npm audit", r.npmAudit},
 		{"go modules", r.goModules},
-		{"gofmt", r.gofmt},
-		{"go mod verify", r.modVerify},
-		{"go mod tidy", r.modTidy},
-		{"go build", func() error {
+		{"gofmt", r.goOnly(r.gofmt)},
+		{"go mod verify", r.goOnly(r.modVerify)},
+		{"go mod tidy", r.goOnly(r.modTidy)},
+		{"go build", r.goOnly(func() error {
 			return r.eachModule(func(dir string) error { return r.goIn(dir, "build", "./...") })
-		}},
+		})},
 		// After the build, so a compile error reads as go's, not govulncheck's; before lint and tests, so a
 		// known-vulnerable dependency fails in seconds, not after the test minutes.
-		{"govulncheck " + pins.Govulncheck, r.vuln},
-		{"golangci-lint " + c.Lint, r.lint},
+		{"govulncheck " + pins.Govulncheck, r.goOnly(r.vuln)},
+		{"golangci-lint " + c.Lint, r.goOnly(r.lint)},
 		{"ui lint", r.uiLint},
 		{"shellcheck", r.shellcheck},
 		{"repo steps", r.extra},
-		{"postgres", func() (err error) {
+		// Postgres is go test's database: none without Go.
+		{"postgres", r.goOnly(func() (err error) {
 			pgEnv, stopPG, err = r.postgres()
 			return err
-		}},
-		{"go test", func() error {
+		})},
+		{"go test", r.goOnly(func() error {
 			defer stopPG()
 			return r.goTest(pgEnv...)
-		}},
+		})},
 		{"ui test", r.uiTest},
 		{"coverage", func() error { return r.gates() }},
 	}
@@ -101,13 +102,15 @@ func Run(root string, c *config.Config, pushing ...string) error {
 // Lint runs golangci-lint alone, at the version check runs: a repo's quick lint while editing, with no version of
 // its own to keep in step.
 func Lint(root string, c *config.Config) error {
-	return runner{root: root, c: c}.lint()
+	r := runner{root: root, c: c}
+	return r.goOnly(r.lint)()
 }
 
 // Vuln runs govulncheck alone, at the version check runs, on every module: the Vuln workflow's weekly scan, a
 // vulnerability published after the last push failing without a push.
 func Vuln(root string, c *config.Config) error {
-	return runner{root: root, c: c}.vuln()
+	r := runner{root: root, c: c}
+	return r.goOnly(r.vuln)()
 }
 
 type runner struct {
@@ -192,6 +195,17 @@ func (r runner) fork() (diffBase, commits string, err error) {
 		return "", "", err
 	}
 	return base, base + "..HEAD", nil
+}
+
+// goOnly is fn in a repo with a Go side; in one of UI alone (config.HasGo) it prints (no go) and passes.
+func (r runner) goOnly(fn func() error) func() error {
+	return func() error {
+		if !r.c.HasGo(r.root) {
+			fmt.Println("(no go)")
+			return nil
+		}
+		return fn()
+	}
 }
 
 // subjects checks that every commit the branch adds to origin/<base> has a Go-style subject (`area: what`). Merges
@@ -309,9 +323,19 @@ func (r runner) goModules() error {
 		}
 		unlisted = append(unlisted, d)
 	}
+	goless := !r.c.HasGo(r.root)
 	if len(unlisted) > 0 {
 		slices.Sort(unlisted)
+		// Without go: every go.mod is one: a Go repo that forgot go: never passes as one of UI alone.
+		if goless {
+			return fmt.Errorf("go.mod in %s not gated: ship.yaml has no go: (go.dir, go.modules)",
+				strings.Join(unlisted, ", "))
+		}
 		return fmt.Errorf("nested Go module %s not gated: list it in go.modules", strings.Join(unlisted, ", "))
+	}
+	if goless {
+		fmt.Println("(no go)")
+		return nil
 	}
 	if len(r.c.Go.Modules) == 0 {
 		fmt.Println("(none nested)")
@@ -674,8 +698,12 @@ func (r runner) gates() error {
 		all.Merge(l)
 	}
 	// A floor per module, not one over all: each is released and imported on its own, and the root's lines must not
-	// carry a thin nested library.
-	for _, m := range r.modules() {
+	// carry a thin nested library. A repo of UI alone has none.
+	var mods []string
+	if r.c.HasGo(r.root) {
+		mods = r.modules()
+	}
+	for _, m := range mods {
 		name, hint := "go", "check go.dir and the module path in go.mod; a replace'd module in go.coverpkg lives "+
 			"outside go.dir: narrow go.coverpkg"
 		if r.nested(m) {

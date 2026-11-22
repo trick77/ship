@@ -10,6 +10,7 @@ import (
 
 	"github.com/trick77/ship/internal/config"
 	"github.com/trick77/ship/internal/gitx"
+	"github.com/trick77/ship/internal/scaffold"
 )
 
 // TestUI_whenRealReactProject_thenGatesWork runs the UI side of check against testdata/ui, a real React +
@@ -87,6 +88,75 @@ func TestUI_whenRealReactProject_thenGatesWork(t *testing.T) {
 	}
 	if err := r.uiLint(); err == nil {
 		t.Fatal("type error linted clean")
+	}
+}
+
+// TestUI_whenRootProjectNoGo_thenGatesWork runs the UI side against testdata/ui at the repo root, no Go anywhere
+// (ui.dir ., the shape of a TypeScript library npm installs from git), twice: the second run sees the first's
+// node_modules, dist and coverage, which ship init's .gitignore block keeps out of git's view.
+func TestUI_whenRootProjectNoGo_thenGatesWork(t *testing.T) {
+	if testing.Short() {
+		t.Skip("-short: no npm run")
+	}
+	if _, err := exec.LookPath("npm"); err != nil {
+		t.Skip("npm not installed")
+	}
+	dir := t.TempDir()
+	git := func(args ...string) string {
+		t.Helper()
+		out, err := gitx.Git(dir, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	copyTree(t, filepath.Join("..", "..", "testdata", "ui"), dir)
+	vite := filepath.Join(dir, "vite.config.ts")
+	b, err := os.ReadFile(vite)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, "vite.config.ts", strings.Replace(string(b), `"../coverage/ui"`, `"coverage/ui"`, 1))
+	c, err := config.Parse([]byte("ui:\n  dir: .\n  lint: npm run lint\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := scaffold.Files(dir, c, scaffold.Facts{Visibility: "public"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		if f.Path == scaffold.GitIgnore {
+			writeFile(t, dir, f.Path, string(f.Want))
+		}
+	}
+	git("init", "-q", "-b", "master")
+	git("config", "user.email", "t@example.com")
+	git("config", "user.name", "t")
+	git("config", "commit.gpgsign", "false")
+	git("add", "-A")
+	git("commit", "-q", "-m", "base")
+	git("update-ref", "refs/remotes/origin/master", "HEAD")
+	if c.HasGo(dir) {
+		t.Fatal("a repo of UI alone has Go")
+	}
+	r := runner{root: dir, c: c}
+	for run := 1; run <= 2; run++ {
+		for _, s := range []struct {
+			name string
+			fn   func() error
+		}{{"build", r.uiBuild}, {"lint", r.uiLint}, {"go modules", r.goModules}, {"test", r.uiTest},
+			{"gates", r.gates}} {
+			if err := s.fn(); err != nil {
+				t.Fatalf("run %d, %s: %v", run, s.name, err)
+			}
+		}
+		if st := git("status", "--porcelain", "--untracked-files=all"); st != "" {
+			t.Fatalf("run %d left files git sees:\n%s", run, st)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "coverage", "ui", "lcov.info")); err != nil {
+		t.Fatalf("lcov not at the root's coverage/ui: %v", err)
 	}
 }
 
