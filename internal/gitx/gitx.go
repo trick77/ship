@@ -209,6 +209,27 @@ func Changed(root, base string) (map[string][]int, error) {
 	return out, nil
 }
 
+// ChangedFiles lists the paths changed against base, sorted, once each: HEAD's commits (what a push sends, even
+// when the working tree undoes them), committed, staged and unstaged edits, deletions, and untracked, non-ignored
+// files. --no-renames: a move names both paths, so a file moved into a harmless place still shows the path it left.
+func ChangedFiles(root, base string) ([]string, error) {
+	diff := []string{"diff", "--name-only", "--no-renames", "--no-relative", "-z", base}
+	var all []string
+	for _, args := range [][]string{
+		append(slices.Clone(diff), "HEAD", "--"),
+		append(slices.Clone(diff), "--"),
+		{"ls-files", "-z", "-o", "--exclude-standard"},
+	} {
+		files, err := GitZ(root, args...)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, files...)
+	}
+	slices.Sort(all)
+	return slices.Compact(all), nil
+}
+
 // parseDiff reads a -U0 unified diff: "+++ b/<path>" names the file, "@@ -a,b +c,d @@" opens a hunk. Changed lines
 // are the hunk's "+" lines, numbered from c; context lines (diff.interHunkContext can merge hunks across them) are
 // counted but never changed. Hunk bodies are walked by their line counts, never by their text: a removed "-- x"
