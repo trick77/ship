@@ -124,7 +124,12 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		return check.Run(root, c)
+		// The refs pushed tell check whether this push creates the base on an origin that has none yet.
+		var pushing []string
+		for _, r := range gated {
+			pushing = append(pushing, r.Remote)
+		}
+		return check.Run(root, c, pushing...)
 	case "release":
 		o, err := releaseOptions(args[1:])
 		if err != nil {
