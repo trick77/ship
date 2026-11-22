@@ -330,6 +330,50 @@ func TestHeartbeatSkipsBusyStream(t *testing.T) {
 	}
 }
 
+// The named keepalive is an event EventSource dispatches: a name and an empty data field, never a comment.
+func TestHeartbeatEvent(t *testing.T) {
+	rec := syncRecorder{httptest.NewRecorder(), &sync.Mutex{}}
+	s, _ := Open(rec)
+	if err := s.HeartbeatEvent(5*time.Millisecond, "ping"); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.HeartbeatEvent(5*time.Millisecond, "other") // a second call starts nothing
+	deadline := time.Now().Add(2 * time.Second)
+	for !strings.Contains(rec.body(), "event: ping\ndata:\n\n") {
+		if time.Now().After(deadline) {
+			t.Fatal("no ping within 2s")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	s.Close()
+	if b := rec.body(); strings.Contains(b, "keepalive") || strings.Contains(b, "other") {
+		t.Errorf("stream %q", b)
+	}
+}
+
+// An empty name would reach the page as a "message" of empty data; a newline would end the field early.
+func TestHeartbeatEventBadName(t *testing.T) {
+	rec := syncRecorder{httptest.NewRecorder(), &sync.Mutex{}}
+	s, _ := Open(rec)
+	for _, name := range []string{"", "a\nb", "a\rb"} {
+		if err := s.HeartbeatEvent(time.Millisecond, name); !errors.Is(err, ErrEventName) {
+			t.Errorf("name %q: err = %v, want ErrEventName", name, err)
+		}
+	}
+	s.Heartbeat(time.Millisecond) // the refused names held no slot: this one runs
+	deadline := time.Now().Add(2 * time.Second)
+	for !strings.Contains(rec.body(), ": keepalive") {
+		if time.Now().After(deadline) {
+			t.Fatal("no keepalive within 2s")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	s.Close()
+	if strings.Contains(rec.body(), "event:") {
+		t.Errorf("a name with a newline was sent: %q", rec.body())
+	}
+}
+
 func TestHeartbeatNonPositive(_ *testing.T) {
 	s, _ := Open(httptest.NewRecorder())
 	s.Heartbeat(0)

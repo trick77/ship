@@ -26,8 +26,9 @@ var ErrNoFlush = errors.New("sse: response writer cannot flush")
 // ErrClosed is a write to a stream after Close, or after a write failed.
 var ErrClosed = errors.New("sse: stream closed")
 
-// ErrEventName is Send's refusal of an event name with a newline, which would end the event's field early.
-var ErrEventName = errors.New("sse: event name with a newline")
+// ErrEventName is Send's refusal of an event name with a newline, which would end the event's field early, and
+// HeartbeatEvent's of that or an empty name.
+var ErrEventName = errors.New("sse: bad event name")
 
 // WriteTimeout bounds each write and its flush. httpx.NewServer sets no WriteTimeout (it would cut every stream),
 // so without this a client that stops reading but keeps the connection open blocks a write, and the handler, for
@@ -184,6 +185,29 @@ func (s *Writer) Done() <-chan struct{} { return s.done }
 // left. A stream that sends more often than interval never gets one. A second call, a non-positive interval or a
 // closed stream starts nothing.
 func (s *Writer) Heartbeat(interval time.Duration) {
+	s.heartbeat(interval, ": keepalive\n\n")
+}
+
+// HeartbeatEvent is Heartbeat with a named event of empty data ("event: <name>" and an empty data field) in place
+// of the comment. EventSource never shows a comment to the page, so a client that watches its stream for silence
+// (a proxy that buffers the response passes the 200 and then nothing) needs an event it can listen to. The empty
+// data field still dispatches: the spec's data buffer is then a newline, not empty.
+//
+// Like Heartbeat it fires only after interval of silence: a busy stream never sends one, so the client's silence
+// timer resets on every event, not on this name alone. A fetch reader that hands every event to one callback
+// skips this name before it parses the data.
+//
+// An empty name (the client's "message", which a page parses as data) or one with a newline is refused with
+// ErrEventName, nothing started; a second call, a non-positive interval or a closed stream starts nothing.
+func (s *Writer) HeartbeatEvent(interval time.Duration, name string) error {
+	if name == "" || strings.ContainsAny(name, "\r\n") {
+		return ErrEventName
+	}
+	s.heartbeat(interval, "event: "+name+"\ndata:\n\n")
+	return nil
+}
+
+func (s *Writer) heartbeat(interval time.Duration, frame string) {
 	if interval <= 0 {
 		return
 	}
@@ -193,12 +217,12 @@ func (s *Writer) Heartbeat(interval time.Duration) {
 		return
 	}
 	s.stop, s.stopped = make(chan struct{}), make(chan struct{})
-	go s.beat(interval, s.stop, s.stopped)
+	go s.beat(interval, frame, s.stop, s.stopped)
 }
 
 // beat sleeps until interval after the last write, so the silence never exceeds interval (a fixed ticker would let
 // it run to nearly twice that), and stops with the stream.
-func (s *Writer) beat(interval time.Duration, stop <-chan struct{}, stopped chan<- struct{}) {
+func (s *Writer) beat(interval time.Duration, frame string, stop <-chan struct{}, stopped chan<- struct{}) {
 	defer close(stopped)
 	t := time.NewTimer(interval)
 	defer t.Stop()
@@ -214,7 +238,7 @@ func (s *Writer) beat(interval time.Duration, stop <-chan struct{}, stopped chan
 			s.mu.Unlock()
 			continue
 		}
-		err := s.write(": keepalive\n\n")
+		err := s.write(frame)
 		s.mu.Unlock()
 		if err != nil {
 			return
