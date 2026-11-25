@@ -170,8 +170,8 @@ func (e *env) workflowFiles() []string {
 	return ps
 }
 
-// visibilityRule: ship.yaml's visibility agrees with GitHub's, and CI and dependabot fit it. Public: every PR runs
-// CI (forks and Dependabot have no hook). Private: Dependabot PRs only, every npm and docker bump grouped and few
+// visibilityRule: ship.yaml's visibility agrees with GitHub's, and CI and dependabot fit it. Public: every PR calls
+// check.yaml, whose own if: skips all but Dependabot's. Private: Dependabot PRs only, every npm and docker bump grouped and few
 // PRs open (each runs billed CI), no scheduled vuln scan (billed minutes), and old images cleaned up (storage is
 // billed).
 func (e *env) visibilityRule() result {
@@ -190,7 +190,7 @@ func (e *env) visibilityRule() result {
 		if j, ok := w.caller("check.yaml"); ok {
 			switch {
 			case e.vis == "public" && j.If != "":
-				fs = append(fs, finding{what: "public repo: every PR runs CI, drop the check job's if:", file: scaffold.CI})
+				fs = append(fs, finding{what: "public repo: check.yaml picks the PRs it runs on, drop the check job's if:", file: scaffold.CI})
 			case e.vis == "private" && strings.TrimSpace(j.If) != scaffold.DependabotOnly:
 				fs = append(fs, finding{what: "private repo: the check job needs if: " + scaffold.DependabotOnly,
 					file: scaffold.CI})

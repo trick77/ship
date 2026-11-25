@@ -1,7 +1,6 @@
 name: CI
 
-# Every pull request and every master push, unlike the consumers' CI (pull requests only, private repos Dependabot
-# alone): a bug here breaks every repo's push, and master's run releases. The full gate on Linux, as consumers' CI
+# Every pull request and every master push, unlike the consumers' CI (Dependabot's pull requests alone): a bug here breaks every repo's push, and master's run releases. The full gate on Linux, as consumers' CI
 # runs it.
 on:
   pull_request:

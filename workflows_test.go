@@ -80,6 +80,30 @@ func TestCIRelease_whenMaster_thenEveryModuleReleased(t *testing.T) {
 	}
 }
 
+// A consumer's PR runs check.yaml only when Dependabot opened it, never in a fork: the hook gated every other one. A
+// lost term runs what was tested already, or leaves a bump untested.
+func TestCheck_whenPullRequest_thenDependabotsAlone(t *testing.T) {
+	b, err := os.ReadFile(".github/workflows/check.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var w struct {
+		Jobs struct {
+			Check struct {
+				If string `yaml:"if"`
+			} `yaml:"check"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(b, &w); err != nil {
+		t.Fatal(err)
+	}
+	want := "github.event_name != 'pull_request' || inputs.ship != '' || " +
+		"(github.event.pull_request.user.login == 'dependabot[bot]' && !github.event.repository.fork)"
+	if w.Jobs.Check.If != want {
+		t.Errorf("if %q, want %q", w.Jobs.Check.If, want)
+	}
+}
+
 // The dependabot job merges to master with no human: only after the gate, only Dependabot's own pushes, only the head
 // and the master the gate checked. A broader if or a lost guard merges a human's or a fork's PR, or an unchecked tree.
 func TestCIDependabot_whenAutoMerge_thenGatedAndGuarded(t *testing.T) {
