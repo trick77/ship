@@ -6,7 +6,8 @@ name: Check
 #   # Dependabot PRs only (Actions minutes): own pushes are gated by the pre-push hook, a bot PR has none.
 #   # By hand: gh workflow run CI --ref <branch>
 #
-# Public repo, this head comment instead and no `if:` below:
+# Public repo, this head comment instead and no `if:` below (the job's own if: here skips all but Dependabot's; the
+# template still says every pull request, changing it fails every repo's push until ship init):
 #
 #   # Every pull request, fork PRs included (read-only token, no secrets): Dependabot and outside contributors have no
 #   # pre-push hook. Own pushes are gated by the hook already. By hand: gh workflow run CI --ref <branch>
@@ -63,6 +64,13 @@ permissions:
 
 jobs:
   check:
+    # A PR: Dependabot's alone, it has no pre-push hook; an own push was gated by the hook, a second run only costs
+    # time (trakk: 4 minutes there, 15 to 19 here). Not in a fork of somebody's repo. Here and not in the callers'
+    # ci.yaml: those are byte-equal to a template, changing it fails every repo's push until ship init. ship itself
+    # (inputs.ship) has no hook: every PR.
+    if: >-
+      github.event_name != 'pull_request' || inputs.ship != '' ||
+      (github.event.pull_request.user.login == 'dependabot[bot]' && !github.event.repository.fork)
     name: ship check
     runs-on: ubuntu-latest
     timeout-minutes: 30

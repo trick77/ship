@@ -737,13 +737,13 @@ func TestRun_whenLibrary_thenAppRulesSkipped(t *testing.T) {
 			t.Errorf("no %q in:\n%s", s, out)
 		}
 	}
-	// A public repo's CI runs every PR: the if: is scaffold's finding alone; an allowed diff, visibility's.
+	// A public repo's CI has no if: of its own: one is scaffold's finding alone; an allowed diff, visibility's.
 	r.edit(scaffold.CI, "  check:\n", "  check:\n    if: false\n")
 	if out, _ := r.run(""); !strings.Contains(out, "FAIL scaffold: differs from ship's template (ship init -diff) (.github/workflows/ci.yaml)") ||
 		strings.Contains(out, "FAIL visibility") {
 		t.Errorf("public with if:\n%s", out)
 	}
-	if out, _ := r.run(allowScaffold(scaffold.CI)); !strings.Contains(out, "FAIL visibility: public repo: every PR runs CI, drop the check job's if:") {
+	if out, _ := r.run(allowScaffold(scaffold.CI)); !strings.Contains(out, "FAIL visibility: public repo: check.yaml picks the PRs it runs on, drop the check job's if:") {
 		t.Errorf("public with if, allowed:\n%s", out)
 	}
 }

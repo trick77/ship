@@ -4,7 +4,8 @@ The gate, pre-push hook and release for the trick77 and ipverse Go repos, as one
 scripts copied into every repo.
 
 GitHub must never be first to find a failure. `ship check` runs everything CI checks, locally; the pre-push hook
-runs it before every push; CI runs the same command on pull requests (Dependabot, outside contributors).
+runs it before every push; CI runs the same command on Dependabot's pull requests, which have no hook. Own ones are
+skipped there, the hook had them, and an outside contributor's: nothing checks it before the merge.
 
 ## Use in a repo
 
@@ -129,8 +130,9 @@ Commit subjects: Go style (go.dev/doc/contribute), `area: what`, e.g. `hook: pin
 `net/http, net/url: fix parsing`. No trailing period, at most 76 characters (a squash merge's ` (#N)` not
 counted). Every non-merge commit on origin/<base>..HEAD is checked, `[bot]` authors (Dependabot) skipped,
 `Revert "…"` and `fixup!` commits judged by what they wrap. The Check workflow adds a pull request's title
-(`SHIP_PR_TITLE`, not a bot's): a squash merge makes it master's subject. A PR from a fork (`SHIP_PR_FORK=true`): the title
-alone, an outside contributor's branch subjects never reach master. Release notes group by the first area.
+(`SHIP_PR_TITLE`, not a bot's, so ship's own alone): a squash merge makes it master's subject, a consumer's is checked
+by nobody. A PR from a fork (`SHIP_PR_FORK=true`): the title alone, an outside contributor's branch subjects never reach
+master. Release notes group by the first area.
 
 `release auto`: patch, unless a commit message since the last tag has a line `Release: minor` or `Release: major`
 (highest wins; a minor or major also needs a `Release-note: …` line, which goes above the notes, a bump by hand
@@ -219,7 +221,7 @@ it until the allow goes; `-diff` lists it by name, never counted); conform still
 |---|---|---|
 | `scaffold` | every owned file equals ship's template. The rules below read the owned files too; on one `scaffold` fails, not allowed, their findings are dropped (`ship init` rewrites it); an allowed diff keeps them | per `path` |
 | `workflows` | ci/release/cleanup callers use `trick77/ship/.github/workflows/<x>.yaml@master`; release: `packages: write` and `id-token: write` (cosign) ⇔ images, bump options include `auto`; no other image cleanup action, in any workflow | yes |
-| `visibility` | GitHub's visibility (Actions event, else the API unauthenticated, cached a day in the git dir) matches `visibility:`; a failed lookup: `visibility:` stands (a note), unset = FAIL; public: CI on every PR (no `if:`); private: Dependabot-only `if:`, every npm/docker/docker-compose update grouped, ≤ 5 open PRs, cleanup caller with images | yes |
+| `visibility` | GitHub's visibility (Actions event, else the API unauthenticated, cached a day in the git dir) matches `visibility:`; a failed lookup: `visibility:` stands (a note), unset = FAIL; public: no `if:` of CI's own (check.yaml skips every PR but Dependabot's, all in a fork); private: Dependabot-only `if:`, every npm/docker/docker-compose update grouped, ≤ 5 open PRs, cleanup caller with images | yes |
 | `dependabot` | `commit-message: { prefix: deps }` everywhere; gomod (go.dir, go.modules; with Go), github-actions, npm (UI), docker (Containerfile), docker-compose `/` (a root `compose*.yaml` naming an image by a version tag) present | yes |
 | `containerfile` | per image: `ARG VERSION` into `-X github.com/trick77/ship/kit/version.Version=${VERSION}`, `-trimpath`, non-root final stage, builder `golang:X.Y` = go.mod's and ≥ ship's Go floor (1.27), floating its patch (`golang:1.27-alpine`, never `golang:1.27.0-alpine`: the image gets the newest patch's stdlib, as CI does; a `@sha256:` digest on the floating tag passes, Dependabot moves it with every patch), builder `node:N` ≥ ship's Node floor (26), every base (not a stage, `scratch` or `${ARG}`) with a tag or digest (untagged = a floating `:latest` Dependabot cannot track) | per `image` |
 | `distroless` | final stage on `gcr.io/distroless/` | per `image` |
